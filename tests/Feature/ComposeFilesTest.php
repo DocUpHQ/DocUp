@@ -103,4 +103,70 @@ final class ComposeFilesTest extends TestCase
         $this->assertNotFalse($runnerAt);
         $this->assertNotSame($appAt, $runnerAt, 'app and runner must be distinct services');
     }
+
+    /**
+     * 🛑 The runner must declare its own healthcheck.
+     *
+     * The FrankenPHP base image ships a HEALTHCHECK that curls Caddy's admin
+     * API on port 2019. The runner is a queue worker and serves no HTTP, so
+     * inheriting it leaves the container permanently unhealthy - which is the
+     * state it was actually found in during Phase 01.
+     *
+     * That matters beyond tidiness: anything gated on
+     * `condition: service_healthy` for the runner would wait for ever, and
+     * once a container is permanently unhealthy a genuine failure looks
+     * exactly like the standing one. Asserted here because the symptom is
+     * invisible unless somebody happens to read `docker compose ps`.
+     */
+    public function test_the_runner_overrides_the_inherited_http_healthcheck(): void
+    {
+        $production = $this->compose('compose.yaml');
+
+        $runnerAt = strpos($production, "\n  runner:");
+        $this->assertNotFalse($runnerAt);
+
+        // The runner block runs to the start of the top-level volumes key.
+        $volumesAt = strpos($production, "\nvolumes:", $runnerAt);
+        $runner = substr(
+            $production,
+            $runnerAt,
+            ($volumesAt === false ? strlen($production) : $volumesAt) - $runnerAt,
+        );
+
+        $this->assertStringContainsString(
+            'healthcheck:',
+            $runner,
+            'the runner inherits the base image HTTP healthcheck unless it declares its own',
+        );
+
+        // Comments stripped before the negative assertion, for the third time
+        // in this codebase: ArchitectureTest::code() does the same for PHP
+        // because two of its tests failed on their own documentation. The
+        // comment beside this healthcheck explains what port 2019 is, and a
+        // plain search would therefore match the explanation of the rule
+        // rather than a violation of it.
+        $this->assertStringNotContainsString(
+            '2019',
+            $this->withoutComments($runner),
+            'port 2019 is Caddy\'s admin API; the runner serves no HTTP',
+        );
+    }
+
+    /**
+     * Strip whole-line YAML comments.
+     *
+     * Whole-line only, deliberately: an inline `#` can legitimately appear
+     * inside a quoted scalar such as a password, and a parser clever enough to
+     * tell the two apart is a parser that can be wrong. Assertions that need
+     * this helper should be written against whole-line comments.
+     */
+    private function withoutComments(string $yaml): string
+    {
+        $kept = array_filter(
+            preg_split('/\R/', $yaml) ?: [],
+            static fn (string $line): bool => ! str_starts_with(ltrim($line), '#'),
+        );
+
+        return implode("\n", $kept);
+    }
 }

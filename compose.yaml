@@ -113,6 +113,25 @@ services:
       db: { condition: service_healthy }
       cache: { condition: service_started }
     command: ["php", "artisan", "queue:work", "--tries=1", "--max-time=3600"]
+    # 🛑 This override is load-bearing. The FrankenPHP base image declares its
+    # own HEALTHCHECK against Caddy's admin API on port 2019, and the runner
+    # serves no HTTP at all - it is a queue worker. Inheriting it leaves the
+    # container permanently "unhealthy", which is how it was found: anything
+    # that waits on `condition: service_healthy` for the runner would wait for
+    # ever, and a real failure here would be indistinguishable from the
+    # permanent one.
+    #
+    # queue:monitor is used rather than a process check because it proves
+    # something worth proving: the application boots and can reach the queue
+    # backend. A process check would only say that PID 1 had not exited yet,
+    # which Docker's restart policy already covers. procps is not installed in
+    # the image, so pgrep is not available in any case.
+    healthcheck:
+      test: ["CMD", "php", "artisan", "queue:monitor", "database:default"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     volumes:
       - .:/app
       - artifacts:/var/lib/docup/artifacts
