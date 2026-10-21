@@ -111,3 +111,10 @@ infection.log
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Crash dumps. Git Bash drops a *.stackdump beside the working directory when a
+# tool aborts, which happened while building the Phase 01 DCO check. They carry
+# process memory, so they are both noise and a disclosure risk in history.
+*.stackdump
+core
+core.*

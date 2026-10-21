@@ -215,13 +215,22 @@ jobs:
           base="${{ github.event.pull_request.base.sha }}"
           head="${{ github.event.pull_request.head.sha }}"
 
+          # Trailers are read with git's own parser rather than a grep over the
+          # message. The first version of this check used
+          # `grep -iF "Signed-off-by: $author"`, which reported a FAILURE on a
+          # correctly signed commit and aborted outright on one shell - an
+          # interpolated fixed-string pattern is the wrong tool for comparing
+          # two identities. git knows what a trailer is; grep does not.
+          lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
           failed=0
           while read -r sha; do
             [ -n "$sha" ] || continue
             author="$(git show -s --format='%an <%ae>' "$sha")"
             subject="$(git show -s --format='%s' "$sha")"
+            trailers="$(git show -s --format='%(trailers:key=Signed-off-by,valueonly=true)' "$sha")"
 
-            if ! git show -s --format='%B' "$sha" | grep -qiE '^Signed-off-by: .+ <.+@.+>$'; then
+            if [ -z "${trailers//[[:space:]]/}" ]; then
               echo "::error::missing Signed-off-by: $sha ($subject)"
               echo "          fix with: git rebase --signoff ${base}"
               failed=1
@@ -229,15 +238,24 @@ jobs:
             fi
 
             # The sign-off must match the commit author. A sign-off in someone
-            # else's name is not an attestation, it is a forgery, and it is the
-            # one failure mode a grep for the header alone would wave through.
-            if ! git show -s --format='%B' "$sha" | grep -qiF "Signed-off-by: $author"; then
+            # else's name is not an attestation, and it is the one failure mode
+            # that a check for the header alone waves through.
+            want="$(lower "$author")"
+            matched=0
+            while IFS= read -r value; do
+              [ -n "$value" ] || continue
+              if [ "$(lower "$value")" = "$want" ]; then
+                matched=1
+              fi
+            done <<< "$trailers"
+
+            if [ "$matched" -eq 0 ]; then
               echo "::error::sign-off does not match the author of $sha ($subject)"
-              echo "          author:   $author"
-              echo "          sign-off: $(git show -s --format='%B' "$sha" | grep -i '^Signed-off-by:' | head -1)"
+              echo "          author:    $author"
+              echo "          signed by: $trailers"
               failed=1
             fi
-          done < <(git rev-list --no-merges "${base}..${head}")
+          done <<< "$(git rev-list --no-merges "${base}..${head}")"
 
           if [ "$failed" -eq 0 ]; then
             echo "all commits signed off (DCO, §15.6)"
