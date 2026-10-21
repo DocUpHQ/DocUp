@@ -84,6 +84,26 @@ jobs:
       - name: Static analysis, level 9 on the strict namespaces
         run: ./vendor/bin/phpstan analyse -c phpstan-strict.neon --no-progress --memory-limit=1G
 
+      # 🛑 The tests that render the login page need the Vite manifest, and
+      # /public/build/ is correctly gitignored - so it exists on a developer's
+      # machine and never in a fresh checkout. That asymmetry is why the suite
+      # passed locally and failed here with "Vite manifest not found".
+      #
+      # Building rather than stubbing the manifest out with withoutVite() is
+      # the deliberate choice: it keeps the tests rendering the real page, and
+      # it means a broken front-end build fails the gate instead of shipping.
+      # Nothing else in CI compiles the front end.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Build the front end
+        run: |
+          npm ci
+          npm run build
+
       - name: Prepare the application
         env:
           DB_HOST: 127.0.0.1
