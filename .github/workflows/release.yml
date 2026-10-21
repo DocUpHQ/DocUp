@@ -60,9 +60,13 @@ jobs:
           coverage: none
           tools: composer:v2
 
-      # --no-dev, because an SBOM that lists the test suite misrepresents what
-      # an operator is actually running, and that is the question an SBOM exists
-      # to answer.
+      # Dev dependencies ARE installed here, deliberately: the CycloneDX
+      # generator is itself a dev dependency, so with --no-dev the command does
+      # not exist and the job fails with "no commands defined in the CycloneDX
+      # namespace". What keeps dev packages out of the DOCUMENT is --omit=dev
+      # on the generator itself, which reads the lock file rather than the
+      # vendor directory. The distinction is easy to collapse and the failure
+      # mode differs: wrong flag, no SBOM; missing flag, a misleading one.
       #
       # 🛑 --no-scripts, because post-autoload-dump runs `artisan
       # package:discover`, which boots the application, and AppServiceProvider
@@ -70,8 +74,8 @@ jobs:
       # and this job has no business inventing one: enumerating dependencies
       # needs the lock file, not a running application. The gate workflow is
       # what proves the app boots.
-      - name: Install production dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress --no-dev --no-scripts
+      - name: Install dependencies, including the SBOM generator
+        run: composer install --no-interaction --prefer-dist --no-progress --no-scripts
 
       - name: Derive the version
         id: version
@@ -98,6 +102,14 @@ jobs:
             --omit=dev \
             --spec-version=1.6 \
             --no-interaction
+
+      # Prune to production before Syft runs. Syft catalogues what is actually
+      # installed, so a vendor directory still holding the test suite would
+      # make the SPDX document disagree with the CycloneDX one about what an
+      # operator runs — and two SBOMs that contradict each other are worse than
+      # one, because nothing says which to believe.
+      - name: Reduce the tree to production dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress --no-scripts --no-dev
 
       - name: Generate the SPDX SBOM
         uses: anchore/sbom-action@v0
