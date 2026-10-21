@@ -101,11 +101,33 @@ jobs:
           DB_DATABASE: docup_test
         run: ./vendor/bin/pest --testsuite=Arch
 
+      # On failure the output is re-emitted as a GitHub annotation, not only
+      # left in the log. GitHub requires a signed-in session to read Actions
+      # logs even on a public repository, so for anyone looking at a run
+      # anonymously - a contributor checking whether main is green before
+      # forking, or a maintainer on a borrowed machine - the log is invisible
+      # and "Process completed with exit code 1" is all they get. Annotations
+      # are public, so the reason travels with the failure.
       - name: Tests
         env:
           DB_HOST: 127.0.0.1
           DB_DATABASE: docup_test
-        run: php artisan test
+          NO_COLOR: '1'
+        run: |
+          set -o pipefail
+          if php artisan test --colors=never 2>&1 | tee /tmp/tests.log; then
+            exit 0
+          fi
+          # Annotations take one line, so newlines are percent-encoded per the
+          # workflow-command format. Order matters: % first, or the encodings
+          # of the others get re-encoded.
+          encoded="$(
+            tail -c 4000 /tmp/tests.log \
+              | sed -e 's/%/%25/g' -e 's/\r/%0D/g' \
+              | sed -e ':a' -e 'N' -e '$!ba' -e 's/\n/%0A/g'
+          )"
+          echo "::error title=Test failures::${encoded}"
+          exit 1
 
       - name: Dependency audit
         run: composer audit --locked --abandoned=report
