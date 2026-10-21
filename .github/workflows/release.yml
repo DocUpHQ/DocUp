@@ -75,6 +75,13 @@ jobs:
           echo "tag=${ref}"       >> "$GITHUB_OUTPUT"
 
       - name: Generate the CycloneDX SBOM
+        env:
+          # Otherwise the root component's version is derived from git metadata
+          # and comes out null wherever that is unavailable - which is how it
+          # behaved first time it was run. An SBOM that does not say which
+          # version it describes is not much of a bill of materials, and it
+          # fails silently, so the version is stated rather than detected.
+          COMPOSER_ROOT_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p build/sbom
@@ -98,6 +105,8 @@ jobs:
       # generator that silently found nothing, and it would otherwise sail
       # through signing and publication looking exactly like a real one.
       - name: Check both SBOMs describe something
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           # shellcheck disable=SC2016
@@ -114,6 +123,21 @@ jobs:
               printf("%s: %d components\n", basename($f), $n);
             ' "$f"
           done
+
+          # And that the CycloneDX document names the version it describes.
+          # Checked separately because this one failed in exactly the way the
+          # component count would not catch: a complete, valid, signable SBOM
+          # with a null version.
+          # shellcheck disable=SC2016
+          php -r '
+            $d = json_decode(file_get_contents($argv[1]), true);
+            $v = $d["metadata"]["component"]["version"] ?? null;
+            if ($v !== $argv[2]) {
+              fwrite(STDERR, sprintf("CycloneDX root version is %s, expected %s\n", var_export($v, true), $argv[2]));
+              exit(1);
+            }
+            printf("CycloneDX root version: %s\n", $v);
+          ' "build/sbom/docup-${EXPECTED_VERSION}.cdx.json" "$EXPECTED_VERSION"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
