@@ -1,0 +1,18 @@
+{
+    "preset": "laravel",
+    "rules": {
+        "declare_strict_types": true,
+        "strict_comparison": true,
+        "strict_param": true,
+        "ordered_imports": { "sort_algorithm": "alpha" },
+        "no_unused_imports": true,
+        "void_return": true,
+        "nullable_type_declaration_for_default_null_value": true,
+        "global_namespace_import": {
+            "import_classes": false,
+            "import_constants": false,
+            "import_functions": false
+        }
+    },
+    "exclude": ["bootstrap/cache", "storage", "vendor", "node_modules"]
+}

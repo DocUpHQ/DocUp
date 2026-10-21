@@ -1,0 +1,113 @@
+# ---------------------------------------------------------------------------
+# Construction / development only — MUST NOT reach the repository.
+# Per CLAUDE.md rule 6: when you create a new development-only file, add it to
+# THIS section in the same commit that creates it.
+# ---------------------------------------------------------------------------
+/CLAUDE.md
+/CLAUDE.local.md
+/_docs/
+/_scratch/
+/_notes/
+/.claude/
+/.cursor/
+/.windsurf/
+/.aider*
+*.local.md
+TODO.local*
+scratch.*
+*.scratch
+/tmp/
+/.tmp/
+
+# Generated abuse-corpus fixtures: hostile by design, rebuilt by their builders
+# (tests/Fixtures/AbuseCorpus/*/build_*.py). The builders are committed; the
+# artefacts are not, so the reviewable artefact is the mutation, not the binary.
+tests/Fixtures/AbuseCorpus/_generated/
+
+# ---------------------------------------------------------------------------
+# Secrets and local environment — never committed, in any form.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+auth.json
+/storage/oauth-*.key
+/storage/docup-grant-*.key
+
+# ---------------------------------------------------------------------------
+# Dependencies and build output
+# ---------------------------------------------------------------------------
+/vendor/
+/node_modules/
+/public/build/
+/public/hot
+/public/storage
+/bootstrap/ssr/
+.pnpm-store/
+pnpm-debug.log*
+npm-debug.log*
+yarn-error.log
+
+# ---------------------------------------------------------------------------
+# Laravel runtime
+# ---------------------------------------------------------------------------
+/storage/*.key
+/storage/app/public/
+/storage/framework/cache/data/*
+/storage/framework/sessions/*
+/storage/framework/testing/*
+/storage/framework/views/*
+/storage/logs/*
+!/storage/**/.gitignore
+/bootstrap/cache/*
+!/bootstrap/cache/.gitignore
+Homestead.json
+Homestead.yaml
+
+# ---------------------------------------------------------------------------
+# Tooling caches and reports
+# ---------------------------------------------------------------------------
+/.phpunit.cache/
+.phpunit.result.cache
+/.pest/
+/coverage/
+/build/
+/.infection/
+infection.log
+.phpstan.cache
+/.php-cs-fixer.cache
+/.pint.cache
+*.tsbuildinfo
+
+# ---------------------------------------------------------------------------
+# DocUp runtime data — generated at run time, never source
+# (§10.3 artifact store, §8.11.6 generated SEO artefacts, §8.5.21 build logs)
+# ---------------------------------------------------------------------------
+/storage/docup/
+/storage/artifacts/
+/storage/cas/
+/storage/generated/
+/storage/quarantine/
+/storage/certificates/
+*.sqlite
+*.sqlite-journal
+
+# ---------------------------------------------------------------------------
+# Editors and OS
+# ---------------------------------------------------------------------------
+/.idea/
+/.vscode/
+!/.vscode/extensions.json
+/.fleet/
+/.nova/
+/.zed/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,180 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Release provenance (§15.6, Phase 01 exit criteria).
+#
+# Produces, for every tag, two Software Bills of Materials in the two formats
+# procurement actually asks for — CycloneDX and SPDX — and a cosign signature
+# over each, then VERIFIES those signatures in the same run.
+#
+# 🛑 The verify step is not ceremony. A signing step that silently produced an
+# unverifiable signature would leave the release looking signed, which is worse
+# than an unsigned release because it stops anyone checking. Signing and
+# verifying in the same job is what makes the claim testable.
+#
+# Signing is keyless (Sigstore, via the Actions OIDC token). There is no private
+# key to store, rotate, or lose, and the certificate names this repository and
+# this workflow as the signer — see §14.3. The trade-off is that the signature
+# can only be produced by this workflow on this repository, which is the point.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Tag or ref to build provenance for (dry run; publishes nothing)'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+
+  provenance:
+    name: SBOM and signature
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    permissions:
+      contents: write   # attach assets to the release
+      id-token: write   # 🛑 required for keyless signing; without it cosign cannot mint a certificate
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          # ADR 0007: the floor is 8.4.1. Kept in step with the gate workflow.
+          php-version: '8.4'
+          extensions: pdo_mysql, intl, zip, gd, bcmath, sodium, pcntl
+          coverage: none
+          tools: composer:v2
+
+      # --no-dev, because an SBOM that lists the test suite misrepresents what
+      # an operator is actually running, and that is the question an SBOM exists
+      # to answer.
+      - name: Install production dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress --no-dev
+
+      - name: Derive the version
+        id: version
+        run: |
+          set -euo pipefail
+          ref="${{ github.event.inputs.ref || github.ref_name }}"
+          echo "version=${ref#v}" >> "$GITHUB_OUTPUT"
+          echo "tag=${ref}"       >> "$GITHUB_OUTPUT"
+
+      - name: Generate the CycloneDX SBOM
+        run: |
+          set -euo pipefail
+          mkdir -p build/sbom
+          composer CycloneDX:make-sbom \
+            --output-format=JSON \
+            --output-file="build/sbom/docup-${{ steps.version.outputs.version }}.cdx.json" \
+            --omit=dev \
+            --spec-version=1.6 \
+            --no-interaction
+
+      - name: Generate the SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: build/sbom/docup-${{ steps.version.outputs.version }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      # Fail loudly on an empty or truncated SBOM. A zero-component SBOM is a
+      # generator that silently found nothing, and it would otherwise sail
+      # through signing and publication looking exactly like a real one.
+      - name: Check both SBOMs describe something
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016
+          # The single quotes are deliberate: $argv, $d and $n below are PHP
+          # variables, and the shell must not touch them. The file name is
+          # passed as an argument instead.
+          for f in build/sbom/*.json; do
+            php -r '
+              $f = $argv[1];
+              $d = json_decode(file_get_contents($f), true);
+              if (!is_array($d)) { fwrite(STDERR, "$f is not valid JSON\n"); exit(1); }
+              $n = count($d["components"] ?? $d["packages"] ?? []);
+              if ($n < 10) { fwrite(STDERR, "$f lists only $n components; refusing to sign it\n"); exit(1); }
+              printf("%s: %d components\n", basename($f), $n);
+            ' "$f"
+          done
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign both SBOMs
+        run: |
+          set -euo pipefail
+          for f in build/sbom/*.json; do
+            cosign sign-blob --yes --bundle "${f}.cosign.bundle" "$f"
+            echo "signed $f"
+          done
+
+      # 🛑 Prove the signatures verify before anyone depends on them.
+      - name: Verify both signatures
+        run: |
+          set -euo pipefail
+          for f in build/sbom/*.json; do
+            cosign verify-blob \
+              --bundle "${f}.cosign.bundle" \
+              --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "$f"
+            echo "verified $f"
+          done
+
+      - name: Record how to verify these signatures
+        run: |
+          set -euo pipefail
+          cat > build/sbom/VERIFYING.md <<'DOC'
+          # Verifying this release
+
+          Each SBOM ships with a Sigstore bundle. No key to fetch: the signature
+          carries its own certificate, and the certificate names the repository
+          and workflow that produced it.
+
+              cosign verify-blob \
+                --bundle docup-<version>.cdx.json.cosign.bundle \
+                --certificate-identity-regexp '^https://github.com/REPO/' \
+                --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+                docup-<version>.cdx.json
+
+          A signature that verifies tells you the file came from this
+          repository's release workflow and has not changed since. It does not
+          tell you the contents are free of vulnerabilities — feed the SBOM to a
+          scanner for that. See SECURITY.md.
+          DOC
+          sed -i "s|REPO|${{ github.repository }}|g" build/sbom/VERIFYING.md
+
+      - name: Upload the provenance set as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ steps.version.outputs.version }}
+          path: build/sbom/
+          if-no-files-found: error
+
+      # Only on a real tag. A workflow_dispatch run is a dry run: it proves the
+      # pipeline works without publishing anything claiming to be a release.
+      - name: Attach the provenance set to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/sbom/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

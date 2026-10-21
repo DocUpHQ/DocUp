@@ -1,0 +1,245 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The SPEC 9.4 baseline gate. Every phase passes this.
+#
+# 🛑 Phase 01's exit criteria require that CI goes RED on each of: a planted
+# Larastan violation, a planted second AUTO_INCREMENT, an unclassified column,
+# and a lowered gate threshold. The jobs below are arranged so each of those is
+# caught by a named step rather than incidentally.
+#
+# ADR 0001: both edge drivers run as a CI matrix leg, not one as a documented
+# alternative, because five load-bearing serving assumptions were unverified and
+# building both is what makes a failed assumption a configuration change.
+
+name: gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  baseline:
+    name: baseline gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      mysql:
+        # SPEC 11.1: MySQL 8.4 LTS. 8.0 reached end of life in April 2026.
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: docup-root
+          MYSQL_DATABASE: docup_test
+          MYSQL_USER: docup
+          MYSQL_PASSWORD: docup
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pdocup-root"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          # ADR 0007: the floor is 8.4.1. Dom\HTMLDocument is a language-level
+          # requirement of the section extractor and is absent in 8.3.
+          php-version: '8.4'
+          extensions: pdo_mysql, intl, zip, gd, bcmath, sodium, pcntl
+          coverage: none
+          tools: composer:v2
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Code style (Pint)
+        run: ./vendor/bin/pint --test
+
+      # 🛑 Exit criterion: a planted Larastan violation turns CI red.
+      - name: Static analysis, level 8 repo-wide
+        run: ./vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+
+      - name: Static analysis, level 9 on the strict namespaces
+        run: ./vendor/bin/phpstan analyse -c phpstan-strict.neon --no-progress --memory-limit=1G
+
+      - name: Prepare the application
+        env:
+          DB_HOST: 127.0.0.1
+          DB_DATABASE: docup_test
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+          php artisan migrate --force
+
+      # 🛑 Exit criteria: the architecture suite is what turns a planted second
+      # AUTO_INCREMENT, a stray unsafe flag, a reappearing key cast or a missing
+      # SPDX header into a red build.
+      - name: Architecture invariants
+        env:
+          DB_HOST: 127.0.0.1
+          DB_DATABASE: docup_test
+        run: ./vendor/bin/pest --testsuite=Arch
+
+      - name: Tests
+        env:
+          DB_HOST: 127.0.0.1
+          DB_DATABASE: docup_test
+        run: php artisan test
+
+      - name: Dependency audit
+        run: composer audit --locked --abandoned=report
+
+  # 🛑 Exit criterion: a LOWERED gate threshold turns CI red. CODEOWNERS makes
+  # a human read the change; this makes the machine refuse it. Two independent
+  # controls, because the failure mode is a phase under time pressure lowering
+  # the bar instead of fixing the code, and that phase is reviewing its own PR.
+  thresholds:
+    name: gate thresholds did not decrease
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compare thresholds against the base branch
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+
+          extract() {
+            # phpstan level, and the numeric gate thresholds from config/docup.php
+            {
+              git show "$1:phpstan.neon"        2>/dev/null | sed -n 's/^ *level: *\([0-9]*\).*/phpstan_level=\1/p'
+              git show "$1:phpstan-strict.neon" 2>/dev/null | sed -n 's/^ *level: *\([0-9]*\).*/phpstan_strict_level=\1/p'
+              git show "$1:config/docup.php"    2>/dev/null | sed -n "s/.*'mutation_min_score' *=> *\([0-9]*\).*/mutation_min_score=\1/p"
+            } | sort
+          }
+
+          extract "$base" > /tmp/before.txt
+          extract HEAD     > /tmp/after.txt
+
+          echo "--- base ---";  cat /tmp/before.txt
+          echo "--- head ---";  cat /tmp/after.txt
+
+          failed=0
+          while IFS='=' read -r key before; do
+            after=$(sed -n "s/^${key}=//p" /tmp/after.txt | head -1)
+            if [ -z "$after" ]; then
+              echo "::error::gate threshold [$key] was REMOVED (was $before)"
+              failed=1
+            elif [ "$after" -lt "$before" ]; then
+              echo "::error::gate threshold [$key] DECREASED: $before -> $after (SPEC 9.4)"
+              failed=1
+            fi
+          done < /tmp/before.txt
+
+          exit "$failed"
+
+  # 🛑 SPEC 8.22.7: CI fails when an unclassified column is introduced. This is
+  # what makes the erasure and export promises provable rather than asserted.
+  data-classification:
+    name: every column is classified
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: docup-root
+          MYSQL_DATABASE: docup_test
+          MYSQL_USER: docup
+          MYSQL_PASSWORD: docup
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pdocup-root"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pdo_mysql, intl, zip, gd, bcmath, sodium, pcntl
+          coverage: none
+          tools: composer:v2
+
+      - run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Migrate and check column coverage
+        env:
+          DB_HOST: 127.0.0.1
+          DB_DATABASE: docup_test
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+          php artisan migrate --force
+          php artisan docup:classify --check
+
+  # §15.6: contribution is under the DCO, so every commit carries a sign-off.
+  # Checked on EVERY commit in the pull request rather than only the tip,
+  # because a rebase or a squash later turns an unsigned middle commit into an
+  # unsigned commit on main, and by then the contributor has moved on and
+  # cannot be asked to re-attest.
+  #
+  # Merge commits are exempt: they are created by the forge, not attested to by
+  # a person.
+  dco:
+    name: every commit is signed off
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check sign-off on each commit
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+
+          failed=0
+          while read -r sha; do
+            [ -n "$sha" ] || continue
+            author="$(git show -s --format='%an <%ae>' "$sha")"
+            subject="$(git show -s --format='%s' "$sha")"
+
+            if ! git show -s --format='%B' "$sha" | grep -qiE '^Signed-off-by: .+ <.+@.+>$'; then
+              echo "::error::missing Signed-off-by: $sha ($subject)"
+              echo "          fix with: git rebase --signoff ${base}"
+              failed=1
+              continue
+            fi
+
+            # The sign-off must match the commit author. A sign-off in someone
+            # else's name is not an attestation, it is a forgery, and it is the
+            # one failure mode a grep for the header alone would wave through.
+            if ! git show -s --format='%B' "$sha" | grep -qiF "Signed-off-by: $author"; then
+              echo "::error::sign-off does not match the author of $sha ($subject)"
+              echo "          author:   $author"
+              echo "          sign-off: $(git show -s --format='%B' "$sha" | grep -i '^Signed-off-by:' | head -1)"
+              failed=1
+            fi
+          done < <(git rev-list --no-merges "${base}..${head}")
+
+          if [ "$failed" -eq 0 ]; then
+            echo "all commits signed off (DCO, §15.6)"
+          fi
+          exit "$failed"

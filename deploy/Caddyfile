@@ -1,0 +1,73 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The caddy-intercept edge driver (SPEC 11.3, ADR 0001).
+#
+# Chosen as the default over nginx-accel on one specific ground: it preserves
+# the application's response headers through the artifact handoff natively,
+# where nginx replaces the entire response header set and needs a
+# hand-maintained re-emission list to avoid serving private documentation
+# cacheable (SPEC 8.9.8, SPEC 9.3.2).
+
+{
+	admin off
+	frankenphp
+	order php_server before file_server
+	order intercept before php_server
+}
+
+:80 {
+	root /app/public
+
+	# -----------------------------------------------------------------------
+	# The artifact byte handoff (SPEC 8.9.8).
+	#
+	# The application authorises every documentation request and then names the
+	# file; the edge moves the bytes. PHP never reads an artifact byte, which is
+	# what buys ETag, If-None-Match and Range from the file server for free, and
+	# what keeps SPEC 9.2's "PHP memory flat" budget achievable.
+	#
+	# Phase 01 has no artifacts yet. The block is here from the first phase so
+	# the boundary is never retrofitted, and so the two traps below are recorded
+	# where whoever next edits this file will see them.
+	#
+	# 🛑 TRAP 1: the placeholder is {resp.header.*}. {rp.header.*} is
+	#    reverse-proxy-only; under `intercept` it does not resolve, expands to a
+	#    literal string, and the handoff 404s with nothing logged anywhere.
+	#
+	# 🛑 TRAP 2: `route` is required. Without it Caddy reorders the directives
+	#    inside handle_response by its own global ordering, so `rewrite` and
+	#    `uri strip_prefix` never run before `file_server` resolves the path.
+	#
+	# Both cost real time in Phase 00. Do not "simplify" either away.
+	# -----------------------------------------------------------------------
+	intercept {
+		@accel header X-Accel-Redirect *
+		handle_response @accel {
+			route {
+				rewrite * {resp.header.X-Accel-Redirect}
+				uri strip_prefix /_internal
+				root * /var/lib/docup/artifacts
+
+				# SPEC 8.9.8: never leak the internal path, and never let an
+				# artifact's own headers reach the reader.
+				header -X-Accel-Redirect
+				header -X-Powered-By
+				header X-Content-Type-Options nosniff
+
+				file_server
+			}
+		}
+	}
+
+	# SPEC 8.10.18: the ACME challenge path is matched before everything else,
+	# including the documentation catch-all and any canonical redirect. Phase 19
+	# wires issuance; the ordering guarantee belongs here from the start.
+	handle /.well-known/acme-challenge/* {
+		respond 404
+	}
+
+	encode zstd gzip
+
+	php_server
+}

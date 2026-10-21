@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# SPEC 9.4: the quality-gate thresholds are committed configuration PROTECTED BY
+# CODEOWNERS, so a phase under time pressure cannot quietly lower the bar
+# instead of fixing the code. The CI check in gate.yml additionally fails when a
+# threshold decreases, so there are two independent controls.
+
+*                           @DocUpHQ/maintainers
+
+# The gate configuration itself.
+/config/docup.php           @DocUpHQ/maintainers
+/phpstan.neon               @DocUpHQ/maintainers
+/phpstan-strict.neon        @DocUpHQ/maintainers
+/pint.json                  @DocUpHQ/maintainers
+/.github/workflows/         @DocUpHQ/maintainers
+/.github/CODEOWNERS         @DocUpHQ/maintainers
+
+# The invariants. A change here is a change to what CI is able to catch.
+/tests/Arch/                @DocUpHQ/maintainers
+/tests/Fixtures/AbuseCorpus/ @DocUpHQ/maintainers
+
+# 🛑 The identifier and origin layers: ADR 0006 and SPEC 8.1.4 both have silent
+# failure modes, so neither lands without a maintainer reading it.
+/app/Concerns/HasUuidKey.php @DocUpHQ/maintainers
+/app/Support/Uuid.php        @DocUpHQ/maintainers
+/app/Support/Origins.php     @DocUpHQ/maintainers
+
+# Security and governance.
+/SECURITY.md                @DocUpHQ/maintainers
+/public/.well-known/        @DocUpHQ/maintainers

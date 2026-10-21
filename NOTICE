@@ -1,0 +1,19 @@
+DocUp
+Copyright 2026 The DocUp contributors
+
+This product includes software developed by the DocUp contributors
+(https://github.com/docuphq/docup).
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file for the
+full terms.
+
+Third-party components are listed with their own licences in the Software Bill
+of Materials published with each release (CycloneDX and SPDX, see the release
+assets). This NOTICE file carries only the attribution notices that the Apache
+License section 4(d) requires to be reproduced; it is not the dependency
+inventory, because an inventory maintained by hand goes stale and an SBOM
+generated from the lock files cannot.
+
+"DocUp" and the DocUp logo are marks of the project. The licence grants rights
+to the software, not to the marks; see TRADEMARKS.md for what a fork may and
+may not call itself.

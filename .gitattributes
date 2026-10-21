@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# 🛑 Normalise to LF in the repository, always.
+#
+# Without this, line endings depend on each contributor's core.autocrlf. A
+# Windows contributor with it switched off commits CRLF, and CRLF is not a
+# cosmetic difference here: a shell script or an entrypoint with CRLF fails on
+# Linux with a "bad interpreter" error that names the right file and gives no
+# hint why, and the Caddyfile and Dockerfile are read inside containers that
+# have never seen a carriage return.
+#
+# eol=lf rather than plain text=auto, because text=auto alone still writes CRLF
+# into Windows working copies, and the files below are read by Linux tools from
+# a bind mount of exactly that working copy.
+* text=auto eol=lf
+
+# Files that must never be touched by normalisation. A "fix" to the bytes of a
+# binary is silent and total.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.eot   binary
+*.otf   binary
+*.pdf   binary
+*.zip   binary
+*.gz    binary
+*.tar   binary
+*.whl   binary
+
+# 🛑 The abuse corpus is hostile input by design (§9.4). Its archives encode
+# traversal paths, symlink loops, zip bombs and deliberately malformed headers;
+# normalising a byte in any of them would quietly turn an attack case into a
+# passing test. Diffs are suppressed for the same reason the corpus is
+# append-only: nobody should be editing these by hand.
+tests/Fixtures/AbuseCorpus/**  -text -diff
+
+# Better diffs where Git can be told what the language is.
+*.php        diff=php
+*.blade.php  diff=html
+*.css        diff=css
+*.html       diff=html
+*.md         diff=markdown
+
+# Construction and CI material, excluded from `git archive` so a source
+# tarball contains the product and not the scaffolding around it (§15.6).
+/.github        export-ignore
+/.gitattributes export-ignore
+/.gitignore     export-ignore
+/compose.dev.yaml export-ignore
+/phpstan.neon      export-ignore
+/phpstan-strict.neon export-ignore
+/phpunit.xml    export-ignore
+/pint.json      export-ignore
+/rector.php     export-ignore
+/tests          export-ignore
+CONTRIBUTING.md export-ignore

@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# SPEC 9.4: level 9 in the namespaces where a type error is a security bug -
+# request resolution, authorisation, artifact handling and configuration
+# parsing. Run alongside the repo-wide level 8, not instead of it.
+
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 9
+
+    paths:
+        - app/Serving
+        - app/Auth
+        - app/Artifacts
+        - app/Config
+        - app/Support
+        - app/Concerns
+        - app/Models
+        - app/Http/Middleware
+
+    excludePaths:
+        analyseAndScan:
+            - vendor
+

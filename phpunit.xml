@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="tests/bootstrap.php"
+         colors="true"
+>
+    <testsuites>
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Feature">
+            <directory>tests/Feature</directory>
+        </testsuite>
+        <testsuite name="Arch">
+            <directory>tests/Arch</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory>app</directory>
+        </include>
+    </source>
+    <php>
+        <!--
+            🛑 APP_ENV, DB_CONNECTION and DB_DATABASE are pinned in
+            tests/bootstrap.php, NOT here.
+
+            PHPUnit 13 removed the attribute that made an env element
+            overwrite an existing variable, so the elements below cannot
+            replace anything the app container or the developer's shell has
+            already set - and the container sets both APP_ENV and DB_DATABASE.
+            Declared here, they were silently ignored and the suite ran
+            against the development database.
+
+            The variables below are ones nothing else sets, so they do take
+            effect. DB_HOST stays environment-provided: "db" in the container,
+            127.0.0.1 in CI.
+        -->
+        <env name="DOCUP_APP_HOST" value="docup.test"/>
+        <env name="DOCUP_DOCS_APEX" value="docup-docs.test"/>
+        <env name="DOCUP_PREVIEW_APEX" value="docup-previews.test"/>
+        <env name="APP_MAINTENANCE_DRIVER" value="file"/>
+        <env name="BCRYPT_ROUNDS" value="4"/>
+        <env name="BROADCAST_CONNECTION" value="null"/>
+        <env name="CACHE_STORE" value="array"/>
+        <env name="DB_HOST" value="db"/>
+        <env name="DB_USERNAME" value="docup"/>
+        <env name="DB_PASSWORD" value="docup"/>
+        <env name="DB_URL" value=""/>
+        <env name="MAIL_MAILER" value="array"/>
+        <env name="QUEUE_CONNECTION" value="sync"/>
+        <env name="SESSION_DRIVER" value="array"/>
+        <env name="PULSE_ENABLED" value="false"/>
+        <env name="TELESCOPE_ENABLED" value="false"/>
+        <env name="NIGHTWATCH_ENABLED" value="false"/>
+    </php>
+</phpunit>

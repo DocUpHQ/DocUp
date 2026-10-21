@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Development overlay. Use with:
+#   docker compose -f compose.yaml -f compose.dev.yaml up
+#
+# 🛑 SPEC 8.1.2 / 8.1.3: MailPit and phpMyAdmin exist ONLY here, and ONLY bound
+# to 127.0.0.1. They are absent from compose.yaml as images rather than disabled
+# by a profile, because a profile can be flipped by an operator in a hurry and a
+# missing service cannot. tests/Feature/ComposeFilesTest.php asserts both halves
+# of that: present here, absent there.
+#
+# The application additionally refuses to boot with APP_ENV=production if either
+# is reachable (SPEC 8.1.3), so the two controls are independent.
+
+name: docup
+
+services:
+
+  app:
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+      MAIL_MAILER: smtp
+      MAIL_HOST: mailpit
+      MAIL_PORT: "1025"
+
+  runner:
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+      MAIL_MAILER: smtp
+      MAIL_HOST: mailpit
+      MAIL_PORT: "1025"
+
+  # --- SMTP capture (SPEC 8.1.2) ---
+  # 🛑 SPEC 8.18.5 requires `docup:doctor` to test mail delivery, because a
+  # self-hoster with no working SMTP otherwise gets silent failure on exactly
+  # the notification that matters most. MailPit is how that is exercised in dev.
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1025:1025"   # SMTP
+      - "127.0.0.1:8025:8025"   # web UI
+    environment:
+      MP_MAX_MESSAGES: "500"
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+
+  # --- database browser (SPEC 8.1.2) ---
+  # The SPEC 9.1.2 `id_text` virtual column exists so that BINARY(16) keys are
+  # legible here; without it every row's identifier reads as mojibake.
+  phpmyadmin:
+    image: phpmyadmin:5-apache
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+    ports:
+      - "127.0.0.1:8081:80"
+    environment:
+      PMA_HOST: db
+      PMA_USER: ${DB_USERNAME:-docup}
+      PMA_PASSWORD: ${DB_PASSWORD:-docup}
+      UPLOAD_LIMIT: 64M

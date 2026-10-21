@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# RFC 9116. Replace the placeholders below for your own deployment.
+
+Contact: https://github.com/DocUpHQ/DocUp/security/advisories/new
+Policy: https://github.com/DocUpHQ/DocUp/blob/main/SECURITY.md
+Preferred-Languages: en
+Canonical: https://github.com/DocUpHQ/DocUp/blob/main/public/.well-known/security.txt
+
+# Operators: set Expires to no more than a year out and keep it current.
+# A stale security.txt is worse than none - it tells a finder you stopped caring.
+Expires: 2027-10-19T00:00:00.000Z

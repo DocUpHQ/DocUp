@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# SPEC 9.4 baseline gate: Larastan level 8 repo-wide, level 9 in the serving,
+# authentication, artifact and configuration namespaces.
+#
+# The strict paths do not all exist yet - they arrive in Phases 04, 06 and 21.
+# They are listed from Phase 01 so that the higher bar applies the moment the
+# first file lands in one, instead of being remembered later.
+
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 8
+
+    paths:
+        - app
+        - config
+        - database
+        - routes
+        - tests
+
+    excludePaths:
+        analyseAndScan:
+            - bootstrap/cache
+            - storage
+            - vendor
+
+    # SPEC 9.4: the strict namespaces. Raising these to 9 is handled by the
+    # separate phpstan-strict.neon run in CI, because PHPStan takes one level
+    # per invocation.
+    #
+    # 🛑 This list is not a place to park inconvenient findings. Every entry
+    # names an upstream cause, is scoped to one identifier in one path, and
+    # says what would let it be removed. The level itself never moves - the CI
+    # threshold-decrease job fails the build if it does.
+    ignoreErrors:
+        # pest-plugin-arch declares arch() as returning TestCall, then forwards
+        # preset() and expect() at runtime through TestCall::__call into the
+        # plugin's own concern. The methods genuinely exist; the proxy has no
+        # stub, so PHPStan cannot see through it.
+        #
+        # Deliberately narrow: this identifier, these two method names, that
+        # one file. A broad ignore here would hide real undefined-method calls
+        # in the architecture suite, which is the suite guarding SPEC 4.3.
+        # Remove when pest-plugin-arch types the proxy.
+        -
+            identifier: method.notFound
+            message: '#undefined method .*TestCall::(preset|expect)[(][)]#'
+            path: tests/Arch/PresetsTest.php
+
