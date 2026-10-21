@@ -63,8 +63,15 @@ jobs:
       # --no-dev, because an SBOM that lists the test suite misrepresents what
       # an operator is actually running, and that is the question an SBOM exists
       # to answer.
+      #
+      # 🛑 --no-scripts, because post-autoload-dump runs `artisan
+      # package:discover`, which boots the application, and AppServiceProvider
+      # asserts the SPEC 8.1.4 origin separation at boot. There is no .env here
+      # and this job has no business inventing one: enumerating dependencies
+      # needs the lock file, not a running application. The gate workflow is
+      # what proves the app boots.
       - name: Install production dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress --no-dev
+        run: composer install --no-interaction --prefer-dist --no-progress --no-dev --no-scripts
 
       - name: Derive the version
         id: version

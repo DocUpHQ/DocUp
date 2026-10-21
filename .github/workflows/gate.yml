@@ -61,6 +61,16 @@ jobs:
           coverage: none
           tools: composer:v2
 
+      # 🛑 This MUST precede `composer install`, and the order is not cosmetic.
+      # Laravel's post-autoload-dump script runs `artisan package:discover`,
+      # which BOOTS the application - and AppServiceProvider asserts the
+      # SPEC 8.1.4 origin separation at boot. With no .env there are no origins
+      # to separate, so the assertion throws and `composer install` exits 1.
+      # That is the guard working correctly; CI simply has to give it an
+      # environment before it runs. Do not move this below the install step.
+      - name: Provide an environment file before anything boots the app
+        run: cp .env.example .env
+
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
@@ -79,7 +89,6 @@ jobs:
           DB_HOST: 127.0.0.1
           DB_DATABASE: docup_test
         run: |
-          cp .env.example .env
           php artisan key:generate
           php artisan migrate --force
 
@@ -179,6 +188,12 @@ jobs:
           coverage: none
           tools: composer:v2
 
+      # Before composer install, for the reason given in the baseline job:
+      # post-autoload-dump boots the application and the SPEC 8.1.4 assertion
+      # needs origins to exist.
+      - name: Provide an environment file before anything boots the app
+        run: cp .env.example .env
+
       - run: composer install --no-interaction --prefer-dist --no-progress
 
       - name: Migrate and check column coverage
@@ -186,7 +201,6 @@ jobs:
           DB_HOST: 127.0.0.1
           DB_DATABASE: docup_test
         run: |
-          cp .env.example .env
           php artisan key:generate
           php artisan migrate --force
           php artisan docup:classify --check
