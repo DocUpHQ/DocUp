@@ -117,6 +117,10 @@ jobs:
           path: .
           format: spdx-json
           output-file: build/sbom/docup-${{ steps.version.outputs.version }}.spdx.json
+          # Passed explicitly rather than left to Syft's auto-discovery of
+          # ./.syft.yaml, so the exclusions are not silently dropped by a
+          # change of working directory in the action.
+          config: .syft.yaml
           upload-artifact: false
           upload-release-assets: false
 

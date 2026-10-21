@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Syft configuration for the SPDX SBOM published with each release (§15.6).
+#
+# 🛑 Exclude CI infrastructure. Syft has a github-action cataloguer, so a
+# directory scan of this repository lists actions/checkout, setup-php,
+# cosign-installer and friends as packages. They are how DocUp is BUILT, not
+# anything an operator runs, and an SBOM exists to answer the second question.
+# Left in, they pad the document with entries whose CVEs can never apply to a
+# deployed installation - which trains the reader to ignore it.
+#
+# Found by inspecting the v0.0.1 release assets: 9 of its 209 SPDX packages
+# were GitHub Actions.
+# The nested pattern matters: dependencies ship their own .github directories,
+# so excluding only ./.github/** left three actions catalogued out of
+# vendor/phar-io/manifest. Those are a dev dependency's CI, which is two
+# removes from anything DocUp deploys.
+exclude:
+  - '**/.github/**'
+  - ./_docs/**
+  # Hostile-by-design fixtures (§9.4). Nothing in them is a dependency, and a
+  # scanner reading a deliberately malformed archive as a package would be
+  # reporting the test corpus as DocUp's supply chain.
+  - ./tests/Fixtures/AbuseCorpus/**
