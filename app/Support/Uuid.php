@@ -86,10 +86,36 @@ final class Uuid
         return self::toBytes(Str::uuid7()->toString());
     }
 
-    /** True when the value is plausibly 16 raw bytes rather than a canonical string. */
+    /** True when the value really is the 16 raw bytes of a UUID. */
     public static function isBytes(string $value): bool
     {
-        return strlen($value) === 16 && ! Str::isUuid($value);
+        if (strlen($value) !== 16 || Str::isUuid($value)) {
+            return false;
+        }
+
+        // 🛑 Length alone is not identification, and this check used to be
+        // length alone. '../../etc/passwd' is exactly 16 characters, so it was
+        // accepted as raw key bytes and toBytes() handed it straight back
+        // unconverted - reporting success on attacker-controlled text. So were
+        // 16 null bytes. Found by tests/Unit/UuidTest.php in Phase 01.
+        //
+        // Parameter binding meant this was never SQL injection, and such a key
+        // simply matched no row, so nothing was exploitable. It was still
+        // wrong in the way SPEC 9.1 cares about: a conversion function that
+        // guesses from length validates nothing, and the next caller to treat
+        // a successful toBytes() as proof of a well-formed key would have been
+        // relying on a check that was not happening.
+        //
+        // A real UUID carries its own structure in the bytes - RFC 9562 fixes
+        // the version nibble at 1-8 and the variant bits at 10xx - so verify
+        // that instead of trusting the length. Every DocUp key is v7, so this
+        // is strictly weaker than requiring v7 and therefore safe for any
+        // UUID that legitimately reaches here.
+        $hex = bin2hex($value);
+        $version = (int) hexdec($hex[12]);
+        $variant = (int) hexdec($hex[16]);
+
+        return $version >= 1 && $version <= 8 && ($variant & 0b1100) === 0b1000;
     }
 
     /**
