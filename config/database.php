@@ -59,7 +59,14 @@ return [
             'password' => env('DB_PASSWORD', ''),
             'unix_socket' => env('DB_SOCKET', ''),
             'charset' => env('DB_CHARSET', 'utf8mb4'),
-            'collation' => env('DB_COLLATION', 'utf8mb4_unicode_ci'),
+            // 🛑 SPEC 9.1.6 requires utf8mb4_0900_ai_ci, not the skeleton's
+            // utf8mb4_unicode_ci. The latter is the MySQL 5.x UCA 4.0.0
+            // collation: slower, and built on a Unicode version from 2003.
+            // The practical hazard is not correctness but mixing - a join
+            // between a 0900 column and a unicode_ci column fails outright
+            // with "Illegal mix of collations", so a half-converted schema
+            // breaks queries rather than degrading.
+            'collation' => env('DB_COLLATION', 'utf8mb4_0900_ai_ci'),
             'prefix' => '',
             'prefix_indexes' => true,
             'strict' => true,

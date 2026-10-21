@@ -19,7 +19,18 @@ arch()->preset()->php();
 
 arch()->preset()->security();
 
-arch()->preset()->laravel();
+arch()->preset()->laravel()
+    // The preset expects enums under App\Enums. DocUp's enums for the §12.2
+    // capability matrix live in App\Auth instead, deliberately: §9.4 raises
+    // PHPStan to level 9 for app/Auth specifically, because a type error in
+    // authorisation code is a security bug rather than a crash. Moving Role,
+    // Capability and Scope to App\Enums to satisfy a file-location convention
+    // would move the authorisation model OUT of the namespace the higher bar
+    // applies to, and scatter it across two namespaces for no reader benefit.
+    //
+    // Cohesion by concern beats cohesion by technical type here, and the
+    // specification scopes level 9 by namespace, so the namespace is load-bearing.
+    ->ignoring('App\Auth');
 
 arch()->preset()->strict()
     // Each exemption names its reason, so a later reader can remove it
