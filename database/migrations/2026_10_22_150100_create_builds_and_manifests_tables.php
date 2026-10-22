@@ -150,13 +150,15 @@ return new class extends Migration
             $table->unsignedInteger('revision');
 
             /*
-             * §18.8 lists "a JSON mounts column is fast enough on the hot path"
-             * as UNVERIFIED, with the fallback being a normalised
-             * `manifest_mounts` child table. Phase 03 does not serve anything
-             * (§17: "Nothing is readable over HTTP yet"), so nothing here is on
-             * a hot path and the assumption is not yet load-bearing. Phase 04
-             * owns the benchmark; if it fails, this column is replaced rather
-             * than reinterpreted.
+             * §18.8 — "a JSON mounts column is fast enough on the hot path" —
+             * is **VERIFIED** (P04, 2026-10-22): 100 mounts decoded and scanned
+             * at p99 75.9 µs against a 1 ms budget, 13.2x headroom, on the
+             * php-fpm shape that decodes on every request. So this column stays
+             * and the normalised `manifest_mounts` fallback is not needed.
+             *
+             * Worth keeping the number here rather than only in the build log:
+             * whoever later wonders why the hot path reads JSON instead of a
+             * child table should find the measurement beside the decision.
              */
             $table->json('mounts_json');
             $table->json('nav_json')->nullable();

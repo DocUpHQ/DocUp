@@ -29,6 +29,7 @@ FROM dunglas/frankenphp:latest
 #   pcntl      queue workers and the build runner (SPEC 8.5.13)
 #   opcache    production throughput
 #   redis      Valkey is mandatory (SPEC 11.1)
+#   pcov       coverage measurement (SPEC 8.9.1, SPEC 9.4)
 RUN install-php-extensions \
         pdo_mysql \
         intl \
@@ -39,7 +40,45 @@ RUN install-php-extensions \
         pcntl \
         opcache \
         redis \
+        pcov \
     && rm -rf /var/lib/apt/lists/*
+
+# 🛑 pcov is INSTALLED and DISABLED (SPEC 8.9.1, SPEC 9.4).
+#
+# SPEC 8.9.1 requires the resolver to sustain >=95% branch coverage and >=80%
+# mutation score, and neither can be claimed without a coverage driver. Phase 04
+# could not measure its own exit criterion until this line existed.
+#
+# Disabled by default because it is instrumentation: it costs nothing when off,
+# and it must not be on for a normal test run or a production boot. Pest enables
+# it per run with --coverage.
+#
+# pcov rather than Xdebug on purpose: far faster, and enough for line coverage.
+# 🛑 It does NOT measure BRANCH coverage, which is what SPEC 8.9.1 asks for —
+# that needs Xdebug. The gap is recorded in the build log rather than papered
+# over by reporting line coverage as though it were branch coverage.
+RUN echo "pcov.enabled=0" > /usr/local/etc/php/conf.d/20-pcov.ini
+
+# 🛑 SPEC 8.21.6: the direct artifact upload API accepts a 1 GB archive.
+#
+# The image shipped PHP's defaults — upload_max_filesize=2M,
+# post_max_size=8M — so the API rejected anything over 2 MB while
+# documenting 1 GB. No test caught it: Laravel's UploadedFile(test: true)
+# bypasses PHP's upload machinery, so the suite never exercised a real
+# multipart body. Only a curl through the real edge found it.
+#
+# memory_limit stays at the default on purpose. A 1 GB upload must NOT be
+# buffered in memory: PHP streams a multipart upload to a temporary file,
+# and the ingestor then reads it in 256 KB chunks (SPEC 8.8.2). A limit
+# well below the upload size is therefore evidence that neither holds the
+# whole archive — the same argument ADR 0001 makes for the byte handoff.
+#
+# A test asserts these meet config('artifacts.caps.archive_bytes').
+RUN { \
+      echo "upload_max_filesize=1G"; \
+      echo "post_max_size=1G"; \
+    } > /usr/local/etc/php/conf.d/30-docup-uploads.ini
+
 
 # 🛑 SPEC 8.12.16: Laravel's ArgonHasher default is m=1024 KiB, roughly 19x
 # below the OWASP floor. config/hashing.php overrides it; this ensures the

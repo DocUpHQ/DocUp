@@ -19,6 +19,7 @@ use App\Models\Project;
 use App\Models\ProjectVersion;
 use App\Models\ProjectVersionManifest;
 use App\Models\VersionPointerEvent;
+use App\Support\Invalidation;
 use App\Support\Uuid;
 use Illuminate\Support\Facades\DB;
 
@@ -76,6 +77,21 @@ final class Publisher
         $component = $this->degenerateComponentFor($version);
 
         /*
+         * Read here, where the project is already proven to exist —
+         * degenerateComponentFor() refuses a version without one. Passing it
+         * down rather than re-reading it in recordBuild() keeps that proof in
+         * one place; the alternative was a null guard in a method that cannot
+         * see the check and would therefore carry an unreachable branch.
+         */
+        $project = $version->project;
+
+        if (! $project instanceof Project) {
+            throw new \RuntimeException('A version without a project cannot be published.');
+        }
+
+        $chromeMode = $project->chrome_mode;
+
+        /*
          * 🛑 Read BEFORE the ingest, which is the work that takes time. This is
          * the "compare" half of the compare-and-swap, and capturing it here is
          * what gives a concurrent publish a window to win in. Reading it inside
@@ -103,7 +119,7 @@ final class Publisher
             throw $rejection;
         }
 
-        $build = $this->recordBuild($version, $component, $buildId, $result);
+        $build = $this->recordBuild($version, $component, $buildId, $result, $chromeMode);
 
         return $this->flip(
             version: $version,
@@ -256,13 +272,18 @@ final class Publisher
      * history is meant to be a record of attempts to build, not of attempts to
      * upload.
      */
+    /**
+     * @param  string  $chromeMode  the project's §8.15.7 mode, resolved by the
+     *                              caller where the project is already proven
+     */
     private function recordBuild(
         ProjectVersion $version,
         Component $component,
         string $buildId,
         IngestResult $result,
+        string $chromeMode,
     ): Build {
-        return DB::transaction(function () use ($version, $component, $buildId, $result): Build {
+        return DB::transaction(function () use ($version, $component, $buildId, $result, $chromeMode): Build {
             $build = new Build;
             $build->forceFill([
                 'id' => $buildId,
@@ -274,6 +295,33 @@ final class Publisher
                 'file_count' => $result->fileCount,
                 'total_bytes' => $result->totalBytes,
                 'started_at' => now(),
+
+                /*
+                 * 🛑 §8.15.4: "`builds.injector_version` MUST be stamped and a
+                 * re-ingest job MUST ship." Without the stamp there is no way
+                 * to find the artifacts still carrying an older generation of
+                 * the tags — and artifacts are immutable (§8.8.1), so the only
+                 * remedy is a deliberate re-ingest of a known set.
+                 *
+                 * Null when the build produced no HTML at all, so the re-ingest
+                 * job's query does not return artifacts with nothing to do.
+                 */
+                'injector_version' => $result->coverage->documents() > 0
+                    ? ChromeInjector::VERSION
+                    : null,
+
+                /*
+                 * §8.15.4's fallback, as APPLIED. Distinct from
+                 * `projects.chrome_mode`, which is what the project asked for.
+                 * A project on `injected` whose artifact could not be injected
+                 * serves `api_only`, and an operator asking why needs both
+                 * values rather than having to infer one from the other.
+                 */
+                'chrome_mode_applied' => $result->coverage->appliedChromeMode($chromeMode),
+
+                'chrome_documents' => $result->coverage->documents(),
+                'chrome_injected' => $result->coverage->injected(),
+                'chrome_coverage' => $result->coverage->toArray(),
             ])->save();
 
             foreach ($result->outputs as $output) {
@@ -399,6 +447,21 @@ final class Publisher
                     'pinned_at' => $pinReason !== null ? now() : $locked->pinned_at,
                     'pinned_by' => $pinReason !== null ? $actorId : $locked->pinned_by,
                     'updated_at' => now(),
+
+                    /*
+                     * 🛑 §10.8's `serving_epoch`, folded into THIS statement
+                     * rather than bumped beside it. §8.8.4 requires publication
+                     * to be "a **single** compare-and-swap row update", and
+                     * §10.8 gives this epoch a staleness bound of "0 (CAS)" —
+                     * both of which are literally true only if the pointer and
+                     * the epoch are the same write. A second UPDATE in the same
+                     * transaction was close enough to be tempting and is not
+                     * what either requirement says.
+                     *
+                     * The expression comes from the registry, so Invalidation
+                     * remains the only place that knows how an epoch advances.
+                     */
+                    'serving_epoch' => Invalidation::servingEpochIncrement(),
                 ]);
 
             if ($affected === 0) {
@@ -419,6 +482,29 @@ final class Publisher
             }
 
             $build?->forceFill(['state' => 'published', 'finished_at' => now()])->save();
+
+            /*
+             * 🛑 §10.8: a version pointer change bumps the **routing** epoch
+             * too. `serving_epoch` already moved, inside the compare-and-swap
+             * above; this is the other half.
+             *
+             * `routing_epoch` is "0 (in key)" because it is part of the
+             * resolution cache key, so a bump addresses different keys and no
+             * stale entry exists to be read — §8.9.10's own words: "A failed CDN
+             * purge then degrades to stale public HTML for `max-age`, never to
+             * wrong routing."
+             *
+             * Only in this branch, the one that moved the pointer. A build that
+             * lost the compare-and-swap changed nothing, and bumping an epoch
+             * for it would flush every reader's resolution cache to reflect a
+             * flip that did not happen.
+             */
+            Invalidation::bumpRouting(
+                projectId: $locked->project_id,
+                cause: 'version pointer change',
+                organisationId: $locked->organisation_id,
+                actorId: $actorId,
+            );
 
             $event = new VersionPointerEvent;
             $event->forceFill([

@@ -183,6 +183,22 @@ enum RejectionCode: string
      */
     case DuplicateEntry = 'contract.duplicate_entry';
 
+    /**
+     * §8.15.10: a pre-compressed HTML artifact that could not be processed.
+     *
+     * 🛑 §8.15.10 gives exactly two dispositions and no third: "A pre-compressed
+     * HTML artifact MUST be decompressed, injected and recompressed at ingest,
+     * **or refused with a stable error identifier**. This is the **single**
+     * normative disposition for compressed HTML; no other requirement may state
+     * another, and nothing is rewritten on the serving path to compensate."
+     *
+     * So this is the refusal half. It fires when the compressed bytes cannot be
+     * decompressed, and when an `.html` file's bytes are gzip — a mis-named
+     * compressed document, which must not be stored as though it were HTML
+     * because the serving path would hand a reader gzip with `text/html`.
+     */
+    case CompressedHtmlRefused = 'contract.compressed_html_refused';
+
     /** §8.8.10: a storage or count quota would be breached. */
     case QuotaExceeded = 'contract.quota_exceeded';
 
@@ -245,6 +261,8 @@ enum RejectionCode: string
             self::CompressionRatioExceeded => 'The upload decompresses by more than the allowed ratio.',
             self::UnreadableArchive => 'The upload could not be read as a supported archive.',
             self::DuplicateEntry => 'Two entries in the archive have the same name.',
+            self::CompressedHtmlRefused => 'A pre-compressed HTML file could not be decompressed, injected and '
+                .'recompressed.',
             self::QuotaExceeded => 'Publishing this tree would exceed a quota for this organisation.',
         };
     }

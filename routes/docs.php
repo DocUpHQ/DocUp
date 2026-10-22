@@ -1,0 +1,83 @@
+<?php
+
+// SPDX-FileCopyrightText: 2026 The DocUp contributors
+// SPDX-License-Identifier: Apache-2.0
+
+declare(strict_types=1);
+
+use App\Http\Controllers\Serving\DocumentController;
+use App\Http\Middleware\RejectNonCanonicalPath;
+use Illuminate\Support\Facades\Route;
+
+/*
+|------------------------------------------------------------------------------
+| The documentation origin (SPEC 8.9)
+|------------------------------------------------------------------------------
+| 🛑 A separate route file and a separate middleware group, because SPEC 8.1.4
+| puts documentation on its own registrable domain: "Built documentation is
+| attacker-controlled HTML and JavaScript; on a shared registrable domain it can
+| toss cookies at the dashboard, Clear-Site-Data spans tenants, and Laravel's
+| TrustHosts default trusts subdomains of APP_URL."
+|
+| So nothing from the `web` group applies here. No session, no CSRF token, no
+| Inertia, no cookies at all — a reader of public documentation has no identity,
+| and a cookie on this origin would be one the documentation's own JavaScript
+| could read.
+|
+| 🛑 RejectNonCanonicalPath is FIRST and nothing may precede it. SPEC 8.9.6: the
+| rejection happens "before any cache lookup or resolution", and "its position in
+| the pipeline is the whole of its value".
+|
+| 🛑 **Scoped by domain, to the documentation and preview apexes only.** Not a
+| fallback route, and not an unconstrained catch-all. A catch-all would answer on
+| the dashboard host too, where SPEC 8.1.4's whole point is that the two origins
+| stay apart; a fallback would let a custom domain reach the dashboard's own `/`
+| route before anything checked whether it serves documentation at all.
+|
+| Custom domains are 🛑 **explicitly out of scope for Phase 04** (SPEC 17), which
+| is why only these two shapes are registered. Phase 18 brings domain claims and
+| verification, and the host matcher already offers the custom-domain candidate
+| first (SPEC 8.9.3) — the route table is what has not caught up, deliberately,
+| rather than the resolver.
+*/
+
+$apexes = array_values(array_filter([
+    config('docup.origins.docs'),
+    config('docup.origins.preview'),
+], static fn (mixed $apex): bool => is_string($apex) && $apex !== ''));
+
+foreach ($apexes as $index => $apex) {
+    /*
+     * One label under the apex. SPEC 8.9.3 resolves a "single-label default
+     * subdomain", and the pattern enforces the same thing the matcher does:
+     * `a.b.docs.example.com` matches nothing, because a wildcard certificate
+     * covers one label and a nested name is a misconfiguration or a probe.
+     *
+     * The label is captured only so the pattern can require exactly one. It is
+     * never read: SPEC 8.9.4 forbids resolving a project from anything but the
+     * host and path, and the resolver takes the whole host, so a controller
+     * reading a route parameter here would be a second source of truth.
+     */
+    Route::domain('{docupHostLabel}.'.$apex)
+        ->middleware([RejectNonCanonicalPath::class])
+        ->group(function () use ($index): void {
+            /*
+             * One route for every documentation path. SPEC 7.3's grammar is the
+             * resolver's, not the router's — a router pattern per versioning
+             * scheme would be a second implementation of the grammar, and
+             * SPEC 17.4 freezes exactly one.
+             */
+            Route::get('/{docupPath?}', DocumentController::class)
+                ->where('docupHostLabel', '[a-z0-9]([a-z0-9-]*[a-z0-9])?')
+                ->where('docupPath', '.*')
+                /*
+                 * Named by position, because Laravel requires route names to
+                 * be unique and both apexes register the same route. Stable
+                 * across boots — the documentation apex is index 0 and the
+                 * preview apex is index 1 — so a generated URL does not change
+                 * between requests, which a random suffix would have made true
+                 * only by accident.
+                 */
+                ->name('docs.document.'.$index);
+        });
+}

@@ -121,10 +121,11 @@ final class ProjectVersionManifest extends Model
      * The build serving a given mount path, from the stored composition.
      *
      * Read from `mounts_json` rather than by joining `manifest_builds`, because
-     * §8.4.18 requires the serving path to answer without a query per request
-     * and §18.8 is the (still unverified) assumption that this column is fast
-     * enough for it. Phase 04 owns that benchmark; nothing here is on a hot path
-     * yet, which is why the assumption is not load-bearing today.
+     * §8.4.18 requires the serving path to answer without a query per request.
+     * §18.8 is the assumption that this column is fast enough for it, and it is
+     * **verified** (P04): 100 mounts decoded and scanned at p99 75.9 µs against
+     * a 1 ms budget, measured on the php-fpm shape that pays the decode on every
+     * request.
      */
     public function buildIdForMount(string $mountPath): ?string
     {

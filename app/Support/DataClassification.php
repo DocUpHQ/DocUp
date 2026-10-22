@@ -66,14 +66,29 @@ final class DataClassification
     }
 
     /**
-     * Remove a table's classifications, for a migration's `down()`.
+     * Remove classifications, for a migration's `down()`.
      *
      * A dropped table whose annotations survive makes `classify --check` report
      * coverage for columns that no longer exist, which reads as a pass and is
      * noise at best.
+     *
+     * 🛑 Pass `$columns` when the migration added columns to an existing table
+     * rather than creating it. Without them this deletes every annotation for
+     * the table — so a `Schema::table` migration rolling back would silently
+     * strip the annotations an earlier migration wrote, and `classify --check`
+     * would then fail on columns nobody had touched. The whole-table form is
+     * correct only for a migration that also drops the table.
+     *
+     * @param  list<string>|null  $columns  null means the whole table
      */
-    public static function forget(string $table): void
+    public static function forget(string $table, ?array $columns = null): void
     {
-        DB::table('data_class_annotations')->where('table_name', $table)->delete();
+        $query = DB::table('data_class_annotations')->where('table_name', $table);
+
+        if ($columns !== null) {
+            $query->whereIn('column_name', $columns);
+        }
+
+        $query->delete();
     }
 }

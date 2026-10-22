@@ -49,6 +49,14 @@ final class ContentTypes
 
         // Data
         'json' => 'application/json; charset=utf-8',
+
+        /*
+         * §8.9.11 names `.wasm` explicitly, and it has to be exact: a
+         * WebAssembly module served as anything else is refused by
+         * `WebAssembly.instantiateStreaming`, so a documentation site shipping
+         * an interactive playground breaks with a console error and no clue.
+         */
+        'wasm' => 'application/wasm',
         'xml' => 'application/xml; charset=utf-8',
         'txt' => 'text/plain; charset=utf-8',
         'csv' => 'text/csv; charset=utf-8',
@@ -115,5 +123,19 @@ final class ContentTypes
     public static function knows(string $extension): bool
     {
         return isset(self::MAP[strtolower($extension)]);
+    }
+
+    /**
+     * Whether a path's type is known, which decides §8.9.11's disposition.
+     *
+     * 🛑 §8.9.11: "`Content-Disposition: attachment` for anything unknown." An
+     * unknown type served inline is the sniffing risk this allowlist exists to
+     * remove — `nosniff` stops a browser guessing, and `attachment` stops it
+     * rendering what it was told is opaque bytes. The two work together: either
+     * alone leaves a case open.
+     */
+    public static function isKnownPath(string $path): bool
+    {
+        return self::knows(pathinfo($path, PATHINFO_EXTENSION));
     }
 }

@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace Tests\Feature\Artifacts;
 
 use App\Artifacts\ArtifactIngestor;
+use App\Artifacts\ChromeInjector;
 use App\Artifacts\Exceptions\ArtifactWriteRefused;
 use App\Artifacts\Exceptions\IngestRejected;
 use App\Artifacts\FileManifest;
@@ -46,6 +47,8 @@ final class ArtifactIngestorTest extends TestCase
 
     private string $buildId;
 
+    private ChromeInjector $chrome;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -60,7 +63,8 @@ final class ArtifactIngestorTest extends TestCase
 
         $this->store = new LocalArtifactStore('artifacts');
         $this->caps = IngestCaps::fromConfig();
-        $this->ingestor = new ArtifactIngestor($this->store, $this->caps);
+        $this->chrome = ChromeInjector::fromConfig();
+        $this->ingestor = new ArtifactIngestor($this->store, $this->caps, $this->chrome);
         $this->buildId = Uuid::v7();
     }
 
@@ -223,7 +227,7 @@ final class ArtifactIngestorTest extends TestCase
         $this->assertSame($result->contentSha256, FileManifest::decode($stored)->digest());
     }
 
-    public function test_a_zip_and_a_tar_of_one_tree_produce_identical_manifests(): void
+    public function test_a_zip_and_a_tar_of_one_tree_are_read_identically(): void
     {
         $tar = HostileArchives::build('valid_three_file_tree', $this->fixtures);
         $zip = HostileArchives::build('valid_zip_tree', $this->fixtures);
@@ -231,11 +235,49 @@ final class ArtifactIngestorTest extends TestCase
         $fromTar = $this->ingestor->ingest(Uuid::v7(), $tar);
         $fromZip = $this->ingestor->ingest(Uuid::v7(), $zip);
 
-        // 🛑 Two readers, one answer. If the formats disagreed about what a tree
-        // contains, §8.7.9's content key would depend on how a runner chose to
-        // pack its output, and two identical builds would look different.
-        $this->assertSame($fromTar->manifest->encode(), $fromZip->manifest->encode());
-        $this->assertSame($fromTar->contentSha256, $fromZip->contentSha256);
+        /*
+         * 🛑 Two readers, one answer. If the formats disagreed about what a
+         * tree contains, a runner's choice of packaging would change what got
+         * published.
+         *
+         * Compared per entry rather than by encoding the whole manifest,
+         * because §8.15.1 injects the **build id** into every HTML document —
+         * so two ingests of one source legitimately produce different HTML
+         * bytes, and an equality assertion on the whole manifest was asserting
+         * that injection did not happen. What the readers must agree on is the
+         * tree: the same paths, the same sizes, and identical digests for every
+         * file injection did not touch.
+         */
+        $this->assertSame($fromTar->manifest->paths(), $fromZip->manifest->paths());
+
+        foreach ($fromTar->manifest->paths() as $path) {
+            $a = $fromTar->manifest->get($path);
+            $b = $fromZip->manifest->get($path);
+
+            $this->assertNotNull($a);
+            $this->assertNotNull($b);
+            $this->assertSame($a['bytes'], $b['bytes'], $path);
+            $this->assertSame($a['content_type'], $b['content_type'], $path);
+
+            if (! ChromeInjector::handles($path)) {
+                $this->assertSame($a['sha256'], $b['sha256'], $path);
+            }
+        }
+
+        // And the HTML digests DO differ, by design: the injected meta tag
+        // carries the build id (§8.15.1). Asserted so the property above is
+        // read as deliberate rather than as a weakened comparison.
+        $tarIndex = $fromTar->manifest->get('html/index.html');
+        $zipIndex = $fromZip->manifest->get('html/index.html');
+
+        $this->assertNotNull($tarIndex);
+        $this->assertNotNull($zipIndex);
+        $this->assertNotSame(
+            $tarIndex['sha256'],
+            $zipIndex['sha256'],
+            'the injected build id must make two builds of one source differ',
+        );
+
         $this->assertSame('tar.gz', $fromTar->archiveFormat);
         $this->assertSame('zip', $fromZip->archiveFormat);
     }
@@ -279,8 +321,8 @@ final class ArtifactIngestorTest extends TestCase
         // Either side of the real ratio. Testing the boundary rather than a
         // 1000:1 bomb is what proves the comparison is the right way round — a
         // reversed `>` would still refuse an obvious bomb and look correct.
-        $strict = new ArtifactIngestor($this->store, $this->caps->with(compressionRatio: $ratio - 1.0));
-        $lenient = new ArtifactIngestor($this->store, $this->caps->with(compressionRatio: $ratio + 1.0));
+        $strict = new ArtifactIngestor($this->store, $this->caps->with(compressionRatio: $ratio - 1.0), $this->chrome);
+        $lenient = new ArtifactIngestor($this->store, $this->caps->with(compressionRatio: $ratio + 1.0), $this->chrome);
 
         try {
             $strict->ingest(Uuid::v7(), $archive);
@@ -336,7 +378,7 @@ final class ArtifactIngestorTest extends TestCase
             ->add('html/big.bin', str_repeat('x', 4096))
             ->toTar($this->fixtures.'/perfile.tar');
 
-        $ingestor = new ArtifactIngestor($this->store, $this->caps->with(fileBytes: 1024));
+        $ingestor = new ArtifactIngestor($this->store, $this->caps->with(fileBytes: 1024), $this->chrome);
 
         try {
             $ingestor->ingest($this->buildId, $archive);
@@ -354,7 +396,7 @@ final class ArtifactIngestorTest extends TestCase
             ->add('html/b.txt', str_repeat('x', 1024))
             ->toTar($this->fixtures.'/total.tar');
 
-        $ingestor = new ArtifactIngestor($this->store, $this->caps->with(totalBytes: 2048));
+        $ingestor = new ArtifactIngestor($this->store, $this->caps->with(totalBytes: 2048), $this->chrome);
 
         try {
             $ingestor->ingest($this->buildId, $archive);

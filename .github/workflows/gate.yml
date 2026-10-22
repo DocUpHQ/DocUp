@@ -61,6 +61,19 @@ jobs:
           coverage: none
           tools: composer:v2
 
+          # 🛑 The same upload limits the deployment images set, because CI runs
+          # the upload API tests and setup-php ships PHP's 2M/8M defaults. Left
+          # at the defaults, CI exercises the direct upload API against a PHP
+          # that would reject anything over 2 MB with a 413 the application
+          # never sees -- which is the exact defect SPEC 8.21.6 and
+          # HandoffHeaderParityTest exist to catch, running green in CI.
+          #
+          # This matches the environment to what the test asserts; it does not
+          # relax what is asserted. Lowering the cap or weakening the assertion
+          # would be routing around the gate (CLAUDE.md rule 4).
+          ini-values: upload_max_filesize=1G, post_max_size=1G, memory_limit=512M
+
+
       # 🛑 This MUST precede `composer install`, and the order is not cosmetic.
       # Laravel's post-autoload-dump script runs `artisan package:discover`,
       # which BOOTS the application - and AppServiceProvider asserts the
@@ -249,6 +262,7 @@ jobs:
           coverage: none
           tools: composer:v2
 
+
       # Before composer install, for the reason given in the baseline job:
       # post-autoload-dump boots the application and the SPEC 8.1.4 assertion
       # needs origins to exist.
@@ -336,3 +350,125 @@ jobs:
             echo "all commits signed off (DCO, §15.6)"
           fi
           exit "$failed"
+
+  # ---------------------------------------------------------------------------
+  # ADR 0001 / SPEC 11.3: "nginx + php-fpm is an equal alternative … behind one
+  # ArtifactHandoff interface, implemented from day one and run as a CI matrix
+  # leg, not merely documented."
+  #
+  # 🛑 This is the dynamic half of SPEC 18.18, and the static test cannot replace
+  # it. tests/Feature/Serving/HandoffHeaderParityTest.php proves the application
+  # SETS every preserved header and that deploy/nginx.conf NAMES every one of
+  # them; it cannot prove a running nginx EMITS them. SPEC 18.18's failure mode
+  # is "silent security degradation, not a visible error" — a private document
+  # served with no `private, no-store` behind a correct-looking 200 — because
+  # nginx replaces the entire response header set on an internal redirect. A
+  # configuration that fails to apply looks exactly like one that works.
+  #
+  # Both drivers run the SAME script against the SAME assertions. That is the
+  # point: a driver-specific test would let the two diverge and call it passing.
+  edge:
+    name: edge driver (${{ matrix.driver }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    strategy:
+      # Both legs always report. SPEC 18.18 is about a difference between the
+      # drivers, and a cancelled sibling hides exactly the comparison wanted.
+      fail-fast: false
+      matrix:
+        include:
+          - driver: caddy-intercept
+            compose: compose.yaml
+            base: http://localhost:8080
+            # FrankenPHP IS the edge, so there is no separate service to start,
+            # and `runner` is Phase 06's build sandbox with no part in this.
+            services: db cache app
+          - driver: nginx-accel
+            compose: compose.nginx.yaml
+            base: http://localhost:8090
+            services: db cache app edge
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compose an environment
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+
+          # Written directly rather than with `artisan key:generate`, which
+          # needs a bootable application and the application needs the key.
+          printf 'APP_KEY=base64:%s\n' "$(openssl rand -base64 32)" >> .env
+          printf 'APP_ENV=local\n' >> .env
+
+          # 🛑 SPEC 8.22.1 refuses to start without this, and the fixture script
+          # mints an API token, which writes an audit entry. .env.example ships it
+          # EMPTY on purpose -- a committed default audit key is a key an attacker
+          # also has, and whoever holds it can forge a chain that verifies -- so
+          # every environment has to generate its own. A throwaway one is correct
+          # here: the run is destroyed with the runner, and nothing verifies a
+          # chain across runs.
+          printf 'DOCUP_AUDIT_KEY=%s\n' "$(openssl rand -hex 32)" >> .env
+          printf 'DOCUP_EDGE_DRIVER=%s\n' '${{ matrix.driver }}' >> .env
+
+          # The hosts the script sends as `Host:`. They never resolve and do not
+          # need to: every request goes to localhost with an explicit header,
+          # which is also what SPEC 8.9.4 says a project must be resolved from.
+          printf 'DOCUP_APP_HOST=docup.localhost\n' >> .env
+          printf 'DOCUP_DOCS_APEX=docup-docs.localhost\n' >> .env
+          printf 'DOCUP_PREVIEW_APEX=docup-previews.localhost\n' >> .env
+          printf 'DOCUP_ASSET_HOST=assets.docup-docs.localhost\n' >> .env
+
+      - name: Build the image
+        run: docker compose -f '${{ matrix.compose }}' build app
+
+      - name: Install dependencies
+        run: |
+          docker compose -f '${{ matrix.compose }}' run --rm --no-deps app \
+            composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Start the stack
+        run: |
+          docker compose -f '${{ matrix.compose }}' up -d ${{ matrix.services }}
+
+      - name: Migrate
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if docker compose -f '${{ matrix.compose }}' exec -T app \
+                 php artisan migrate --force --no-interaction; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::migrations never succeeded"
+          exit 1
+
+      - name: Wait for the edge to answer
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' \
+              -H 'Host: docup-docs.localhost' '${{ matrix.base }}/' || echo 000)"
+
+            # 404 is a PASS here: an apex with no project mounted is SPEC 8.9.3's
+            # hard 404, which proves PHP answered. 000 is no listener and 502 is
+            # nginx without php-fpm behind it, which are the two real failures.
+            case "$code" in
+              000|502|503|504) sleep 3 ;;
+              *) echo "edge answered ${code}"; exit 0 ;;
+            esac
+          done
+          echo "::error::the edge never answered"
+          exit 1
+
+      - name: Verify the handoff through the real edge (SPEC 18.18)
+        run: |
+          SEED_CMD='docker compose -f ${{ matrix.compose }} exec -T app php deploy/seed-edge-fixture.php' \
+            bash deploy/verify-edge.sh \
+              '${{ matrix.base }}' docup-docs.localhost '${{ matrix.driver }}'
+
+      - name: Logs, on failure
+        if: failure()
+        run: docker compose -f '${{ matrix.compose }}' logs --tail 200

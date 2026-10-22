@@ -59,6 +59,19 @@ arch()->preset()->laravel()
         // RejectionCode, so a shared App\Exceptions would import the artifact
         // namespace into a namespace everything else depends on.
         'App\Artifacts',
+        // And App\Serving, third time for the same reason. §9.4 names
+        // app/Serving as a level-9 namespace because "a type error in request
+        // resolution is a security bug rather than a crash" — so HostKind and
+        // RejectionReason belong inside it, not collected under App\Enums by
+        // the fact that they are enums. RejectionReason's values also reach
+        // `X-DocUp-Resolver` and operator alerting, which is exactly the kind
+        // of contract the stricter analysis exists for.
+        'App\Serving',
+        // And App\Support, for §10.8's Epoch. The registry is deliberately
+        // cross-cutting — one epoch per concern, exactly one registry — so it
+        // cannot live inside any one of the concerns it coordinates, and
+        // App\Enums would file it by the fact that it is an enum.
+        'App\Support',
     ]);
 
 arch()->preset()->strict()
@@ -113,8 +126,17 @@ arch()
 
 arch()
     ->expect('App\Support')
-    ->toBeFinal()
     ->toUseStrictTypes();
+
+arch()
+    ->expect('App\Support')
+    ->toBeFinal()
+    // PHP enums are implicitly final and the keyword is a syntax error on one,
+    // so the rule is inapplicable rather than relaxed. §10.8's registry lives
+    // in App\Support because it is cross-cutting: every epoch belongs to a
+    // different concern, which is the whole reason the specification insists
+    // there be only one of it.
+    ->ignoring(['App\Support\Epoch']);
 
 /*
 | 🛑 Restating what the two exemptions above still leave in force for
@@ -129,6 +151,32 @@ arch()
     ->expect('App\Artifacts')
     ->toUseStrictTypes();
 
+/*
+| 🛑 And the same restatement for App\Serving. §8.9.1 requires the resolver to
+| have "no framework dependencies", which is a stronger claim than any preset
+| checks, so these are the parts a preset can still hold it to.
+*/
+arch()
+    ->expect('App\Serving')
+    ->toUseStrictTypes();
+
+arch()
+    ->expect('App\Serving')
+    ->toBeFinal()
+    ->ignoring([
+        // PHP enums are implicitly final and the keyword is a syntax error on
+        // one, so the rule is inapplicable rather than relaxed. Listed by name
+        // rather than by namespace so that adding an enum here is a deliberate
+        // act: the suite fails loudly until the new name is added, which is
+        // cheaper than a blanket exemption that would also excuse a class.
+        // An interface; the final rule does not apply.
+        'App\Serving\ArtifactHandoff',
+        'App\Serving\FileKind',
+        'App\Serving\HostKind',
+        'App\Serving\RejectionReason',
+        'App\Serving\RouteKind',
+    ]);
+
 arch()
     ->expect('App\Artifacts')
     ->toBeFinal()
@@ -139,6 +187,7 @@ arch()
         // PHP enums are implicitly final and the keyword is a syntax error on
         // one, so the rule is not relaxed here - it is inapplicable.
         'App\Artifacts\EntryType',
+        'App\Artifacts\InjectionOutcome',
         'App\Artifacts\RejectionCode',
     ]);
 

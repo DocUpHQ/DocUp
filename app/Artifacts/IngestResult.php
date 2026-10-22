@@ -28,6 +28,8 @@ final class IngestResult
      * @param  string  $manifestKey  key of the stored `manifest.json`
      * @param  list<ArtifactOutput>  $outputs  one per format directory present
      * @param  string  $contentSha256  digest of the canonical manifest bytes
+     * @param  InjectionCoverage  $coverage  §8.15.3's per-build record, which the
+     *                                       caller persists and may have to warn about
      */
     public function __construct(
         public readonly string $buildId,
@@ -38,6 +40,7 @@ final class IngestResult
         public readonly int $fileCount,
         public readonly int $totalBytes,
         public readonly string $contentSha256,
+        public readonly InjectionCoverage $coverage,
     ) {}
 
     /**

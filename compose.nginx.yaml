@@ -1,0 +1,94 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The nginx-accel edge, for the SPEC 11.3 CI matrix leg.
+#
+# 🛑 A separate file rather than a profile in compose.yaml, because this stack
+# replaces the app container rather than adding to it: the primary one is
+# FrankenPHP, which is Caddy with PHP embedded, and the two cannot both own
+# port 80. Run it with `-f compose.nginx.yaml` on its own.
+#
+# What it proves that the static parity test cannot: that a RUNNING nginx
+# honours deploy/nginx.conf's re-emission list. SPEC 18.18's failure mode is
+# "silent security degradation" — a private document served with no
+# `private, no-store` behind a correct-looking 200 — and a configuration that
+# fails to apply is indistinguishable from one that works until something looks.
+
+name: docup-nginx
+
+services:
+
+  # --- nginx, the edge under test ---
+  edge:
+    image: nginx:1.27-alpine
+    depends_on:
+      app: { condition: service_started }
+    ports:
+      # 8090, not 8081: compose.yaml's dev-profile phpMyAdmin publishes 8081, and
+      # both stacks running at once is the normal case when comparing the drivers.
+      - "${DOCUP_NGINX_PORT:-8090}:80"
+    volumes:
+      # 🛑 The shipped configuration, mounted verbatim. A copy edited for the
+      # test would be the thing gate.yml already warns about: "testing a script
+      # that is not the one operators run is worse than not testing it."
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - .:/app:ro
+      - artifacts:/var/lib/docup/artifacts:ro
+
+  # --- php-fpm, the application ---
+  app:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.fpm
+    depends_on:
+      db: { condition: service_healthy }
+      cache: { condition: service_started }
+    volumes:
+      - .:/app
+      - artifacts:/var/lib/docup/artifacts
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      APP_KEY: ${APP_KEY}
+      APP_DEBUG: ${APP_DEBUG:-false}
+      DB_CONNECTION: mysql
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_DATABASE: ${DB_DATABASE:-docup}
+      DB_USERNAME: ${DB_USERNAME:-docup}
+      DB_PASSWORD: ${DB_PASSWORD:-docup}
+      REDIS_HOST: cache
+      CACHE_STORE: redis
+      SESSION_DRIVER: database
+      QUEUE_CONNECTION: database
+      DOCUP_APP_HOST: ${DOCUP_APP_HOST}
+      DOCUP_DOCS_APEX: ${DOCUP_DOCS_APEX}
+      DOCUP_PREVIEW_APEX: ${DOCUP_PREVIEW_APEX}
+      DOCUP_ASSET_HOST: ${DOCUP_ASSET_HOST}
+      DOCUP_ARTIFACT_ROOT: /var/lib/docup/artifacts
+
+      # 🛑 The point of the whole file. Under this driver the application must
+      # still set every header in ArtifactHandoff::PRESERVED_HEADERS, and nginx
+      # must re-emit them — because nginx replaces the entire response header
+      # set on an internal redirect (ADR 0001, SPEC 18.18).
+      DOCUP_EDGE_DRIVER: nginx-accel
+
+  db:
+    image: mysql:8.4
+    command:
+      - --innodb-buffer-pool-size=256M
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-docup-root}
+      MYSQL_DATABASE: ${DB_DATABASE:-docup}
+      MYSQL_USER: ${DB_USERNAME:-docup}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-docup}
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${DB_ROOT_PASSWORD:-docup-root}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  cache:
+    image: valkey/valkey:8-alpine
+
+volumes:
+  artifacts:

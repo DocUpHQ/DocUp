@@ -25,6 +25,26 @@ return [
 
     /*
     |---------------------------------------------------------------------------
+    | The artifact root (SPEC 8.9.8)
+    |---------------------------------------------------------------------------
+    | 🛑 This path MUST match what the edge serves, and a test asserts that it
+    | does against both deploy/Caddyfile and deploy/nginx.conf.
+    |
+    | It did not, and the failure was invisible: the edge served
+    | /var/lib/docup/artifacts while the store wrote to storage/app/artifacts,
+    | so every handoff pointed at a file the edge could not see. The application
+    | returns a correct 200 with a correct X-Accel-Redirect and the reader gets
+    | a 404 from the edge -- nothing is logged as wrong, because nothing in the
+    | application IS wrong.
+    |
+    | Stated here rather than only in config/filesystems.php because this is the
+    | value the parity test compares, and the disk reads the same environment
+    | variable.
+    */
+    'root' => env('DOCUP_ARTIFACT_ROOT', '/var/lib/docup/artifacts'),
+
+    /*
+    |---------------------------------------------------------------------------
     | Ingest caps (SPEC 8.8.2)
     |---------------------------------------------------------------------------
     | 🛑 The defaults are SPEC 8.8.2's, verbatim: 50,000 files, 5 GB total,
@@ -43,6 +63,40 @@ return [
         'total_bytes' => (int) env('DOCUP_ARTIFACT_MAX_TOTAL_BYTES', 5 * 1024 * 1024 * 1024),
         'file_bytes' => (int) env('DOCUP_ARTIFACT_MAX_FILE_BYTES', 1024 * 1024 * 1024),
         'compression_ratio' => (float) env('DOCUP_ARTIFACT_MAX_COMPRESSION_RATIO', 100.0),
+
+        /*
+         * 🛑 SPEC 8.21.6's ceiling on the UPLOAD itself, which is a different
+         * number from `total_bytes` above: that one bounds the uncompressed
+         * tree (SPEC 8.8.2's 5 GB), this one bounds the archive that arrives.
+         * SPEC 8.21.6 states the upload API's defaults as "1 GB, 50,000 files,
+         * 100:1", and 1 GB is the archive.
+         *
+         * It is also the number PHP's own upload_max_filesize must meet. They
+         * did not: the image shipped PHP's 2M default, so the upload API
+         * rejected anything over 2 MB while documenting 1 GB -- and no test
+         * caught it, because Laravel's UploadedFile(test: true) bypasses PHP's
+         * upload machinery entirely. A test now asserts the two agree.
+         */
+        'archive_bytes' => (int) env('DOCUP_ARTIFACT_MAX_ARCHIVE_BYTES', 1024 * 1024 * 1024),
+    ],
+
+    /*
+    |---------------------------------------------------------------------------
+    | Chrome injection (SPEC 8.15.1, SPEC 8.15.4)
+    |---------------------------------------------------------------------------
+    | Injection happens at INGEST, never at serve time -- SPEC 4.3/2, SPEC
+    | 4.3/6, SPEC 8.9.8 and SPEC 19/6 all say so, and the artifact handoff
+    | depends on it: the edge moves bytes it does not read, so nothing could
+    | rewrite them on the way out even if the architecture allowed it.
+    |
+    | 🛑 The ceiling is SPEC 8.15.4's third non-injectable class. It is a memory
+    | bound rather than a policy: injection holds one whole document while it
+    | works, so an uncapped ceiling is an uncapped allocation driven by an
+    | uploaded file. A document over 4 MiB is left alone and the build falls back
+    | to api_only, which SPEC 8.15.4 prefers to refusing to publish it.
+    */
+    'chrome' => [
+        'max_html_bytes' => (int) env('DOCUP_CHROME_MAX_HTML_BYTES', 4 * 1024 * 1024),
     ],
 
     /*

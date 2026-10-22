@@ -8,9 +8,13 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Artifacts\ArtifactStore;
+use App\Artifacts\ChromeInjector;
 use App\Artifacts\IngestCaps;
 use App\Artifacts\LocalArtifactStore;
 use App\Artifacts\S3ArtifactStore;
+use App\Serving\ArtifactHandoff;
+use App\Serving\CaddyInterceptHandoff;
+use App\Serving\NginxAccelHandoff;
 use Illuminate\Support\ServiceProvider;
 
 /**
@@ -41,6 +45,13 @@ final class ArtifactServiceProvider extends ServiceProvider
          */
         $this->app->singleton(IngestCaps::class, static fn (): IngestCaps => IngestCaps::fromConfig());
 
+        /*
+         * A singleton for the same reason the caps are: §8.15.4's byte ceiling
+         * must not change during an ingest, or one half of a tree would be
+         * judged injectable against a different limit from the other.
+         */
+        $this->app->singleton(ChromeInjector::class, static fn (): ChromeInjector => ChromeInjector::fromConfig());
+
         $this->app->singleton(ArtifactStore::class, function (): ArtifactStore {
             $driver = config('artifacts.driver');
             $disks = config('artifacts.disks');
@@ -70,6 +81,27 @@ final class ArtifactServiceProvider extends ServiceProvider
             return match ($driver) {
                 's3' => new S3ArtifactStore($disk),
                 default => new LocalArtifactStore($disk),
+            };
+        });
+
+        /*
+         * 🛑 The edge driver (SPEC 11.3). `caddy-intercept` is the default on
+         * one measured ground: it preserves the application's response headers
+         * through the handoff natively, where nginx replaces the entire set and
+         * needs the hand-maintained re-emission list in deploy/nginx.conf
+         * (SPEC 8.9.8, ADR 0001). Both exist from day one and both run in the
+         * CI matrix, so neither is a documented alternative.
+         */
+        $this->app->singleton(ArtifactHandoff::class, static function (): ArtifactHandoff {
+            $driver = config('docup.edge.driver', 'caddy-intercept');
+
+            return match ($driver) {
+                'nginx-accel' => new NginxAccelHandoff,
+                'caddy-intercept' => new CaddyInterceptHandoff,
+                default => throw new \RuntimeException(
+                    'Unknown edge driver ['.(is_string($driver) ? $driver : gettype($driver))
+                    .']. Set DOCUP_EDGE_DRIVER to caddy-intercept or nginx-accel.'
+                ),
             };
         });
     }
