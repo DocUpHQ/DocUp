@@ -53,6 +53,10 @@ services:
       DOCUP_DOCS_APEX: ${DOCUP_DOCS_APEX}
       DOCUP_PREVIEW_APEX: ${DOCUP_PREVIEW_APEX}
       DOCUP_ASSET_HOST: ${DOCUP_ASSET_HOST}
+      # 🛑 The same path the edge serves, and the same path the volume is
+      # mounted at above. A store writing elsewhere makes every handoff point at
+      # a file the edge cannot see.
+      DOCUP_ARTIFACT_ROOT: /var/lib/docup/artifacts
       DOCUP_EDGE_DRIVER: ${DOCUP_EDGE_DRIVER:-caddy-intercept}
       DOCUP_SEARCH_DRIVER: ${DOCUP_SEARCH_DRIVER:-mysql_fulltext}
     healthcheck:

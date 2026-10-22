@@ -79,7 +79,15 @@ return [
          */
         'artifacts' => [
             'driver' => 'local',
-            'root' => env('DOCUP_ARTIFACT_ROOT', storage_path('app/artifacts')),
+            /*
+             * 🛑 The default is the path the EDGE serves, not a Laravel storage
+             * path. deploy/Caddyfile and deploy/nginx.conf both serve
+             * /var/lib/docup/artifacts, and a store writing anywhere else makes
+             * every handoff point at a file the edge cannot see -- a correct
+             * 200 from the application and a 404 for the reader, with nothing
+             * logged as wrong. A test asserts the two agree.
+             */
+            'root' => env('DOCUP_ARTIFACT_ROOT', '/var/lib/docup/artifacts'),
             'serve' => false,
             'throw' => true,
             'report' => false,

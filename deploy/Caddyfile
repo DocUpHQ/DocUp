@@ -55,6 +55,19 @@
 				header -X-Powered-By
 				header X-Content-Type-Options nosniff
 
+				# 🛑 SPEC 8.9.8 allows multiple Vary headers only with DISTINCT
+				# values. `encode` below adds its own `Vary: Accept-Encoding`,
+				# and the application already sends one - so without this the
+				# response carried the same value twice, which is a duplicate
+				# rather than the semantic union the requirement permits.
+				#
+				# `>Vary` REPLACES rather than appends, collapsing both into the
+				# application's value. The application's is the one to keep: it
+				# carries `Cookie` as well on a private response (SPEC 9.3.2),
+				# and losing that is the leak this whole header set exists to
+				# prevent.
+				header >Vary {resp.header.Vary}
+
 				file_server
 			}
 		}

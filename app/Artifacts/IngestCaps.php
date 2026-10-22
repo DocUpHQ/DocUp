@@ -29,12 +29,21 @@ final class IngestCaps
         public readonly int $totalBytes,
         public readonly int $fileBytes,
         public readonly float $compressionRatio,
+        public readonly int $archiveBytes = 1024 * 1024 * 1024,
     ) {}
 
     /** Build from `config/artifacts.php`, whose defaults are §8.8.2's verbatim. */
     public static function fromConfig(): self
     {
-        /** @var array{files: int, total_bytes: int, file_bytes: int, compression_ratio: float} $caps */
+        /**
+         * @var array{
+         *     files: int,
+         *     total_bytes: int,
+         *     file_bytes: int,
+         *     compression_ratio: float,
+         *     archive_bytes: int
+         * } $caps
+         */
         $caps = config('artifacts.caps');
 
         return new self(
@@ -42,6 +51,7 @@ final class IngestCaps
             totalBytes: $caps['total_bytes'],
             fileBytes: $caps['file_bytes'],
             compressionRatio: $caps['compression_ratio'],
+            archiveBytes: $caps['archive_bytes'],
         );
     }
 
@@ -58,12 +68,14 @@ final class IngestCaps
         ?int $totalBytes = null,
         ?int $fileBytes = null,
         ?float $compressionRatio = null,
+        ?int $archiveBytes = null,
     ): self {
         return new self(
             files: $files ?? $this->files,
             totalBytes: $totalBytes ?? $this->totalBytes,
             fileBytes: $fileBytes ?? $this->fileBytes,
             compressionRatio: $compressionRatio ?? $this->compressionRatio,
+            archiveBytes: $archiveBytes ?? $this->archiveBytes,
         );
     }
 }

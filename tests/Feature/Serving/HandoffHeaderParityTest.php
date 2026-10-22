@@ -337,6 +337,128 @@ final class HandoffHeaderParityTest extends TestCase
         }
     }
 
+    /**
+     * 🛑 The configured artifact root is the path the edge actually serves.
+     *
+     * This test exists because the two disagreed. `deploy/Caddyfile` served
+     * `/var/lib/docup/artifacts` while the store's default root was
+     * `storage/app/artifacts`, and nothing set the environment variable that
+     * reconciles them — so **every** documentation request would have been a
+     * 404 from the edge while the application returned a correct 200 with a
+     * correct `X-Accel-Redirect`.
+     *
+     * Nothing would have been logged as wrong, because nothing in the
+     * application WAS wrong. That is the whole reason this is asserted rather
+     * than documented: the failure has no symptom an application-level test
+     * could see.
+     */
+    public function test_the_configured_artifact_root_is_what_the_edge_serves(): void
+    {
+        $root = config('artifacts.root');
+
+        $this->assertIsString($root);
+        $this->assertSame($root, config('filesystems.disks.artifacts.root'),
+            'the store and the declared root must be the same path');
+
+        foreach (['deploy/Caddyfile', 'deploy/nginx.conf'] as $config) {
+            $this->assertStringContainsString(
+                (string) $root,
+                (string) file_get_contents(base_path($config)),
+                "{$config} must serve the configured artifact root",
+            );
+        }
+    }
+
+    /**
+     * 🛑 PHP must actually accept the upload §8.21.6 documents.
+     *
+     * The image shipped PHP's defaults — `upload_max_filesize=2M`,
+     * `post_max_size=8M` — while §8.21.6 states the direct upload API's
+     * defaults as "1 GB, 50,000 files, 100:1". So the API rejected anything over
+     * 2 MB with a 413 the application never saw and could not explain.
+     *
+     * No test caught it, and the reason is worth recording: Laravel's
+     * `UploadedFile(..., test: true)` bypasses PHP's upload machinery entirely,
+     * so the whole Phase 03 suite exercised the ingestor without ever sending a
+     * real multipart body. Only a curl through the real edge found it.
+     *
+     * This asserts the ini against the configured cap, which is the part a test
+     * in this process CAN see.
+     */
+    public function test_php_accepts_an_upload_as_large_as_the_configured_archive_cap(): void
+    {
+        $cap = (int) config('artifacts.caps.archive_bytes');
+
+        $this->assertGreaterThan(0, $cap);
+
+        $upload = self::bytes((string) ini_get('upload_max_filesize'));
+        $post = self::bytes((string) ini_get('post_max_size'));
+
+        $this->assertGreaterThanOrEqual(
+            $cap,
+            $upload,
+            'upload_max_filesize is below the archive cap the upload API documents',
+        );
+
+        // post_max_size caps the whole body, so it must be at least the file.
+        // When it is smaller, PHP discards the upload and hands the application
+        // an empty $_FILES with no error — a silent 422 for a valid request.
+        $this->assertGreaterThanOrEqual(
+            $upload,
+            $post,
+            'post_max_size below upload_max_filesize silently discards the upload',
+        );
+    }
+
+    /**
+     * 🛑 And memory_limit must stay WELL BELOW it.
+     *
+     * This is the same argument ADR 0001 makes for the byte handoff, applied to
+     * ingest: a limit far below the upload size is evidence that neither PHP's
+     * upload handling nor the ingestor holds the whole archive. Verified in
+     * practice — a 500 MB artifact published through the real edge with
+     * `memory_limit=128M`.
+     *
+     * Asserted as an inequality rather than a fixed number, so raising the cap
+     * for a large installation does not quietly turn this into a memory budget.
+     */
+    public function test_the_memory_limit_is_far_below_the_archive_cap(): void
+    {
+        $memory = self::bytes((string) ini_get('memory_limit'));
+
+        if ($memory <= 0) {
+            // -1 is unlimited, which a developer may set locally. Nothing to
+            // prove then, and failing would be punishing a debugging session.
+            $this->markTestSkipped('memory_limit is unlimited in this environment');
+        }
+
+        $this->assertLessThan(
+            (int) config('artifacts.caps.archive_bytes'),
+            $memory,
+            'a memory limit at or above the archive cap would let an upload be buffered whole',
+        );
+    }
+
+    /** A PHP shorthand byte value as an integer. */
+    private static function bytes(string $value): int
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return 0;
+        }
+
+        $unit = strtolower(substr($value, -1));
+        $number = (int) $value;
+
+        return match ($unit) {
+            'g' => $number * 1024 * 1024 * 1024,
+            'm' => $number * 1024 * 1024,
+            'k' => $number * 1024,
+            default => $number,
+        };
+    }
+
     /** @return array<string, string> */
     private function privateHeaders(): array
     {

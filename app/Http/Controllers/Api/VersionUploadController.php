@@ -49,11 +49,17 @@ final class VersionUploadController
 
         /*
          * The framework's own size check, ahead of the ingestor's. It refuses an
-         * over-large body before PHP has buffered all of it, which the §8.8.2
-         * caps cannot do — they measure a file that has already arrived.
+         * over-large body before the ingestor measures anything.
+         *
+         * 🛑 Against the **archive** ceiling, not the uncompressed total. §8.21.6
+         * states the upload API's defaults as "1 GB, 50,000 files, 100:1" — the
+         * 1 GB is the archive that arrives, while §8.8.2's 5 GB bounds the tree
+         * it expands to. Validating against the total would accept a 5 GB upload
+         * that PHP's own `upload_max_filesize` had already refused, which is a
+         * 413 the application never sees and cannot explain.
          */
         $request->validate([
-            'archive' => ['required', 'file', 'max:'.(int) ceil($caps->totalBytes / 1024)],
+            'archive' => ['required', 'file', 'max:'.(int) ceil($caps->archiveBytes / 1024)],
         ]);
 
         $resolved = ProjectVersion::locate($project, $version);

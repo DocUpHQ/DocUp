@@ -59,6 +59,26 @@ RUN install-php-extensions \
 # over by reporting line coverage as though it were branch coverage.
 RUN echo "pcov.enabled=0" > /usr/local/etc/php/conf.d/20-pcov.ini
 
+# 🛑 SPEC 8.21.6: the direct artifact upload API accepts a 1 GB archive.
+#
+# The image shipped PHP's defaults — upload_max_filesize=2M,
+# post_max_size=8M — so the API rejected anything over 2 MB while
+# documenting 1 GB. No test caught it: Laravel's UploadedFile(test: true)
+# bypasses PHP's upload machinery, so the suite never exercised a real
+# multipart body. Only a curl through the real edge found it.
+#
+# memory_limit stays at the default on purpose. A 1 GB upload must NOT be
+# buffered in memory: PHP streams a multipart upload to a temporary file,
+# and the ingestor then reads it in 256 KB chunks (SPEC 8.8.2). A limit
+# well below the upload size is therefore evidence that neither holds the
+# whole archive — the same argument ADR 0001 makes for the byte handoff.
+#
+# A test asserts these meet config('artifacts.caps.archive_bytes').
+RUN { \
+      echo "upload_max_filesize=1G"; \
+      echo "post_max_size=1G"; \
+    } > /usr/local/etc/php/conf.d/30-docup-uploads.ini
+
 
 # 🛑 SPEC 8.12.16: Laravel's ArgonHasher default is m=1024 KiB, roughly 19x
 # below the OWASP floor. config/hashing.php overrides it; this ensures the
