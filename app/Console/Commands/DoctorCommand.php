@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Audit\Audit;
 use App\Support\Origins;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -43,6 +44,9 @@ final class DoctorCommand extends Command
         $this->checkArgon();
         $this->checkDevelopmentServices();
         $this->checkMail();
+        $this->checkAuditKey();
+        $this->checkAuditPartitions();
+        $this->checkAuditAppendOnly();
         $this->notePending();
 
         if ($this->option('json')) {
@@ -52,6 +56,176 @@ final class DoctorCommand extends Command
         }
 
         return $this->hasFailures() ? self::FAILURE : self::SUCCESS;
+    }
+
+    /**
+     * 🛑 §8.22.1: the audit chain needs `k_audit`, held outside `APP_KEY`.
+     *
+     * A failure rather than a warning. Without the key every audited action
+     * throws, and §8.22.4 commits the audit row in the same transaction as the
+     * mutation — so an installation missing this key cannot perform a
+     * state-changing action at all. Reporting that as a warning would describe
+     * a dead installation as merely imperfect.
+     */
+    private function checkAuditKey(): void
+    {
+        if (! Audit::hasKey()) {
+            $this->recordFail(
+                'Audit key',
+                'DOCUP_AUDIT_KEY is not set; every audited action will fail',
+                'SPEC 8.22.1',
+            );
+
+            return;
+        }
+
+        $appKey = config('app.key');
+        $auditKey = config('docup.audit.key');
+
+        // The one way to satisfy the check while defeating its purpose: set the
+        // audit key to APP_KEY. §8.22.1 separates them so that holding the key
+        // the application needs daily is not enough to forge the log.
+        if (is_string($appKey) && is_string($auditKey) && hash_equals($appKey, $auditKey)) {
+            $this->recordFail(
+                'Audit key',
+                'DOCUP_AUDIT_KEY is the same value as APP_KEY, which defeats the separation',
+                'SPEC 8.22.1',
+            );
+
+            return;
+        }
+
+        $this->recordPass('Audit key', 'set, and distinct from APP_KEY', 'SPEC 8.22.1');
+    }
+
+    /**
+     * 🛑 §16 pairs the `MAXVALUE` catch-all partition with alerting, and this is
+     * that alerting.
+     *
+     * The catch-all exists so that a lapse in monthly maintenance degrades
+     * instead of failing: without it, an insert past the last boundary is
+     * rejected, and because §8.22.4 commits the audit row in the same
+     * transaction as the mutation, the whole dashboard would stop accepting
+     * writes. With it, events pile into one fat partition and nothing appears
+     * wrong — which is precisely why it has to be reported. A silent safety net
+     * is a safety net nobody notices has been load-bearing for a year.
+     */
+    private function checkAuditPartitions(): void
+    {
+        $nextMonth = now('UTC')->startOfMonth()->addMonth();
+
+        /** @var list<object{PARTITION_NAME: string|null, PARTITION_DESCRIPTION: string|null, TABLE_ROWS: int|string|null}> $partitions */
+        $partitions = DB::select(
+            'SELECT PARTITION_NAME, PARTITION_DESCRIPTION, TABLE_ROWS
+               FROM information_schema.PARTITIONS
+              WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND PARTITION_NAME IS NOT NULL',
+            [DB::connection()->getDatabaseName(), 'audit_events'],
+        );
+
+        if ($partitions === []) {
+            $this->recordFail(
+                'Audit log partitions',
+                'audit_events is not partitioned; monthly retention by DROP PARTITION is impossible',
+                'SPEC 8.22.1',
+            );
+
+            return;
+        }
+
+        $covered = false;
+        $catchAllRows = 0;
+
+        foreach ($partitions as $partition) {
+            $description = (string) $partition->PARTITION_DESCRIPTION;
+
+            if ($description === 'MAXVALUE') {
+                $catchAllRows = (int) $partition->TABLE_ROWS;
+
+                continue;
+            }
+
+            // RANGE COLUMNS boundaries come back quoted, e.g. "'2026-12-01'".
+            $boundary = trim($description, "'\"");
+
+            if ($boundary > $nextMonth->format('Y-m-d')) {
+                $covered = true;
+            }
+        }
+
+        if (! $covered) {
+            $this->recordWarn(
+                'Audit log partitions',
+                'no partition covers beyond '.$nextMonth->format('Y-m').
+                '; events will fall into the MAXVALUE catch-all until maintenance adds more',
+                'SPEC 8.22.1',
+            );
+
+            return;
+        }
+
+        if ($catchAllRows > 0) {
+            $this->recordWarn(
+                'Audit log partitions',
+                "the MAXVALUE catch-all holds ~{$catchAllRows} rows, so some events landed outside a monthly partition",
+                'SPEC 8.22.1',
+            );
+
+            return;
+        }
+
+        $this->recordPass(
+            'Audit log partitions',
+            count($partitions).' partitions, next month covered, catch-all empty',
+            'SPEC 8.22.1',
+        );
+    }
+
+    /**
+     * 🛑 §8.22.1: the audit log must be insert-only for the application.
+     *
+     * A failure, not a warning. An operator who skipped the setup script has a
+     * log that looks chained and verifies, while being rewritable by the very
+     * application that writes it — a worse position than having no audit log,
+     * because it is believed.
+     *
+     * Checked by looking for the guards rather than by attempting an UPDATE:
+     * `doctor` must be safe to run against a production installation, and a
+     * diagnostic that writes to the audit log in order to prove it cannot
+     * write to the audit log is not one anybody should run twice.
+     */
+    private function checkAuditAppendOnly(): void
+    {
+        /** @var list<object{EVENT_OBJECT_TABLE: string, EVENT_MANIPULATION: string}> $triggers */
+        $triggers = DB::select(
+            'SELECT EVENT_OBJECT_TABLE, EVENT_MANIPULATION
+               FROM information_schema.TRIGGERS
+              WHERE TRIGGER_SCHEMA = ? AND EVENT_OBJECT_TABLE IN (?, ?)',
+            [DB::connection()->getDatabaseName(), 'audit_events', 'audit_anchors'],
+        );
+
+        $present = [];
+
+        foreach ($triggers as $trigger) {
+            $present[$trigger->EVENT_OBJECT_TABLE.':'.$trigger->EVENT_MANIPULATION] = true;
+        }
+
+        $missing = array_values(array_filter(
+            ['audit_events:UPDATE', 'audit_events:DELETE', 'audit_anchors:UPDATE', 'audit_anchors:DELETE'],
+            static fn (string $guard): bool => ! isset($present[$guard]),
+        ));
+
+        if ($missing !== []) {
+            $this->recordFail(
+                'Audit log is append-only',
+                'missing guards ('.implode(', ', $missing).'); apply '
+                .'deploy/mysql/init/10-audit-append-only.sql as a database administrator',
+                'SPEC 8.22.1',
+            );
+
+            return;
+        }
+
+        $this->recordPass('Audit log is append-only', 'UPDATE and DELETE refused on both tables', 'SPEC 8.22.1');
     }
 
     private function recordPass(string $check, string $detail, string $ref): void
@@ -285,7 +459,6 @@ final class DoctorCommand extends Command
         $this->recordPending('DNS wildcard for the docs zone', 'arrives with custom domains', 'Phase 18');
         $this->recordPending('Private-asset containment probe', 'arrives with the authorisation kernel', 'Phase 22');
         $this->recordPending('Build sandbox isolation', 'arrives with the runner', 'Phase 07');
-        $this->recordPending('Next-month table partition', 'arrives with the audit log', 'Phase 02');
         $this->recordPending('Search index size threshold', 'arrives with the search index', 'Phase 29');
     }
 

@@ -7,6 +7,8 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Auth\Tenancy;
+use App\Auth\TenancyPosture;
 use App\Concerns\HasUuidKey;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -29,7 +31,18 @@ use Illuminate\Notifications\Notifiable;
  *
  * Authentication itself is Phase 02 (SPEC 8.13). Phase 01 gives the table and
  * the model so the first administrator can exist before sign-in does.
+ *
+ * @property-read string $id raw 16 bytes, per ADR 0006 — never the canonical form
+ * @property string $name
+ * @property string $email
  */
+#[Tenancy(
+    TenancyPosture::Installation,
+    because: 'A person is an installation-level identity who may hold roles in several '
+        .'organisations. Scoping this table by organisation would turn one human into '
+        .'several accounts, each unable to see the others. Their MEMBERSHIP is org-scoped '
+        .'(team_members, role_assignments); their identity is not.'
+)]
 #[Fillable(['name', 'email', 'password'])]
 #[Hidden(['password', 'remember_token'])]
 final class User extends Authenticatable

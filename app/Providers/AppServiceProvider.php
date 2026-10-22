@@ -7,7 +7,11 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
+use App\Auth\OrganisationContext;
+use App\Listeners\StampAuthenticatedSession;
 use App\Support\Origins;
+use Illuminate\Auth\Events\Login;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 
@@ -15,11 +19,27 @@ final class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        //
+        /*
+         * 🛑 One instance per container, and NOT a static (§8.2.1, §12.1).
+         *
+         * §12.1 rejects `spatie/laravel-permission` partly because its teams
+         * mode carries "a single ambient integer team id with a documented
+         * ordering gotcha in queued jobs": a worker handles jobs for many
+         * tenants in sequence, so ambient state set by one job is still set
+         * when the next begins. Resolving this from the container keeps the
+         * declaration an explicit act rather than process-wide state, and
+         * because the undeclared state throws, a job that forgets to declare
+         * one fails on its first query instead of quietly reading the previous
+         * job's tenant.
+         */
+        $this->app->singleton(OrganisationContext::class);
     }
 
     public function boot(): void
     {
+        // §8.13.3: regenerate and stamp on every authentication path.
+        Event::listen(Login::class, StampAuthenticatedSession::class);
+
         $this->assertOriginSeparation();
         $this->hardenFrameworkDefaults();
     }

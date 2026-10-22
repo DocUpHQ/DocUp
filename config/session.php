@@ -37,7 +37,12 @@ return [
     |
     */
 
-    'lifetime' => (int) env('SESSION_LIFETIME', 120),
+    // 🛑 SPEC 8.13.3: a 12-hour ABSOLUTE lifetime. The 15-minute idle timeout
+    // is a separate control and lives in EnforceSessionLifetime, because
+    // Laravel's single `lifetime` is an idle timeout that each request renews —
+    // on its own it would let a session live for ever as long as somebody kept
+    // clicking.
+    'lifetime' => (int) env('SESSION_LIFETIME', 720),
 
     'expire_on_close' => env('SESSION_EXPIRE_ON_CLOSE', false),
 
@@ -52,7 +57,9 @@ return [
     |
     */
 
-    'encrypt' => env('SESSION_ENCRYPT', false),
+    // Encrypted at rest in the store: the payload carries whatever the session
+    // held, and SPEC 8.22.7 classifies it as personal data.
+    'encrypt' => env('SESSION_ENCRYPT', true),
 
     /*
     |--------------------------------------------------------------------------
@@ -132,9 +139,23 @@ return [
     |
     */
 
+    /*
+    | 🛑 SPEC 8.13.3: the `__Host-` prefix.
+    |
+    | A browser accepts a `__Host-` cookie only when it is Secure, has no
+    | Domain attribute and has Path=/. That makes it unforgeable by a sibling
+    | subdomain: without the prefix, anything able to set a cookie on a sibling
+    | host can set one scoped to the parent domain and have it sent here. §8.1.4
+    | already separates the dashboard and documentation origins; this stops the
+    | attack within the dashboard's own domain tree.
+    |
+    | The three settings are one decision — `secure` above and `domain` below
+    | are not independent choices. A `__Host-` cookie with a Domain attribute is
+    | silently dropped by the browser, which presents as "login does nothing".
+    */
     'cookie' => env(
         'SESSION_COOKIE',
-        Str::slug((string) env('APP_NAME', 'laravel')).'-session'
+        '__Host-'.Str::slug((string) env('APP_NAME', 'docup')).'-session'
     ),
 
     /*
@@ -174,7 +195,11 @@ return [
     |
     */
 
-    'secure' => env('SESSION_SECURE_COOKIE'),
+    // 🛑 SPEC 8.13.3: Secure, always. Defaulting to null lets Laravel decide
+    // from the request, so a single plain-HTTP request would hand out a
+    // non-Secure cookie. A `__Host-` prefixed cookie is REJECTED by browsers
+    // without this, so the two settings are one decision.
+    'secure' => env('SESSION_SECURE_COOKIE', true),
 
     /*
     |--------------------------------------------------------------------------
@@ -204,6 +229,9 @@ return [
     |
     */
 
+    // SPEC 8.13.3: Lax, not Strict. Strict would break the §18.10 return
+    // journey from the dashboard to the documentation origin, which is a
+    // top-level 302 the cookie must survive.
     'same_site' => env('SESSION_SAME_SITE', 'lax'),
 
     /*

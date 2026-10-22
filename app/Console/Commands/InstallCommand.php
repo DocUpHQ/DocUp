@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Audit\Audit;
 use App\Models\User;
 use App\Support\Origins;
 use Illuminate\Console\Command;
@@ -49,6 +50,7 @@ final class InstallCommand extends Command
         }
 
         $this->checkAppKey();
+        $this->checkAuditKey();
 
         if (! $this->checkOrigins()) {
             return self::FAILURE;
@@ -100,6 +102,58 @@ final class InstallCommand extends Command
         // attention, rather than in a runbook they will read after the loss.
         $this->line('        <fg=gray>Back this up. SPEC 15.2: losing APP_KEY makes every stored</>');
         $this->line('        <fg=gray>provider secret unrecoverable, and there is no way around that.</>');
+    }
+
+    /**
+     * 🛑 §8.22.1: generate `k_audit` if the operator has not.
+     *
+     * Generated rather than left to the operator because the consequence of
+     * omitting it is total: every audited action throws, and §8.22.4 puts the
+     * audit row in the same transaction as the mutation, so a missing key means
+     * an installation that cannot change any state. An operator should not
+     * discover that by creating their first project.
+     *
+     * Written straight to `.env` and never echoed. Whoever holds this can forge
+     * a chain that verifies, so it does not belong in a terminal scrollback, a
+     * screenshot or a support ticket.
+     */
+    private function checkAuditKey(): void
+    {
+        if (Audit::hasKey()) {
+            $this->line('  <fg=green>ok</>    DOCUP_AUDIT_KEY set');
+
+            return;
+        }
+
+        $path = base_path('.env');
+
+        if (! is_file($path) || ! is_writable($path)) {
+            $this->line('  <fg=red>FAIL</>  cannot write .env to generate DOCUP_AUDIT_KEY');
+
+            return;
+        }
+
+        $key = bin2hex(random_bytes(32));
+        $contents = (string) file_get_contents($path);
+
+        // Replace an empty declaration if .env.example supplied one, otherwise
+        // append. Both shapes occur: a fresh copy of .env.example has the key
+        // present but blank.
+        if (preg_match('/^DOCUP_AUDIT_KEY=.*$/m', $contents) === 1) {
+            $contents = (string) preg_replace('/^DOCUP_AUDIT_KEY=.*$/m', 'DOCUP_AUDIT_KEY='.$key, $contents, 1);
+        } else {
+            $contents = rtrim($contents).'
+
+DOCUP_AUDIT_KEY='.$key.'
+';
+        }
+
+        file_put_contents($path, $contents);
+
+        $this->line('  <fg=yellow>made</>  DOCUP_AUDIT_KEY generated');
+        $this->line('        <fg=gray>🛑 SPEC 8.22.1: back this up SEPARATELY from APP_KEY. Whoever holds it</>');
+        $this->line('        <fg=gray>can forge an audit chain that verifies. Losing it does not destroy the</>');
+        $this->line('        <fg=gray>log, but it ends your ability to prove the log was not altered.</>');
     }
 
     /** 🛑 The invariant that stops the boot, so check it before anything slow. */

@@ -112,6 +112,25 @@ jobs:
           php artisan key:generate
           php artisan migrate --force
 
+      # 🛑 SPEC 8.22.1: make the audit log append-only to the application.
+      #
+      # Runs the SAME scripts an operator applies, rather than a CI-only
+      # approximation — otherwise CI would test an unhardened schema and
+      # tests/Feature/AuditAppendOnlyTest.php would assert against a
+      # configuration no installation uses. The service container does not
+      # mount docker-entrypoint-initdb.d, so it is applied by hand here.
+      #
+      # The script is schema-agnostic, so this is the production file run
+      # verbatim against the schema the suite uses. An earlier version created
+      # an empty `docup` database to satisfy a hardcoded schema name and failed
+      # with "Table 'docup.audit_anchors' doesn't exist" — testing a script that
+      # is not the one operators run is worse than not testing it.
+      - name: Harden the audit log
+        env:
+          MYSQL_PWD: docup-root
+        run: |
+          mysql -h 127.0.0.1 -u root docup_test < deploy/mysql/init/10-audit-append-only.sql
+
       # 🛑 Exit criteria: the architecture suite is what turns a planted second
       # AUTO_INCREMENT, a stray unsafe flag, a reappearing key cast or a missing
       # SPDX header into a red build.

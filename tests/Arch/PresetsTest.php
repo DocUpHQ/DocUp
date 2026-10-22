@@ -19,7 +19,34 @@ arch()->preset()->php();
 
 arch()->preset()->security();
 
-arch()->preset()->laravel();
+arch()->preset()->laravel()
+    // The preset expects enums under App\Enums. DocUp's enums for the §12.2
+    // capability matrix live in App\Auth instead, deliberately: §9.4 raises
+    // PHPStan to level 9 for app/Auth specifically, because a type error in
+    // authorisation code is a security bug rather than a crash. Moving Role,
+    // Capability and Scope to App\Enums to satisfy a file-location convention
+    // would move the authorisation model OUT of the namespace the higher bar
+    // applies to, and scatter it across two namespaces for no reader benefit.
+    //
+    // Cohesion by concern beats cohesion by technical type here, and the
+    // specification scopes level 9 by namespace, so the namespace is load-bearing.
+    ->ignoring([
+        'App\Auth',
+        // Same reasoning for App\Audit: ActorType is part of the audit
+        // concern, and §8.22's chain code is the only thing that means anything
+        // by it. Collecting both namespaces' enums under App\Enums would group
+        // them by the fact that they are enums, which is the least interesting
+        // thing about them.
+        //
+        // Both exemptions also cover the preset's rule that exceptions live
+        // under App\Exceptions. Said out loud because an exemption whose real
+        // scope is wider than its comment is the thing the tenancy arch test
+        // refuses to allow for models: TenancyContextMissing, AuditKeyMissing
+        // and ChainLockUnavailable are each meaningless outside the concern
+        // that throws them, and a shared exception namespace would put them
+        // next to unrelated ones with nothing in common but their base class.
+        'App\Audit',
+    ]);
 
 arch()->preset()->strict()
     // Each exemption names its reason, so a later reader can remove it
