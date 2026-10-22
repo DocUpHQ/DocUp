@@ -28,7 +28,7 @@ declare(strict_types=1);
 require __DIR__.'/../vendor/autoload.php';
 
 $app = require __DIR__.'/../bootstrap/app.php';
-$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+$app->make(Kernel::class)->bootstrap();
 
 use App\Auth\ApiTokens;
 use App\Auth\Capability;
@@ -39,6 +39,7 @@ use App\Models\Project;
 use App\Models\ProjectVersion;
 use App\Models\User;
 use App\Support\Uuid;
+use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\DB;
 
 $context = app(OrganisationContext::class);

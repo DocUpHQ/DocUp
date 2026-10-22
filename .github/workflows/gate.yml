@@ -387,6 +387,15 @@ jobs:
           # needs a bootable application and the application needs the key.
           printf 'APP_KEY=base64:%s\n' "$(openssl rand -base64 32)" >> .env
           printf 'APP_ENV=local\n' >> .env
+
+          # 🛑 SPEC 8.22.1 refuses to start without this, and the fixture script
+          # mints an API token, which writes an audit entry. .env.example ships it
+          # EMPTY on purpose -- a committed default audit key is a key an attacker
+          # also has, and whoever holds it can forge a chain that verifies -- so
+          # every environment has to generate its own. A throwaway one is correct
+          # here: the run is destroyed with the runner, and nothing verifies a
+          # chain across runs.
+          printf 'DOCUP_AUDIT_KEY=%s\n' "$(openssl rand -hex 32)" >> .env
           printf 'DOCUP_EDGE_DRIVER=%s\n' '${{ matrix.driver }}' >> .env
 
           # The hosts the script sends as `Host:`. They never resolve and do not
