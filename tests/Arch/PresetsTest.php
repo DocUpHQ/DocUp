@@ -30,7 +30,23 @@ arch()->preset()->laravel()
     //
     // Cohesion by concern beats cohesion by technical type here, and the
     // specification scopes level 9 by namespace, so the namespace is load-bearing.
-    ->ignoring('App\Auth');
+    ->ignoring([
+        'App\Auth',
+        // Same reasoning for App\Audit: ActorType is part of the audit
+        // concern, and §8.22's chain code is the only thing that means anything
+        // by it. Collecting both namespaces' enums under App\Enums would group
+        // them by the fact that they are enums, which is the least interesting
+        // thing about them.
+        //
+        // Both exemptions also cover the preset's rule that exceptions live
+        // under App\Exceptions. Said out loud because an exemption whose real
+        // scope is wider than its comment is the thing the tenancy arch test
+        // refuses to allow for models: TenancyContextMissing, AuditKeyMissing
+        // and ChainLockUnavailable are each meaningless outside the concern
+        // that throws them, and a shared exception namespace would put them
+        // next to unrelated ones with nothing in common but their base class.
+        'App\Audit',
+    ]);
 
 arch()->preset()->strict()
     // Each exemption names its reason, so a later reader can remove it

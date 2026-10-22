@@ -47,6 +47,9 @@
         <env name="DB_USERNAME" value="docup"/>
         <env name="DB_PASSWORD" value="docup"/>
         <env name="DB_URL" value=""/>
+        <!-- A fixed, obviously-fake audit key: the chain tests need a known
+             value so a recomputed hash is reproducible across runs. -->
+        <env name="DOCUP_AUDIT_KEY" value="test-audit-key-not-a-secret"/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>

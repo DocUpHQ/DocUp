@@ -135,4 +135,32 @@ return [
         'advisory_check' => env('DOCUP_ADVISORY_CHECK', false),
     ],
 
+    /*
+    |---------------------------------------------------------------------------
+    | Audit log (SPEC 8.22.1, SPEC 20.3)
+    |---------------------------------------------------------------------------
+    | 🛑 `k_audit` is held OUTSIDE `APP_KEY`, which §8.22.1 requires and which
+    | is worth understanding rather than copying.
+    |
+    | `APP_KEY` decrypts provider secrets and session payloads, so the
+    | application needs it constantly and it is the key most likely to be
+    | rotated, escrowed, copied into a second environment, or pasted into a
+    | support channel. An audit key must be harder to reach than that: whoever
+    | holds it can forge a chain that verifies, which is the one thing the chain
+    | exists to prevent. Separating them also means rotating `APP_KEY` — which
+    | §15.2 has a documented procedure for — does not invalidate the audit log.
+    |
+    | Rotation is a real operation and needs its own design (old events must
+    | stay verifiable), so it is deliberately absent here rather than
+    | half-implemented: Phase 35 owns it alongside key escrow.
+    */
+    'audit' => [
+        'key' => env('DOCUP_AUDIT_KEY'),
+
+        // §20.3: 400 days default, 365 minimum, no maximum. 400 satisfies
+        // PCI DSS 4.0.1 §10.5.1 and cannot drop below a year if the operator
+        // claims it. The purge job and `retention:report` read this one value.
+        'retention_days' => (int) env('DOCUP_AUDIT_RETENTION_DAYS', 400),
+    ],
+
 ];
