@@ -61,6 +61,19 @@ jobs:
           coverage: none
           tools: composer:v2
 
+          # 🛑 The same upload limits the deployment images set, because CI runs
+          # the upload API tests and setup-php ships PHP's 2M/8M defaults. Left
+          # at the defaults, CI exercises the direct upload API against a PHP
+          # that would reject anything over 2 MB with a 413 the application
+          # never sees -- which is the exact defect SPEC 8.21.6 and
+          # HandoffHeaderParityTest exist to catch, running green in CI.
+          #
+          # This matches the environment to what the test asserts; it does not
+          # relax what is asserted. Lowering the cap or weakening the assertion
+          # would be routing around the gate (CLAUDE.md rule 4).
+          ini-values: upload_max_filesize=1G, post_max_size=1G, memory_limit=512M
+
+
       # 🛑 This MUST precede `composer install`, and the order is not cosmetic.
       # Laravel's post-autoload-dump script runs `artisan package:discover`,
       # which BOOTS the application - and AppServiceProvider asserts the
@@ -248,6 +261,7 @@ jobs:
           extensions: pdo_mysql, intl, zip, gd, bcmath, sodium, pcntl
           coverage: none
           tools: composer:v2
+
 
       # Before composer install, for the reason given in the baseline job:
       # post-autoload-dump boots the application and the SPEC 8.1.4 assertion

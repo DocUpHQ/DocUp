@@ -25,10 +25,22 @@ declare(strict_types=1);
 | disposable environment only; `doctor` has no reason to run it.
 */
 
-require __DIR__.'/../vendor/autoload.php';
-
-$app = require __DIR__.'/../bootstrap/app.php';
-$app->make(Kernel::class)->bootstrap();
+/*
+| 🛑 Every `use` comes BEFORE the bootstrap, and the order is load-bearing.
+|
+| PHP builds a file's import table as it compiles top to bottom, so a `use`
+| below a reference does not apply to it. With the `require` lines first --
+| the obvious layout for a standalone script -- Pint's
+| `fully_qualified_strict_types` fixer shortened
+| `Illuminate\Contracts\Console\Kernel::class` to `Kernel::class` and added
+| the import underneath it. `Kernel::class` then resolved to the GLOBAL
+| `\Kernel`, and the script died with "Target class [Kernel] does not exist".
+| Pint was satisfied; the file was broken.
+|
+| `use` declares a name and loads nothing, so it is safe above `require`.
+| Keep it that way: moving the require back to the top reintroduces the bug
+| the next time Pint runs.
+*/
 
 use App\Auth\ApiTokens;
 use App\Auth\Capability;
@@ -41,6 +53,11 @@ use App\Models\User;
 use App\Support\Uuid;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\DB;
+
+require __DIR__.'/../vendor/autoload.php';
+
+$app = require __DIR__.'/../bootstrap/app.php';
+$app->make(Kernel::class)->bootstrap();
 
 $context = app(OrganisationContext::class);
 $context->spanAllOrganisations();
