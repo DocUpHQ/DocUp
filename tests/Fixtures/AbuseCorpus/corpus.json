@@ -176,6 +176,55 @@
     },
 
     {
+      "id": "archive-013", "category": "archive", "defends": "8.8.2", "builder": "backslash_name",
+      "expect": "contract.backslash_in_name", "note": "P03: backslash as a separator; its meaning differs between extractors, so the name is refused rather than interpreted"
+    },
+    {
+      "id": "archive-014", "category": "archive", "defends": "8.8.2", "builder": "nul_in_name",
+      "expect": "contract.control_character_in_name", "note": "P03: NUL truncates the name in any C library, so it is checked as one name and written as another"
+    },
+    {
+      "id": "archive-015", "category": "archive", "defends": "8.8.2", "builder": "absolute_path_entry",
+      "expect": "contract.absolute_path", "note": "P03: distinct from path_escapes_root, which is the exit criteria's point"
+    },
+    {
+      "id": "archive-016", "category": "archive", "defends": "8.8.2", "builder": "file_count_bomb",
+      "expect": "contract.file_count_exceeded", "note": "P03: 100,000 files against the 50,000 cap; refusing must cost no more than the cap"
+    },
+    {
+      "id": "archive-017", "category": "archive", "defends": "8.8.1", "builder": "duplicate_entry",
+      "expect": "contract.duplicate_entry", "note": "P03: write-once storage cannot represent a duplicate; tar's last-one-wins would desync the manifest from the bytes"
+    },
+    {
+      "id": "archive-018", "category": "archive", "defends": "8.4.5", "builder": "stray_top_level_file",
+      "expect": "contract.unknown_output_directory", "note": "P03: refused, not silently dropped - an author whose files vanish has no way to find out why"
+    },
+    {
+      "id": "archive-019", "category": "archive", "defends": "8.8.2", "builder": "fifo_entry",
+      "expect": "contract.unsupported_entry_type", "note": "P03: FIFO alongside the device node of archive-009"
+    },
+    {
+      "id": "archive-020", "category": "archive", "defends": "8.8.2", "builder": "zip_symlink",
+      "expect": "contract.symlink_rejected", "note": "P03: a zip stores a symlink in its external attributes; statIndex() alone cannot see one"
+    },
+    {
+      "id": "archive-021", "category": "archive", "defends": "8.8.2", "builder": "pax_smuggled_traversal",
+      "expect": "contract.path_escapes_root", "note": "P03: the real name is in a pax extended header; the 100-byte header field reads smuggled.html"
+    },
+    {
+      "id": "archive-022", "category": "archive", "defends": "8.8.2", "builder": "dot_segment_in_middle",
+      "expect": "contract.path_escapes_root", "note": "P03: a/./b would make the manifest disagree with the served path"
+    },
+    {
+      "id": "archive-023", "category": "archive", "defends": "8.8.2", "builder": "not_an_archive",
+      "expect": "contract.unreadable_archive", "note": "P03: a JPEG must not publish as a tree of nothing"
+    },
+    {
+      "id": "archive-024", "category": "archive", "defends": "8.8.2", "builder": "lying_size_header",
+      "expect": "contract.unreadable_archive", "note": "P03: header declares 4096 bytes for a 32-byte member; if declared may differ from actual, pass one checked nothing"
+    },
+
+    {
       "id": "redirect-001", "category": "redirect", "defends": "8.11.3",
       "input": [{"from": "/a", "to": "/b"}, {"from": "/b", "to": "/a"}],
       "expect": "reject-at-save", "note": "two-hop cycle, detectable on the literal rule graph"

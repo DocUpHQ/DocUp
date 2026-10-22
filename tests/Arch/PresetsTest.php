@@ -46,6 +46,19 @@ arch()->preset()->laravel()
         // that throws them, and a shared exception namespace would put them
         // next to unrelated ones with nothing in common but their base class.
         'App\Audit',
+        // And App\Artifacts, for the same reason twice over. §9.4 raises
+        // PHPStan to level 9 for app/Artifacts specifically, so moving
+        // EntryType and RejectionCode to App\Enums would move them OUT of the
+        // namespace the higher bar covers — and RejectionCode's values are
+        // §8.1.11 public contract, which is exactly the kind of thing the
+        // stricter analysis is there for.
+        //
+        // IngestRejected and ArtifactWriteRefused stay in
+        // App\Artifacts\Exceptions for the reason above: each is meaningless
+        // outside the concern that throws it. IngestRejected carries a
+        // RejectionCode, so a shared App\Exceptions would import the artifact
+        // namespace into a namespace everything else depends on.
+        'App\Artifacts',
     ]);
 
 arch()->preset()->strict()
@@ -62,6 +75,23 @@ arch()->preset()->strict()
         // misreport the framework's API, so this namespace is exempt and the
         // rules that DO still apply to models are restated below.
         'App\Models',
+        // §17 asks for a local driver and an S3 driver "behind the same
+        // interface", and the two genuinely differ in how write-once is
+        // enforced - a POSIX chmod against a bucket-level Object Lock. The
+        // shared key construction has to live somewhere, and duplicating it is
+        // how the two drivers come to disagree about where a build's bytes are.
+        // So this one class is abstract and exists to be extended; its two
+        // subclasses are final and are checked below.
+        'App\Artifacts\FilesystemArtifactStore',
+        // And its two subclasses, for one method each. enforceImmutability() is
+        // the hook that base class declares abstract, and the two drivers do
+        // genuinely different things in it - a POSIX chmod against a
+        // bucket-level Object Lock. Widening it to public to satisfy the
+        // preset's no-protected-methods rule would advertise as API the one
+        // thing no caller should reach for: write-once is enforced by put(),
+        // and calling the hook directly would skip the check it follows.
+        'App\Artifacts\LocalArtifactStore',
+        'App\Artifacts\S3ArtifactStore',
     ]);
 
 // 🛑 Restating these is the whole point of the exemption above: dropping a
@@ -85,6 +115,32 @@ arch()
     ->expect('App\Support')
     ->toBeFinal()
     ->toUseStrictTypes();
+
+/*
+| 🛑 Restating what the two exemptions above still leave in force for
+| App\Artifacts. Dropping a namespace from a preset must not quietly stop
+| checking the rules that do hold there, and nothing else would say so.
+|
+| FilesystemArtifactStore is excluded from the final-class rule and from nothing
+| else: it is abstract because §17 asks for two drivers behind one interface, and
+| that is the only concession it gets.
+*/
+arch()
+    ->expect('App\Artifacts')
+    ->toUseStrictTypes();
+
+arch()
+    ->expect('App\Artifacts')
+    ->toBeFinal()
+    ->ignoring([
+        'App\Artifacts\ArtifactStore',            // an interface
+        'App\Artifacts\ArchiveReader',            // an interface
+        'App\Artifacts\FilesystemArtifactStore',  // abstract by design, see above
+        // PHP enums are implicitly final and the keyword is a syntax error on
+        // one, so the rule is not relaxed here - it is inapplicable.
+        'App\Artifacts\EntryType',
+        'App\Artifacts\RejectionCode',
+    ]);
 
 arch()
     ->expect('App\Console\Commands')

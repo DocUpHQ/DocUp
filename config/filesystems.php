@@ -65,6 +65,38 @@ return [
             'report' => false,
         ],
 
+        /*
+         * 🛑 Artifact storage (§8.8.1). `throw => true` on both artifact disks,
+         * unlike the Laravel defaults above: a swallowed write failure means a
+         * build that reports success while its bytes are missing, and the
+         * missing bytes are discovered by a reader, in production, at a URL
+         * somebody shared. An exception at ingest fails the build instead,
+         * which is the correct outcome and the recoverable one.
+         *
+         * `visibility` is deliberately absent — private is Flysystem's default
+         * for the local driver and the bucket policy's job on S3. §8.12.22's
+         * containment self-test is what actually proves it, not this line.
+         */
+        'artifacts' => [
+            'driver' => 'local',
+            'root' => env('DOCUP_ARTIFACT_ROOT', storage_path('app/artifacts')),
+            'serve' => false,
+            'throw' => true,
+            'report' => false,
+        ],
+
+        'artifacts-s3' => [
+            'driver' => 's3',
+            'key' => env('DOCUP_ARTIFACT_S3_KEY', env('AWS_ACCESS_KEY_ID')),
+            'secret' => env('DOCUP_ARTIFACT_S3_SECRET', env('AWS_SECRET_ACCESS_KEY')),
+            'region' => env('DOCUP_ARTIFACT_S3_REGION', env('AWS_DEFAULT_REGION')),
+            'bucket' => env('DOCUP_ARTIFACT_S3_BUCKET'),
+            'endpoint' => env('DOCUP_ARTIFACT_S3_ENDPOINT'),
+            'use_path_style_endpoint' => env('DOCUP_ARTIFACT_S3_PATH_STYLE', false),
+            'throw' => true,
+            'report' => false,
+        ],
+
     ],
 
     /*

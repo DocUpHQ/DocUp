@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace Tests\Arch;
 
+use App\Artifacts\RejectionCode;
 use Tests\TestCase;
 
 /**
@@ -303,5 +304,139 @@ final class ArchitectureTest extends TestCase
         }
 
         $this->assertSame([], $missing, 'files without an SPDX header (SPEC 15.6): '.implode(', ', $missing));
+    }
+
+    /**
+     * 🛑 SPEC 8.8.2: "Exactly one `ArtifactIngestor` MUST validate every
+     * incoming tree, and an architecture test MUST prove no caller bypasses
+     * it."
+     *
+     * This is that test. It proves containment by the only route that cannot be
+     * talked around: writing an artifact means calling ArtifactStore::put(), so
+     * if nothing outside App\Artifacts calls put(), nothing outside can store a
+     * byte without going through the ingestor.
+     *
+     * The reason the specification asks for a test rather than a convention is
+     * that a second ingest path is not a duplication bug, it is an unvalidated
+     * one. It gets written in a hurry, for an import or a migration, by somebody
+     * who did not know the first one existed — and it is the one the attacker
+     * uses.
+     */
+    public function test_only_the_artifact_namespace_writes_to_the_artifact_store(): void
+    {
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(base_path().DIRECTORY_SEPARATOR, '', $file);
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', $relative);
+
+            if (str_starts_with($relative, 'app/Artifacts/')) {
+                continue;
+            }
+
+            $source = $this->code($file);
+
+            // The store is reached either through the interface or through a
+            // concrete driver. Naming any of them outside the namespace is the
+            // thing being refused, because a reference is what a call needs.
+            foreach (['ArtifactStore', 'LocalArtifactStore', 'S3ArtifactStore', 'ArtifactIngestor'] as $symbol) {
+                if (! str_contains($source, $symbol)) {
+                    continue;
+                }
+
+                /*
+                 * A service provider must name these to bind them, and that is
+                 * the one legitimate reference: binding a class is not calling
+                 * put(). Allowlisted by path rather than by a comment marker, so
+                 * the exemption cannot be claimed by writing the right words.
+                 */
+                if (str_starts_with($relative, 'app/Providers/')) {
+                    continue;
+                }
+
+                $offenders[] = $relative.' references '.$symbol;
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'only App\Artifacts may reach the artifact store (SPEC 8.8.2): '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.8.1: "No project slug, version slug, language or user-supplied
+     * name MUST appear in any storage key, so renaming can never strand or
+     * invalidate stored artifacts."
+     *
+     * Enforced as a shape rather than by searching for the word "slug": the key
+     * grammar is `builds/{build_id}/{media_type}/…`, so exactly one expression
+     * in the tree may produce the `builds/` prefix, and it must build it from a
+     * build id. A second place that concatenates `'builds/'` is how a slug gets
+     * in, whatever it is called at the time.
+     */
+    public function test_the_artifact_key_prefix_has_one_construction_site(): void
+    {
+        $sites = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(base_path().DIRECTORY_SEPARATOR, '', $file);
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', $relative);
+
+            if (preg_match_all("/'builds\/'/", $this->code($file), $matches) > 0) {
+                $sites[] = $relative.' ('.count($matches[0]).')';
+            }
+        }
+
+        $this->assertSame(
+            ['app/Artifacts/FilesystemArtifactStore.php (1)'],
+            $sites,
+            'the builds/ key prefix must be built in exactly one place (SPEC 8.8.1): '.implode('; ', $sites),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.8.2's reserved filenames must be refused by the ingestor, and
+     * the identifiers must be the abuse corpus's.
+     *
+     * A cheap structural check, not a substitute for ArtifactIngestorTest: it
+     * asserts that every `archive` case in the corpus still has an expectation
+     * that RejectionCode can actually produce. A corpus case expecting an
+     * identifier no enum case carries would otherwise fail only as a confusing
+     * assertion mismatch, in a dataset, long after the rename that caused it.
+     */
+    public function test_every_archive_corpus_case_names_a_real_rejection_code(): void
+    {
+        /** @var array{cases: list<array<string, string>>} $corpus */
+        $corpus = json_decode(
+            (string) file_get_contents(base_path('tests/Fixtures/AbuseCorpus/corpus.json')),
+            true,
+            64,
+            JSON_THROW_ON_ERROR,
+        );
+
+        $known = array_map(
+            static fn (RejectionCode $code): string => $code->value,
+            RejectionCode::cases(),
+        );
+
+        $unknown = [];
+
+        foreach ($corpus['cases'] as $case) {
+            if (($case['category'] ?? null) !== 'archive') {
+                continue;
+            }
+
+            if (! in_array($case['expect'], $known, true)) {
+                $unknown[] = $case['id'].' expects '.$case['expect'];
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $unknown,
+            'corpus cases expecting an identifier no RejectionCode carries: '.implode('; ', $unknown),
+        );
     }
 }
