@@ -47,6 +47,11 @@ use Illuminate\Support\Carbon;
  * @property int|null $exit_code
  * @property int $file_count
  * @property int $total_bytes
+ * @property int|null $injector_version
+ * @property string|null $chrome_mode_applied
+ * @property int $chrome_documents
+ * @property int $chrome_injected
+ * @property array<string, mixed>|null $chrome_coverage
  * @property Carbon|null $started_at
  * @property Carbon|null $finished_at
  */
@@ -82,6 +87,10 @@ final class Build extends Model
             'file_count' => 'integer',
             'total_bytes' => 'integer',
             'exit_code' => 'integer',
+            'injector_version' => 'integer',
+            'chrome_documents' => 'integer',
+            'chrome_injected' => 'integer',
+            'chrome_coverage' => 'array',
             'started_at' => 'datetime:Y-m-d H:i:s.v',
             'finished_at' => 'datetime:Y-m-d H:i:s.v',
             'created_at' => 'datetime:Y-m-d H:i:s.v',

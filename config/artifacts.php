@@ -47,6 +47,25 @@ return [
 
     /*
     |---------------------------------------------------------------------------
+    | Chrome injection (SPEC 8.15.1, SPEC 8.15.4)
+    |---------------------------------------------------------------------------
+    | Injection happens at INGEST, never at serve time -- SPEC 4.3/2, SPEC
+    | 4.3/6, SPEC 8.9.8 and SPEC 19/6 all say so, and the artifact handoff
+    | depends on it: the edge moves bytes it does not read, so nothing could
+    | rewrite them on the way out even if the architecture allowed it.
+    |
+    | 🛑 The ceiling is SPEC 8.15.4's third non-injectable class. It is a memory
+    | bound rather than a policy: injection holds one whole document while it
+    | works, so an uncapped ceiling is an uncapped allocation driven by an
+    | uploaded file. A document over 4 MiB is left alone and the build falls back
+    | to api_only, which SPEC 8.15.4 prefers to refusing to publish it.
+    */
+    'chrome' => [
+        'max_html_bytes' => (int) env('DOCUP_CHROME_MAX_HTML_BYTES', 4 * 1024 * 1024),
+    ],
+
+    /*
+    |---------------------------------------------------------------------------
     | Soft-landing window (SPEC 8.8.6)
     |---------------------------------------------------------------------------
     | How long the previous manifest stays resolvable after a pointer flip, so a

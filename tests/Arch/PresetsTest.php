@@ -187,6 +187,7 @@ arch()
         // PHP enums are implicitly final and the keyword is a syntax error on
         // one, so the rule is not relaxed here - it is inapplicable.
         'App\Artifacts\EntryType',
+        'App\Artifacts\InjectionOutcome',
         'App\Artifacts\RejectionCode',
     ]);
 

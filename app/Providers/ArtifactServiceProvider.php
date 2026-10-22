@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Artifacts\ArtifactStore;
+use App\Artifacts\ChromeInjector;
 use App\Artifacts\IngestCaps;
 use App\Artifacts\LocalArtifactStore;
 use App\Artifacts\S3ArtifactStore;
@@ -43,6 +44,13 @@ final class ArtifactServiceProvider extends ServiceProvider
          * nobody could reproduce.
          */
         $this->app->singleton(IngestCaps::class, static fn (): IngestCaps => IngestCaps::fromConfig());
+
+        /*
+         * A singleton for the same reason the caps are: §8.15.4's byte ceiling
+         * must not change during an ingest, or one half of a tree would be
+         * judged injectable against a different limit from the other.
+         */
+        $this->app->singleton(ChromeInjector::class, static fn (): ChromeInjector => ChromeInjector::fromConfig());
 
         $this->app->singleton(ArtifactStore::class, function (): ArtifactStore {
             $driver = config('artifacts.driver');

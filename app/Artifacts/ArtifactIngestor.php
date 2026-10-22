@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace App\Artifacts;
 
 use App\Artifacts\Exceptions\IngestRejected;
+use App\Support\Uuid;
 
 /**
  * 🛑 The one and only gate between an uploaded tree and the artifact store
@@ -48,6 +49,14 @@ use App\Artifacts\Exceptions\IngestRejected;
  * built from a build id (§8.8.1) and appends the validated relative path, so an
  * entry name never reaches a filesystem call as a component the operating
  * system will interpret.
+ *
+ * 🛑 **It is also the only place a documentation byte is ever changed.** §8.15.1
+ * injects chrome here, at ingest, because §4.3/2, §4.3/6, §8.9.8 and §19/6 all
+ * forbid serve-time rewriting — and the §8.9.8 handoff makes it impossible
+ * anyway, since the edge moves bytes the application never reads. Injection is
+ * project- and version-agnostic (§8.15.1), so one build still serves every
+ * project that mounts it: the project's own `chrome_mode` is applied by the
+ * loader at read time, not by changing the artifact.
  */
 final class ArtifactIngestor
 {
@@ -107,6 +116,7 @@ final class ArtifactIngestor
     public function __construct(
         private readonly ArtifactStore $store,
         private readonly IngestCaps $caps,
+        private readonly ChromeInjector $chrome,
     ) {}
 
     /**
@@ -421,24 +431,73 @@ final class ArtifactIngestor
          */
         ksort($paths, SORT_STRING);
 
-        [$manifest, $perFormat, $actualTotal] = $this->measure($reader, $paths);
-
         /*
-         * 🛑 Only now does anything get written. The measuring pass above reads
-         * every entry's real bytes and can still refuse the tree — a header that
-         * lied about its size is caught there, with nothing yet stored. An
+         * 🛑 Validation first, and nothing written until it passes. A header
+         * that lied about its size is caught here, with nothing yet stored. An
          * earlier version of this method wrote each file as it hashed it, which
          * meant a tree refused on its last entry had already published every
-         * entry before it. The abuse corpus's `lying_size_header` case is what
-         * found that.
-         *
+         * entry before it — the abuse corpus's `lying_size_header` case found
+         * that.
+         */
+        $this->measure($reader, $paths);
+
+        $manifest = new FileManifest;
+        $coverage = new InjectionCoverage;
+        $buildIdText = Uuid::toText($buildId);
+        $actualTotal = 0;
+
+        /** @var array<string, array{files: int, bytes: int, digests: list<string>}> $perFormat */
+        $perFormat = [];
+
+        /*
          * A storage failure part-way through this loop still leaves orphaned
          * objects. That is unavoidable, and it is safe: the build never
          * publishes, so no pointer references them, and §8.8.9's mark-and-sweep
          * collects objects no live pointer or pin reaches.
          */
         foreach ($paths as $path => $entry) {
-            $this->store->put($this->keyFor($buildId, $path), $reader->stream($entry));
+            $format = $this->formatOf($path);
+
+            // assertOutputContract() already refused an unknown directory. This
+            // is the narrowing that proves it to the analyser rather than
+            // asserting it in a comment.
+            if ($format === null) {
+                throw IngestRejected::because(RejectionCode::UnknownOutputDirectory, $path);
+            }
+
+            [$digest, $bytes, $buffered] = $this->prepare($reader, $entry, $path, $buildIdText, $coverage);
+
+            $actualTotal += $bytes;
+
+            /*
+             * Re-checked against what will actually be stored. Injection adds
+             * about 120 bytes per document — DocUp's own change, not
+             * attacker-supplied — and the cap is a cap on what lands on the
+             * disk, so the injected size is the one that counts.
+             */
+            if ($actualTotal > $this->caps->totalBytes) {
+                throw IngestRejected::because(
+                    RejectionCode::TotalSizeExceeded,
+                    detail: $actualTotal.' stored bytes exceeds '.$this->caps->totalBytes,
+                );
+            }
+
+            $manifest->add($path, $digest, $bytes);
+
+            $perFormat[$format] ??= ['files' => 0, 'bytes' => 0, 'digests' => []];
+            $perFormat[$format]['files']++;
+            $perFormat[$format]['bytes'] += $bytes;
+            $perFormat[$format]['digests'][] = $path.':'.$digest;
+
+            /*
+             * A buffered document is written from the buffer, because its bytes
+             * are no longer the archive's. Everything else is streamed again,
+             * so a 1 GB asset never becomes a 1 GB allocation.
+             */
+            $this->store->put(
+                $this->keyFor($buildId, $path),
+                $buffered ?? $reader->stream($entry),
+            );
         }
 
         $outputs = [];
@@ -466,43 +525,40 @@ final class ArtifactIngestor
             fileCount: $manifest->count(),
             totalBytes: $actualTotal,
             contentSha256: $manifest->digest(),
+            coverage: $coverage,
         );
     }
 
     /**
-     * Read every entry's real bytes, building the manifest and the per-format
-     * totals, writing nothing.
+     * One entry's stored bytes: injected where §8.15.1 applies, hashed either
+     * way.
      *
-     * 🛑 This is the pass that makes pass one mean something. Pass one checked
-     * the caps against the archive's **declared** sizes, which are
-     * attacker-supplied; if the real sizes were free to differ, pass one checked
-     * nothing at all. Here the bytes are counted as they stream, so a lying
-     * header is caught — and caught before {@see self::extract()} has stored a
-     * single object.
+     * 🛑 The digest is of the bytes that get **stored**, never of the bytes the
+     * archive supplied. §8.9.12 derives the strong ETag from this digest, and
+     * §8.4.18's manifest is what the serving path trusts — so a digest of the
+     * pre-injection bytes would make every injected document's ETag wrong, and
+     * wrong in the direction that serves stale content from a shared cache.
      *
-     * @param  array<string, ArchiveEntry>  $paths  sorted
-     * @return array{0: FileManifest, 1: array<string, array{files: int, bytes: int, digests: list<string>}>, 2: int}
+     * Non-HTML and oversized HTML stream, so memory stays flat. Only a document
+     * small enough to inject is buffered, and only one at a time.
+     *
+     * @return array{0: string, 1: int, 2: string|null} digest, byte count, and
+     *                                                  the buffer to store, or
+     *                                                  null to stream
      *
      * @throws IngestRejected
      */
-    private function measure(ArchiveReader $reader, array $paths): array
-    {
-        $manifest = new FileManifest;
-        $actualTotal = 0;
+    private function prepare(
+        ArchiveReader $reader,
+        ArchiveEntry $entry,
+        string $path,
+        string $buildIdText,
+        InjectionCoverage $coverage,
+    ): array {
+        $compressed = self::isCompressedHtml($path);
 
-        /** @var array<string, array{files: int, bytes: int, digests: list<string>}> $perFormat */
-        $perFormat = [];
-
-        foreach ($paths as $path => $entry) {
-            $format = $this->formatOf($path);
-
-            // assertOutputContract() already refused an unknown directory. This
-            // is the narrowing that proves it to the analyser rather than
-            // asserting it in a comment.
-            if ($format === null) {
-                throw IngestRejected::because(RejectionCode::UnknownOutputDirectory, $path);
-            }
-
+        if (! $compressed && ! ChromeInjector::handles($path)) {
+            // Not a document. Stream, hash, store the stream.
             $stream = $reader->stream($entry);
 
             try {
@@ -513,25 +569,201 @@ final class ArtifactIngestor
                 }
             }
 
+            return [$digest, $bytes, null];
+        }
+
+        /*
+         * §8.15.4's third non-injectable class, checked from the declared size
+         * so an oversized document is never buffered at all. It is still
+         * published — §8.15.4 wants `api_only`, not a missing page — and it
+         * still raises the warning.
+         */
+        if ($entry->declaredSize > $this->maxInjectableBytes()) {
+            $stream = $reader->stream($entry);
+
+            try {
+                [$digest, $bytes] = $this->drain($stream, $entry);
+            } finally {
+                if (is_resource($stream)) {
+                    fclose($stream);
+                }
+            }
+
+            $coverage->record($path, InjectionOutcome::RefusedTooLarge);
+
+            return [$digest, $bytes, null];
+        }
+
+        $stream = $reader->stream($entry);
+
+        try {
+            $raw = (string) stream_get_contents($stream);
+        } finally {
+            if (is_resource($stream)) {
+                fclose($stream);
+            }
+        }
+
+        if (strlen($raw) !== $entry->declaredSize) {
+            // The same lying-header check drain() performs. Repeated here
+            // because this branch does not go through drain(), and pass one's
+            // cap checks mean nothing if the real sizes may differ.
+            throw IngestRejected::because(
+                RejectionCode::UnreadableArchive,
+                $entry->name,
+                "header declares {$entry->declaredSize} bytes, stream yielded ".strlen($raw),
+            );
+        }
+
+        $stored = $compressed
+            ? $this->injectCompressed($raw, $path, $buildIdText, $coverage)
+            : $this->injectPlain($raw, $path, $buildIdText, $coverage);
+
+        return [hash('sha256', $stored), strlen($stored), $stored];
+    }
+
+    /** §8.15.1 on an uncompressed document. */
+    private function injectPlain(
+        string $raw,
+        string $path,
+        string $buildIdText,
+        InjectionCoverage $coverage,
+    ): string {
+        /*
+         * 🛑 An `.html` file whose bytes are gzip is a mis-named compressed
+         * document. §8.15.10 permits exactly two dispositions and "stored as
+         * though it were HTML" is neither — the serving path would hand a
+         * reader gzip bytes under `text/html`, which renders as nothing.
+         */
+        if (self::looksGzipped($raw)) {
+            throw IngestRejected::because(
+                RejectionCode::CompressedHtmlRefused,
+                $path,
+                'an .html file whose bytes are gzip',
+            );
+        }
+
+        $injection = $this->chrome->inject($raw, $buildIdText);
+        $coverage->record($path, $injection->outcome);
+
+        return $injection->bytes;
+    }
+
+    /**
+     * 🛑 §8.15.10: "A pre-compressed HTML artifact MUST be decompressed,
+     * injected and recompressed at ingest, or refused with a stable error
+     * identifier."
+     *
+     * Both halves are here and there is no third option. The reason the
+     * requirement is so emphatic — "This is the **single** normative disposition
+     * for compressed HTML; no other requirement may state another, and nothing
+     * is rewritten on the serving path to compensate" — is that the tempting
+     * alternative is to decompress at serve time, and that would put
+     * documentation bytes back through PHP in exactly the place §8.9.8 spent its
+     * design keeping them out of.
+     */
+    private function injectCompressed(
+        string $raw,
+        string $path,
+        string $buildIdText,
+        InjectionCoverage $coverage,
+    ): string {
+        $plain = @gzdecode($raw);
+
+        if ($plain === false) {
+            throw IngestRejected::because(
+                RejectionCode::CompressedHtmlRefused,
+                $path,
+                'could not be decompressed',
+            );
+        }
+
+        $injection = $this->chrome->inject($plain, $buildIdText);
+        $coverage->record($path, $injection->outcome);
+
+        // Recompressed at the same level the sidecar convention assumes. A
+        // sidecar that came back larger than its source would be a sidecar the
+        // edge should not serve, and level 9 keeps that from happening for any
+        // document injection has merely grown by ~120 bytes.
+        $recompressed = gzencode($injection->bytes, 9);
+
+        if ($recompressed === false) {
+            throw IngestRejected::because(
+                RejectionCode::CompressedHtmlRefused,
+                $path,
+                'could not be recompressed',
+            );
+        }
+
+        return $recompressed;
+    }
+
+    /** The ceiling §8.15.4 measures against, read once per ingest. */
+    private function maxInjectableBytes(): int
+    {
+        $max = config('artifacts.chrome.max_html_bytes');
+
+        return is_numeric($max) ? (int) $max : 4 * 1024 * 1024;
+    }
+
+    /** A pre-compressed HTML sidecar, by extension (§8.15.10). */
+    private static function isCompressedHtml(string $path): bool
+    {
+        if (! str_ends_with(strtolower($path), '.gz')) {
+            return false;
+        }
+
+        return ChromeInjector::handles(substr($path, 0, -3));
+    }
+
+    /** The gzip magic number. Two bytes, and they are not valid UTF-8 HTML. */
+    private static function looksGzipped(string $bytes): bool
+    {
+        return str_starts_with($bytes, "\x1f\x8b");
+    }
+
+    /**
+     * Validate every entry's real bytes against the caps, writing nothing.
+     *
+     * 🛑 This is the pass that makes pass one mean something. Pass one checked
+     * the caps against the archive's **declared** sizes, which are
+     * attacker-supplied; if the real sizes were free to differ, pass one checked
+     * nothing at all. Here the bytes are counted as they stream, so a lying
+     * header is caught — and caught before {@see self::extract()} has stored a
+     * single object.
+     *
+     * It builds no manifest and keeps no digests. The manifest is built during
+     * the storing pass, from the bytes that actually land, because injection
+     * changes them and §8.4.18's manifest must describe what is stored.
+     *
+     * @param  array<string, ArchiveEntry>  $paths  sorted
+     *
+     * @throws IngestRejected
+     */
+    private function measure(ArchiveReader $reader, array $paths): void
+    {
+        $actualTotal = 0;
+
+        foreach ($paths as $entry) {
+            $stream = $reader->stream($entry);
+
+            try {
+                [, $bytes] = $this->drain($stream, $entry);
+            } finally {
+                if (is_resource($stream)) {
+                    fclose($stream);
+                }
+            }
+
             $actualTotal += $bytes;
 
-            // Re-checked against the actual bytes, not the header's claim.
             if ($actualTotal > $this->caps->totalBytes) {
                 throw IngestRejected::because(
                     RejectionCode::TotalSizeExceeded,
                     detail: $actualTotal.' actual bytes exceeds '.$this->caps->totalBytes,
                 );
             }
-
-            $manifest->add($path, $digest, $bytes);
-
-            $perFormat[$format] ??= ['files' => 0, 'bytes' => 0, 'digests' => []];
-            $perFormat[$format]['files']++;
-            $perFormat[$format]['bytes'] += $bytes;
-            $perFormat[$format]['digests'][] = $path.':'.$digest;
         }
-
-        return [$manifest, $perFormat, $actualTotal];
     }
 
     /**
