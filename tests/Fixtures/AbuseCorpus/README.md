@@ -60,6 +60,21 @@ gate. If the two disagree, `corpus.json` and the PHP builders are right.
 | `git_url` | §8.3.4 protocol and SSRF rejection | 05 |
 | `header` | §8.9.5 inbound header stripping, §8.9.4 no trusted resolver | 04 |
 
+### Phase 05 restated the `git_url` expectations
+
+`git_url-001` to `-008` were authored in Phase 00 and say only `reject`, which rule 3
+asks us to improve on: an expected outcome is a status code or a **stable error
+identifier**. Phase 05's exit criteria require five named vectors — `ext::sh -c id`,
+`file:///etc/passwd`, a `169.254.169.254` host, a TTL-0 rebind target and a redirect into
+private space — to be refused **with distinct errors**, and `reject` cannot tell five
+controls apart. One surviving control would keep all five cases green while four had
+regressed.
+
+`git_url-009` to `-017` therefore restate those vectors against the exact
+`App\Source\SourceRejection` identifier each must produce, and add the encodings a deny
+list written in dotted quads does not recognise (IPv4-mapped, NAT64). The originals are
+kept, per rule 1: they are coarse, not wrong, and they still pass.
+
 ## Adding a case
 
 Append to `corpus.json`. Give it the next free `id` in its category, name the requirement

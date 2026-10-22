@@ -1,0 +1,35 @@
+<?php
+
+// SPDX-FileCopyrightText: 2026 The DocUp contributors
+// SPDX-License-Identifier: Apache-2.0
+
+declare(strict_types=1);
+
+namespace App\Egress;
+
+/**
+ * The wire, with the connection address already decided.
+ *
+ * The seam is here and not higher because everything above it — scheme,
+ * address policy, rebind detection, redirect refusal, the byte cap — is
+ * decided from data and must run identically whatever carries the bytes. What
+ * is left below the seam is one job: connect to **this** address, send the
+ * original `Host`, and stop at the cap.
+ */
+interface Transport
+{
+    /**
+     * @param  array<string, string>  $headers
+     *
+     * @throws EgressRefused on timeout, byte cap or any transport failure
+     */
+    public function send(
+        string $method,
+        string $url,
+        string $host,
+        int $port,
+        string $pinnedAddress,
+        array $headers,
+        EgressOptions $options,
+    ): EgressResponse;
+}

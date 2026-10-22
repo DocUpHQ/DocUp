@@ -16,6 +16,14 @@ parameters:
         - app/Auth
         - app/Artifacts
         - app/Config
+        # Phase 05. SPEC 9.4 names serving, authentication, artifact and
+        # configuration; source connection is added because a type error in
+        # the SSRF deny list or the credential envelope is a security bug by
+        # the same argument. Raising a gate is permitted; lowering one is not.
+        - app/Egress
+        - app/Source
+        - app/Credentials
+        - app/Logging
         - app/Support
         - app/Concerns
         - app/Models
