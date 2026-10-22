@@ -47,12 +47,24 @@ Route::middleware(['auth', 'tenant'])
     });
 
 /*
-| The dashboard API. Same middleware, same 404 semantics; a separate prefix so
-| the §8.1.11 public-contract versioning has somewhere to live.
+| The dashboard's own API reads.
+|
+| 🛑 `api/v3`, not `api/v1`. Phase 02 created these under v1 before anything had
+| read §8.21.1, which names "REST API v3" — and the number is not cosmetic:
+| §3 and §20.4 make RTD compatibility a goal, so an imported CI script or
+| importer looking for a v3 path should find the shape it expects where it
+| expects it. Shipping v1 and v3 side by side would have been two public
+| contracts on day one, which §8.1.11 is precisely about not doing. Corrected
+| in Phase 03, while the only callers are this repository's own tests.
+|
+| These carry session authentication and a tenant in the path; the Phase 03
+| publish endpoints under the same prefix carry a bearer token and take their
+| tenant from it (§8.21.2, §8.9.4). One API surface, two credential types — the
+| dashboard is a first-party client, not a third-party one.
 */
 Route::middleware(['auth', 'tenant'])
-    ->prefix('api/v1/organisations/{organisation}')
-    ->name('api.v1.organisations.')
+    ->prefix('api/v3/organisations/{organisation}')
+    ->name('api.v3.organisations.')
     ->group(function (): void {
         Route::get('projects', [ApiProjectController::class, 'index'])->name('projects.index');
         Route::get('projects/{project}', [ApiProjectController::class, 'show'])->name('projects.show');

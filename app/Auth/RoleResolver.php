@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace App\Auth;
 
+use App\Http\Middleware\RequireTokenCapability;
 use App\Models\Project;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
@@ -98,6 +99,75 @@ final class RoleResolver
         }
 
         return $roles;
+    }
+
+    /**
+     * Every capability a user holds **anywhere within** one organisation.
+     *
+     * 🛑 This is NOT an access decision and must never be used as one. It
+     * answers a different question from {@see self::capabilitiesFor()}: not
+     * "may you do this to that project" but "do you hold this capability at
+     * all, somewhere in this organisation".
+     *
+     * The distinction is the whole reason it is a separate method. Folding
+     * project-scope rows into `rolesFor()` would make a `project_admin` on
+     * project A appear to hold administrative capability over project B — a
+     * privilege escalation created by a convenience. Per-target resolution
+     * stays exactly as narrow as it was.
+     *
+     * The one legitimate caller is token minting (§8.13.6): "a token may never
+     * exceed the capabilities of the person minting it." A project admin
+     * genuinely holds `project.version.publish` — at project scope — so
+     * refusing to let them mint a token carrying it was wrong, and it made the
+     * publish API unusable by precisely the role that should use it. Phase 03
+     * found that; the check now asks the right question, and
+     * {@see RequireTokenCapability} still re-checks the
+     * holder against the specific project on every request. Minting is broad;
+     * acting is narrow.
+     *
+     * @param  string  $organisationId  raw 16 bytes
+     * @return list<Capability>
+     */
+    public function capabilitiesAnywhereIn(User $user, string $organisationId): array
+    {
+        /** @var list<object{role: string}> $rows */
+        $rows = DB::select(
+            'SELECT DISTINCT `ra`.`role`
+               FROM `role_assignments` AS `ra`
+              WHERE `ra`.`subject_type` = ?
+                AND `ra`.`subject_id` = ?
+                AND (`ra`.`expires_at` IS NULL OR `ra`.`expires_at` > ?)
+                AND (
+                      (`ra`.`scope_type` = ? AND `ra`.`scope_id` IS NULL)
+                   OR (`ra`.`scope_type` = ? AND `ra`.`scope_id` = ?)
+                   OR (`ra`.`scope_type` = ? AND `ra`.`scope_id` IN (
+                          SELECT `p`.`id` FROM `projects` AS `p`
+                           WHERE `p`.`organisation_id` = ? AND `p`.`deleted_at` IS NULL
+                      ))
+                )',
+            [
+                'user', $user->id, now(),
+                'installation',
+                'organisation', $organisationId,
+                'project', $organisationId,
+            ],
+        );
+
+        $capabilities = [];
+
+        foreach ($rows as $row) {
+            $role = Role::tryFrom($row->role);
+
+            if ($role === null) {
+                continue;
+            }
+
+            foreach ($role->capabilities() as $capability) {
+                $capabilities[$capability->value] = $capability;
+            }
+        }
+
+        return array_values($capabilities);
     }
 
     /**

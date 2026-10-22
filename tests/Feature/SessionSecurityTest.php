@@ -154,7 +154,7 @@ final class SessionSecurityTest extends TestCase
             SessionStamps::LAST_ACTIVITY_AT => now()->getTimestamp(),
         ])->actingAsWithoutStamps();
 
-        $this->getJson("/api/v1/organisations/{$this->organisation->slug}/projects")
+        $this->getJson("/api/v3/organisations/{$this->organisation->slug}/projects")
             ->assertStatus(401);
     }
 

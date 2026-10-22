@@ -8,10 +8,15 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Auth\OrganisationContext;
+use App\Http\Middleware\AuthenticateApiToken;
 use App\Listeners\StampAuthenticatedSession;
+use App\Models\ApiToken;
 use App\Support\Origins;
 use Illuminate\Auth\Events\Login;
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 
@@ -42,6 +47,53 @@ final class AppServiceProvider extends ServiceProvider
 
         $this->assertOriginSeparation();
         $this->hardenFrameworkDefaults();
+        $this->defineRateLimiters();
+    }
+
+    /**
+     * §8.21.2: "documented rate limits per token and per IP, and `Retry-After`
+     * on 429."
+     *
+     * 🛑 **Per token AND per IP**, as two limits rather than one. They defend
+     * different things, and either alone has a hole:
+     *
+     * - A per-token limit alone lets somebody with a handful of tokens — or an
+     *   unauthenticated flood against the 401 path, which has no token at all —
+     *   exhaust the server from one address.
+     * - A per-IP limit alone punishes the common legitimate shape, a CI fleet
+     *   behind one NAT address, while a distributed caller with one token walks
+     *   straight past it.
+     *
+     * Laravel applies the most restrictive matching limit and adds `Retry-After`
+     * to its own 429, so the header requirement needs no code here — but it does
+     * need the limiter to exist. Without this method the `throttle:api`
+     * middleware throws `MissingRateLimiterException` and every API request is a
+     * 500: Laravel 11 removed the `RouteServiceProvider` that used to define
+     * `api` by default, so an API route group that names it has to supply it.
+     *
+     * The numbers are deliberately generous. A publish uploads a whole
+     * documentation tree, so a build pipeline makes very few requests and a
+     * tight limit would only break someone's monorepo pushing twenty components
+     * at once. Abuse of this endpoint is bounded by §8.8.2's caps and §8.8.10's
+     * quota, which are the controls that actually cost an attacker something.
+     */
+    private function defineRateLimiters(): void
+    {
+        RateLimiter::for('api', function (Request $request): array {
+            $token = $request->attributes->get(AuthenticateApiToken::ATTRIBUTE);
+
+            /*
+             * Keyed on the token's id, never on the bearer credential. A limiter
+             * key reaches the cache, and a cache key containing a live secret is
+             * a secret written somewhere nobody is auditing — the same reason
+             * §8.21.2's bearer must not travel in a query string.
+             */
+            $perToken = $token instanceof ApiToken
+                ? Limit::perMinute(120)->by('token:'.bin2hex($token->id))
+                : Limit::perMinute(30)->by('anon:'.(string) $request->ip());
+
+            return [$perToken, Limit::perMinute(600)->by('ip:'.(string) $request->ip())];
+        });
     }
 
     /**

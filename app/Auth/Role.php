@@ -84,9 +84,11 @@ enum Role: string
                 Capability::ProjectView,
                 Capability::ProjectCreate,
                 Capability::ProjectUpdate,
+                Capability::ProjectVersionPublish,
                 Capability::ProjectDelete,
                 Capability::ProjectRoleAssign,
                 Capability::ProjectVisibilityUpdate,
+                Capability::ProjectVersionRollback,
                 Capability::ProjectInheritanceOverride,
                 Capability::AuditRead,
                 Capability::TokenMint,
@@ -122,9 +124,11 @@ enum Role: string
                 Capability::ProjectView,
                 Capability::ProjectCreate,
                 Capability::ProjectUpdate,
+                Capability::ProjectVersionPublish,
                 Capability::ProjectDelete,
                 Capability::ProjectRoleAssign,
                 Capability::ProjectVisibilityUpdate,
+                Capability::ProjectVersionRollback,
                 Capability::ProjectInheritanceOverride,
                 Capability::AuditRead,
                 Capability::TokenMint,
@@ -146,9 +150,11 @@ enum Role: string
             self::ProjectAdmin => [
                 Capability::ProjectView,
                 Capability::ProjectUpdate,
+                Capability::ProjectVersionPublish,
                 Capability::ProjectDelete,
                 Capability::ProjectRoleAssign,
                 Capability::ProjectVisibilityUpdate,
+                Capability::ProjectVersionRollback,
                 Capability::AuditRead,
                 Capability::TokenMint,
                 Capability::TokenRevoke,
@@ -157,15 +163,29 @@ enum Role: string
             self::ProjectMaintainer => [
                 Capability::ProjectView,
                 Capability::ProjectUpdate,
+                Capability::ProjectVersionPublish,
+                // Maintainer is where rollback begins. See the capability's own
+                // note: withdrawing what readers are currently being served is
+                // a different decision from shipping a change.
+                Capability::ProjectVersionRollback,
             ],
 
-            // 🛑 `project_writer` and `project_reader` differ only once there is
-            // something to write: publishing, versions and builds arrive in
-            // Phase 03 and later, and §4.3 forbids inventing a capability before
-            // the thing it governs exists. Until then a writer can see the
-            // project and nothing more, and the distinction lives in
-            // requiresMfa() below, which is already load-bearing.
-            self::ProjectWriter,
+            /*
+             * Phase 03 is what Phase 02's note here was waiting for. It read:
+             * "`project_writer` and `project_reader` differ only once there is
+             * something to write: publishing, versions and builds arrive in
+             * Phase 03 and later, and §4.3 forbids inventing a capability
+             * before the thing it governs exists."
+             *
+             * Publishing exists now, so the two roles finally differ by
+             * something other than requiresMfa(). A writer publishes; only a
+             * maintainer and above can roll back.
+             */
+            self::ProjectWriter => [
+                Capability::ProjectView,
+                Capability::ProjectVersionPublish,
+            ],
+
             self::ProjectReader => [
                 Capability::ProjectView,
             ],
