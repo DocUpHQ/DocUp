@@ -13,6 +13,7 @@ use App\Serving\ArtifactHandoff;
 use App\Serving\CachePolicy;
 use App\Serving\FileKind;
 use App\Serving\ManifestReader;
+use App\Serving\Negotiation;
 use App\Serving\RejectionReason;
 use App\Serving\Resolver;
 use App\Serving\RouteKind;
@@ -102,16 +103,32 @@ final class DocumentController
             return $this->refuse($file->reason ?? RejectionReason::FileNotFound, 'file.no_match');
         }
 
-        $etag = $file->etag();
         $entry = $file->entry;
 
-        if ($file->key === null || $etag === null || $entry === null) {
+        if ($file->key === null || $file->etag() === null || $entry === null) {
             return $this->refuse(RejectionReason::FileNotFound, 'file.no_storage_key');
         }
 
+        /*
+         * §8.9.13: serve a pre-compressed sidecar where one exists. The chosen
+         * key may therefore differ from the resolved one — and when it does, the
+         * ETag comes from the SIDECAR's manifest entry, because §8.9.12 derives
+         * the validator from the digest of what is served. A shared validator
+         * would let a cache answer a client that never asked for gzip.
+         */
+        $files = $this->manifests->files($match->buildId);
+
+        [$servedKey, $encoding] = Negotiation::choose(
+            $files,
+            $file->key,
+            $request->headers->get('Accept-Encoding'),
+        );
+
+        $servedEntry = $files[$servedKey] ?? $entry;
+
         // §8.8.1's prefix is built by the artifact store and nowhere else; the
         // manifest path is the rest of the key.
-        $storageKey = $this->manifests->storageKeyFor($match->buildId, $file->key);
+        $storageKey = $this->manifests->storageKeyFor($match->buildId, $servedKey);
 
         /*
          * 🛑 §8.9.9: "`304` MUST be answerable from the manifest digest before
@@ -135,6 +152,13 @@ final class DocumentController
             ),
         );
 
+        /*
+         * The validator describes the bytes that will be sent, so it is taken
+         * after negotiation. §8.9.12: "an `ETag` derived from the manifest
+         * digest" — of the served object.
+         */
+        $etag = '"'.$servedEntry['sha256'].'"';
+
         if ($this->matchesEtag($request, $etag)) {
             return response('', 304, $directives->headers() + [
                 'ETag' => $etag,
@@ -142,14 +166,24 @@ final class DocumentController
             ]);
         }
 
-        return $this->handoff->respond($storageKey, $directives->headers() + $this->contentHeaders(
+        $headers = $directives->headers() + $this->contentHeaders(
+            // The RESOLVED path, not the served one: the content type and the
+            // inline/attachment disposition describe the document a reader
+            // asked for, not the container it arrived in. A gzip sidecar of an
+            // HTML page is still `text/html`.
             path: $file->key,
             contentType: $entry['content_type'],
             etag: $etag,
             indexable: $mount->isIndexable,
         ) + [
             RejectNonCanonicalPath::RESOLVER_HEADER => $route->matchedRule,
-        ]);
+        ];
+
+        if ($encoding !== null) {
+            $headers['Content-Encoding'] = $encoding;
+        }
+
+        return $this->handoff->respond($storageKey, $headers);
     }
 
     /**

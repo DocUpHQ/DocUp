@@ -228,6 +228,87 @@ final class DocumentServingTest extends TestCase
         $this->assertSame('nosniff', $response->headers->get('X-Content-Type-Options'));
     }
 
+    /**
+     * 🛑 §8.9.13: "The system MUST serve pre-compressed sidecars where present
+     * … with correct `Vary: Accept-Encoding`."
+     *
+     * The sidecar is published through the real §8.15.10 path, so it has been
+     * decompressed, injected and recompressed at ingest — which is what keeps
+     * it a valid gzip of a document that carries chrome.
+     */
+    public function test_a_gzip_sidecar_is_served_to_a_client_that_accepts_it(): void
+    {
+        $this->publish(extra: [
+            'html/index.html.gz' => (string) gzencode('<html><head></head><body>demo</body></html>', 9),
+        ]);
+
+        $response = $this->getExactly("http://{$this->host}/en/latest/", ['Accept-Encoding' => 'gzip']);
+
+        $response->assertOk();
+
+        $this->assertStringEndsWith('/html/index.html.gz', (string) $response->headers->get('X-Accel-Redirect'));
+        $this->assertSame('gzip', $response->headers->get('Content-Encoding'));
+
+        // The type describes the DOCUMENT, not the container it arrived in.
+        $this->assertSame('text/html; charset=utf-8', $response->headers->get('Content-Type'));
+
+        // §8.9.13's Vary, without which a shared cache could hand these bytes
+        // to a client that never asked for gzip.
+        $this->assertStringContainsString('Accept-Encoding', (string) $response->headers->get('Vary'));
+    }
+
+    public function test_the_plain_document_is_served_when_gzip_is_refused(): void
+    {
+        $this->publish(extra: [
+            'html/index.html.gz' => (string) gzencode('<html><head></head><body>demo</body></html>', 9),
+        ]);
+
+        $response = $this->getExactly("http://{$this->host}/en/latest/", ['Accept-Encoding' => 'gzip;q=0']);
+
+        $response->assertOk();
+
+        $this->assertStringEndsWith('/html/index.html', (string) $response->headers->get('X-Accel-Redirect'));
+        $this->assertFalse($response->headers->has('Content-Encoding'));
+    }
+
+    /**
+     * 🛑 And the sidecar has its own validator, because §8.9.12 derives the
+     * ETag from the digest of what is served.
+     *
+     * A shared validator would let a cache answer a client that never asked for
+     * gzip — `Vary` being right and the ETag being wrong, and the ETag is the
+     * one caches trust.
+     */
+    public function test_a_sidecar_carries_a_different_etag_from_its_document(): void
+    {
+        $this->publish(extra: [
+            'html/index.html.gz' => (string) gzencode('<html><head></head><body>demo</body></html>', 9),
+        ]);
+
+        $plain = $this->getExactly("http://{$this->host}/en/latest/", ['Accept-Encoding' => 'identity']);
+        $gzip = $this->getExactly("http://{$this->host}/en/latest/", ['Accept-Encoding' => 'gzip']);
+
+        $this->assertNotSame(
+            (string) $plain->headers->get('ETag'),
+            (string) $gzip->headers->get('ETag'),
+        );
+    }
+
+    /**
+     * 🛑 A sidecar is never a URL of its own (§8.9.13, §8.9.6).
+     *
+     * Serving it directly would give one document two URLs — the cache-key
+     * surface §8.9.6 spends its strictness collapsing.
+     */
+    public function test_a_sidecar_cannot_be_requested_directly(): void
+    {
+        $this->publish(extra: [
+            'html/guide.html.gz' => (string) gzencode('<html><head></head><body>g</body></html>', 9),
+        ]);
+
+        $this->getExactly("http://{$this->host}/en/latest/guide.html.gz")->assertNotFound();
+    }
+
     // ----------------------------------------------------------------- caching
 
     /**

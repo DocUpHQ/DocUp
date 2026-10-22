@@ -22,6 +22,27 @@
     </source>
     <php>
         <!--
+            🛑 512M, because the architecture suite parses the whole source
+            tree.
+
+            Pest's arch presets build an AST for every file in app/ through
+            nikic/php-parser, and PHP's default 128M was exhausted once Phase 04
+            added the Serving namespace: "Allowed memory size of 134217728 bytes
+            exhausted ... in PhpParser/Lexer.php". It failed as a FATAL mid-run
+            rather than as a test failure, which reads as a broken suite rather
+            than a resource limit.
+
+            Raising it is not lowering a gate (CLAUDE.md rule 4): no threshold
+            moves and no assertion is skipped. The work is genuinely larger than
+            the default allows, which is why PHPStan is already invoked with a
+            1G memory limit of its own for the same reason.
+
+            Scoped here rather than in the Dockerfile so a queue worker and a
+            build runner keep the production default.
+        -->
+        <ini name="memory_limit" value="512M"/>
+
+        <!--
             🛑 APP_ENV, DB_CONNECTION and DB_DATABASE are pinned in
             tests/bootstrap.php, NOT here.
 

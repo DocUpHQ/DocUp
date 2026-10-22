@@ -255,6 +255,17 @@ final class Resolver
 
         $key = 'html/'.$within;
 
+        /*
+         * 🛑 A sidecar is never served on its own URL (§8.9.13). It exists to
+         * answer a request for the document it compresses, under negotiation —
+         * serving it directly would give one document two URLs, which is the
+         * cache-key surface §8.9.6 spends its strictness collapsing, and would
+         * hand a reader gzip bytes labelled `application/gzip`.
+         */
+        if (Negotiation::isSidecar($key)) {
+            return FileOutcome::rejected(RejectionReason::FileNotFound);
+        }
+
         if (isset($manifestFiles[$key])) {
             return FileOutcome::file($key, $manifestFiles[$key], $match->buildId);
         }

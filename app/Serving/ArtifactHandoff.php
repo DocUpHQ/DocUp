@@ -71,6 +71,15 @@ interface ArtifactHandoff
         'Content-Security-Policy',
         'Content-Type',
         'Content-Disposition',
+
+        /*
+         * 🛑 §8.9.13's sidecar. Dropped under `nginx-accel`, a reader receives
+         * gzip bytes with no `Content-Encoding` — which is not a degraded
+         * response, it is a binary download where a page should be. Listed here
+         * so deploy/nginx.conf must re-emit it, and the parity test enforces
+         * that it does.
+         */
+        'Content-Encoding',
         'Link',
         'X-Robots-Tag',
         'X-Content-Type-Options',

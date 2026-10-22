@@ -349,6 +349,11 @@ final class HandoffHeaderParityTest extends TestCase
         return $directives->headers() + [
             'Content-Type' => 'text/html; charset=utf-8',
             'Content-Disposition' => 'inline',
+            // §8.9.13's sidecar header. Set in the fixture so the exactly-once
+            // assertion covers it: dropped under nginx-accel, a reader gets
+            // gzip bytes with no Content-Encoding, which is a binary download
+            // where a page should be.
+            'Content-Encoding' => 'gzip',
             'Content-Security-Policy' => "default-src 'self'",
             'Link' => '<https://alpha.docs.example.com/en/latest/>; rel="canonical"',
             'X-Robots-Tag' => 'noindex',
