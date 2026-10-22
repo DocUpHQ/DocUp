@@ -33,6 +33,21 @@ namespace App\Artifacts;
 interface ArtifactStore
 {
     /**
+     * Everything one build owns, as a prefix.
+     *
+     * 🛑 Exists so that §8.8.1's key grammar has exactly **one** construction
+     * site, which an architecture test asserts by counting the places that
+     * write the literal `'builds/'`. The Publisher needs this prefix to sweep a
+     * refused build's objects, and it built the string itself until that test
+     * caught it — which is precisely how a slug reaches a storage key: not by
+     * anyone deciding to put one there, but by a second place that assembles
+     * the path and later grows a convenience.
+     *
+     * @param  string  $buildId  raw 16 bytes, as every key in this schema is
+     */
+    public function prefixFor(string $buildId): string;
+
+    /**
      * The storage key for one media type of one build.
      *
      * @param  string  $buildId  raw 16 bytes, as every key in this schema is

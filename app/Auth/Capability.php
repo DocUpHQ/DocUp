@@ -86,6 +86,32 @@ enum Capability: string
      */
     case ProjectInheritanceOverride = 'project.inheritance.override';
 
+    // ------------------------------------------------------- versions and builds
+
+    /**
+     * Publish an artifact tree to a project version (§8.8.4, §8.21.6).
+     *
+     * 🛑 This is the capability Phase 02 deliberately did not invent. Its note
+     * on `project_writer` reads: "publishing, versions and builds arrive in
+     * Phase 03 and later, and §4.3 forbids inventing a capability before the
+     * thing it governs exists". It exists now, so this does.
+     *
+     * Publishing is the writer's job, which is what finally distinguishes
+     * `project_writer` from `project_reader`.
+     */
+    case ProjectVersionPublish = 'project.version.publish';
+
+    /**
+     * Roll a version back to an earlier manifest, pinning it (§8.8.5).
+     *
+     * Held higher than publishing, from `project_maintainer` up. Publishing adds
+     * something; a rollback **withdraws content that readers are currently
+     * being served** and leaves a pin that blocks the next automatic publish
+     * until a human clears it. The person who can ship a documentation change is
+     * not automatically the person who decides a release should disappear.
+     */
+    case ProjectVersionRollback = 'project.version.rollback';
+
     // ----------------------------------------------------------------------- audit
     case AuditRead = 'audit.read';
 
@@ -122,6 +148,8 @@ enum Capability: string
             self::ProjectRoleAssign => 'Assign project-scoped roles.',
             self::ProjectVisibilityUpdate => 'Change who may read a project (§8.2.10 kill switch).',
             self::ProjectInheritanceOverride => 'Opt a project out of organisation role inheritance (§8.2.9).',
+            self::ProjectVersionPublish => 'Publish an artifact tree to a project version.',
+            self::ProjectVersionRollback => 'Roll a version back to an earlier revision, pinning it (§8.8.5).',
             self::AuditRead => 'Read the audit log.',
             self::TokenMint => 'Mint dashboard API tokens.',
             self::TokenRevoke => 'Revoke dashboard API tokens.',

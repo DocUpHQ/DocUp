@@ -32,6 +32,13 @@ final class ApiTokens
     public const MAXIMUM_LIFETIME_DAYS = 365;
 
     /**
+     * Injected because {@see self::find()} has to span organisations: a bearer
+     * token is where tenancy comes from, so looking one up cannot itself be a
+     * tenant-scoped question. See the note in that method.
+     */
+    public function __construct(private readonly OrganisationContext $context) {}
+
+    /**
      * Mint a token and return the **plaintext**, once.
      *
      * @param  list<Capability>  $capabilities
@@ -78,7 +85,22 @@ final class ApiTokens
          * installation-administrative capability would be trivially bypassed by
          * anyone who could mint at all.
          */
-        $held = app(RoleResolver::class)->capabilitiesFor($user, null, $organisation->id);
+        /*
+         * 🛑 "Anywhere in the organisation", not "at organisation scope".
+         *
+         * This read `capabilitiesFor($user, null, $organisation->id)` until
+         * Phase 03, which resolves installation and organisation scope but not
+         * project scope — so a `project_admin` was told they could not mint a
+         * token carrying `project.version.publish`, a capability they hold.
+         * §8.13.6's rule is that a token may not exceed its minter; it is not
+         * that the minter must hold it at organisation level.
+         *
+         * Breadth here is safe because it is not the only check. The token is
+         * re-checked against the specific project on every request
+         * ({@see \App\Http\Middleware\RequireTokenCapability}), so a project
+         * admin's token can publish to their project and nowhere else.
+         */
+        $held = app(RoleResolver::class)->capabilitiesAnywhereIn($user, $organisation->id);
 
         foreach ($capabilities as $capability) {
             if (! in_array($capability, $held, true)) {
@@ -155,10 +177,27 @@ final class ApiTokens
      */
     public function find(string $plaintext): ?ApiToken
     {
-        $token = ApiToken::query()
-            ->where('token_hash_prefix', SecretToken::prefix($plaintext))
-            ->get()
-            ->first(fn (ApiToken $candidate): bool => SecretToken::matches($plaintext, $candidate->token_hash));
+        /*
+         * 🛑 Resolved OUTSIDE the §8.2.1 tenancy scope, deliberately, and for
+         * the same reason {@see \App\Http\Middleware\ResolveOrganisation}
+         * resolves an organisation outside it: this is where tenancy comes
+         * from. A bearer token is a credential, and "which token is this"
+         * cannot be a tenant-scoped question — there is no tenant until the
+         * answer arrives. Scoped, the query ran before any context was declared
+         * and every API request died with TenancyContextMissing.
+         *
+         * Safe because the credential is the whole authority. Spanning
+         * organisations here cannot leak anything: the caller must already hold
+         * the secret, and the only row that can match is the one it belongs to.
+         * The middleware declares the context from the token immediately
+         * afterwards, so everything downstream is scoped again.
+         */
+        $token = $this->context->acrossAllOrganisations(
+            fn (): ?ApiToken => ApiToken::query()
+                ->where('token_hash_prefix', SecretToken::prefix($plaintext))
+                ->get()
+                ->first(fn (ApiToken $candidate): bool => SecretToken::matches($plaintext, $candidate->token_hash)),
+        );
 
         if (! $token instanceof ApiToken || ! $token->isUsable()) {
             return null;

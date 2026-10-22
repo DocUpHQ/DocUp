@@ -151,7 +151,7 @@ final class CrossTenantAccessTest extends TestCase
     public function test_the_api_serves_a_members_own_project(): void
     {
         $this->actingAs($this->alphaMember)
-            ->getJson("/api/v1/organisations/{$this->alpha->slug}/projects/alpha-docs")
+            ->getJson("/api/v3/organisations/{$this->alpha->slug}/projects/alpha-docs")
             ->assertOk()
             ->assertJsonPath('data.slug', 'alpha-docs');
     }
@@ -160,7 +160,7 @@ final class CrossTenantAccessTest extends TestCase
     public function test_the_api_returns_404_for_another_organisations_project(): void
     {
         $this->actingAs($this->alphaMember)
-            ->getJson("/api/v1/organisations/{$this->beta->slug}/projects/beta-docs")
+            ->getJson("/api/v3/organisations/{$this->beta->slug}/projects/beta-docs")
             ->assertNotFound();
     }
 
@@ -168,7 +168,7 @@ final class CrossTenantAccessTest extends TestCase
     public function test_the_api_index_lists_only_the_members_own_projects(): void
     {
         $response = $this->actingAs($this->alphaMember)
-            ->getJson("/api/v1/organisations/{$this->alpha->slug}/projects")
+            ->getJson("/api/v3/organisations/{$this->alpha->slug}/projects")
             ->assertOk();
 
         $slugs = array_column($response->json('data'), 'slug');
@@ -192,7 +192,7 @@ final class CrossTenantAccessTest extends TestCase
             ->assertNotFound();
 
         $this->actingAs($this->alphaMember)
-            ->getJson("/api/v1/organisations/{$this->alpha->slug}/projects/".Uuid::toText($this->betaProject->id))
+            ->getJson("/api/v3/organisations/{$this->alpha->slug}/projects/".Uuid::toText($this->betaProject->id))
             ->assertNotFound();
     }
 
@@ -200,7 +200,7 @@ final class CrossTenantAccessTest extends TestCase
     public function test_direct_identifier_access_under_the_owning_tenant_is_also_404(): void
     {
         $this->actingAs($this->alphaMember)
-            ->getJson("/api/v1/organisations/{$this->beta->slug}/projects/".Uuid::toText($this->betaProject->id))
+            ->getJson("/api/v3/organisations/{$this->beta->slug}/projects/".Uuid::toText($this->betaProject->id))
             ->assertNotFound();
     }
 
@@ -212,7 +212,7 @@ final class CrossTenantAccessTest extends TestCase
         $this->context->forget();
 
         $this->actingAs($this->alphaMember)
-            ->getJson("/api/v1/organisations/{$this->alpha->slug}/projects/".Uuid::toText($own->id))
+            ->getJson("/api/v3/organisations/{$this->alpha->slug}/projects/".Uuid::toText($own->id))
             ->assertOk()
             ->assertJsonPath('data.slug', 'alpha-docs');
     }
@@ -227,7 +227,7 @@ final class CrossTenantAccessTest extends TestCase
     {
         foreach (['not-a-uuid', str_repeat('z', 36), '../../etc/passwd', '1'] as $rubbish) {
             $this->actingAs($this->alphaMember)
-                ->getJson("/api/v1/organisations/{$this->alpha->slug}/projects/".urlencode($rubbish))
+                ->getJson("/api/v3/organisations/{$this->alpha->slug}/projects/".urlencode($rubbish))
                 ->assertNotFound();
         }
     }

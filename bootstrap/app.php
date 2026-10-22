@@ -5,9 +5,11 @@ declare(strict_types=1);
 // SPDX-FileCopyrightText: 2026 The DocUp contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use App\Http\Middleware\AuthenticateApiToken;
 use App\Http\Middleware\EnforceSessionLifetime;
 use App\Http\Middleware\HandleInertiaRequests;
 use App\Http\Middleware\RequireRecentAuthentication;
+use App\Http\Middleware\RequireTokenCapability;
 use App\Http\Middleware\ResolveOrganisation;
 use App\Http\Middleware\SetLocale;
 use Illuminate\Foundation\Application;
@@ -19,6 +21,17 @@ use Illuminate\Routing\Middleware\SubstituteBindings;
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         web: __DIR__.'/../routes/web.php',
+        /*
+         * Registered with `then:` rather than `api:` so the prefix and the
+         * middleware group come from routes/api.php itself. Laravel's `api:`
+         * helper applies its own `api` prefix and `api` group, which would have
+         * produced /api/api/v3 and attached the stateless group to routes that
+         * already declare their own - SPEC 8.21.2's bearer authentication is
+         * ours, not the framework's.
+         */
+        then: function (): void {
+            require __DIR__.'/../routes/api.php';
+        },
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
     )
@@ -43,6 +56,11 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'tenant' => ResolveOrganisation::class,
             'stepup' => RequireRecentAuthentication::class,
+            // SPEC 8.21.2: bearer tokens. An alias for the same reason `tenant`
+            // is one - the API declares its own authentication and the web
+            // group must not inherit it.
+            'api.token' => AuthenticateApiToken::class,
+            'token.can' => RequireTokenCapability::class,
         ]);
 
         /*
@@ -66,6 +84,23 @@ return Application::configure(basePath: dirname(__DIR__))
             before: SubstituteBindings::class,
             prepend: ResolveOrganisation::class,
         );
+
+        /*
+         * 🛑 The API middleware is deliberately NOT in the priority list.
+         *
+         * Adding AuthenticateApiToken to it looked like the same fix, and it
+         * was the opposite: the priority list re-sorts every middleware on the
+         * route, which hoisted `throttle:api` ahead of authentication. The
+         * limiter then never saw a token, so SPEC 8.21.2's per-token limit
+         * silently degraded to the anonymous per-IP one on every request — a
+         * control that is configured, reviewed and not doing its job, which is
+         * the failure mode this file already carries two other warnings about.
+         *
+         * The API routes need no help with ordering: they declare
+         * `['api.token', 'throttle:api']` and carry no SubstituteBindings,
+         * because the publish controller resolves its own models (so that one
+         * 404 covers every out-of-reach case, per SPEC 8.2.2).
+         */
 
         // 🛑 SPEC 8.9.5 / 9.3.8: TrustHosts' default trusts subdomains of
         // APP_URL, which would hand a documentation host standing it must not

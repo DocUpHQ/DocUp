@@ -35,9 +35,14 @@ abstract class FilesystemArtifactStore implements ArtifactStore
      * renamed an hour after publishing still serves the same bytes from the
      * same key.
      */
+    public function prefixFor(string $buildId): string
+    {
+        return 'builds/'.Uuid::toText($buildId);
+    }
+
     public function keyFor(string $buildId, string $mediaType): string
     {
-        return 'builds/'.Uuid::toText($buildId).'/'.$mediaType;
+        return $this->prefixFor($buildId).'/'.$mediaType;
     }
 
     public function put(string $key, mixed $contents): void
