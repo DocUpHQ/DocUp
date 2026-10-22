@@ -151,9 +151,14 @@ arch()
     ->toBeFinal()
     ->ignoring([
         // PHP enums are implicitly final and the keyword is a syntax error on
-        // one, so the rule is inapplicable rather than relaxed.
+        // one, so the rule is inapplicable rather than relaxed. Listed by name
+        // rather than by namespace so that adding an enum here is a deliberate
+        // act: the suite fails loudly until the new name is added, which is
+        // cheaper than a blanket exemption that would also excuse a class.
+        'App\Serving\FileKind',
         'App\Serving\HostKind',
         'App\Serving\RejectionReason',
+        'App\Serving\RouteKind',
     ]);
 
 arch()
