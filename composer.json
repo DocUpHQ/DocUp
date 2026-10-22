@@ -9,15 +9,16 @@
     ],
     "license": "Apache-2.0",
     "require": {
+        "php": "^8.4.1",
         "ext-dom": "*",
         "ext-mbstring": "*",
         "ext-openssl": "*",
         "ext-pdo": "*",
         "ext-sodium": "*",
         "inertiajs/inertia-laravel": "^3.0",
+        "laravel/fortify": "^1.41",
         "laravel/framework": "^13.17",
-        "laravel/tinker": "^3.0",
-        "php": "^8.4.1"
+        "laravel/tinker": "^3.0"
     },
     "require-dev": {
         "cyclonedx/cyclonedx-php-composer": "^6.2",

@@ -8,7 +8,10 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Auth\OrganisationContext;
+use App\Listeners\StampAuthenticatedSession;
 use App\Support\Origins;
+use Illuminate\Auth\Events\Login;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 
@@ -34,6 +37,9 @@ final class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // §8.13.3: regenerate and stamp on every authentication path.
+        Event::listen(Login::class, StampAuthenticatedSession::class);
+
         $this->assertOriginSeparation();
         $this->hardenFrameworkDefaults();
     }

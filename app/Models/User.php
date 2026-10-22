@@ -31,6 +31,10 @@ use Illuminate\Notifications\Notifiable;
  *
  * Authentication itself is Phase 02 (SPEC 8.13). Phase 01 gives the table and
  * the model so the first administrator can exist before sign-in does.
+ *
+ * @property-read string $id raw 16 bytes, per ADR 0006 — never the canonical form
+ * @property string $name
+ * @property string $email
  */
 #[Tenancy(
     TenancyPosture::Installation,

@@ -41,3 +41,21 @@ Schedule::command('docup:audit:anchor')
     ->timezone('UTC')
     ->withoutOverlapping()
     ->onOneServer();
+
+/*
+| 🛑 §8.22.6: the hard purge is MANDATORY, not operator-optional.
+|
+| A soft delete that is never purged retains personal data indefinitely while
+| the product tells people it was erased. Thirty days is the documented erasure
+| latency floor, and the number only means anything if something runs — so it
+| is scheduled here rather than offered as a command an operator might
+| remember.
+|
+| 03:00 UTC, after the audit anchors, so a purged row's audit event is already
+| anchored for the day it was written.
+*/
+Schedule::command('docup:purge')
+    ->dailyAt('03:00')
+    ->timezone('UTC')
+    ->withoutOverlapping()
+    ->onOneServer();
