@@ -70,6 +70,56 @@ final class AuditChainTest extends TestCase
     }
 
     /**
+     * Append a raw row, bypassing Audit::record(), to construct a state the
+     * verifier should reject.
+     *
+     * 🛑 Why tamper by INSERT rather than UPDATE.
+     *
+     * The application can no longer UPDATE or DELETE an audit row at all — the
+     * §8.22.1 triggers refuse it, which is the property
+     * {@see AuditAppendOnlyTest} proves. So these tests cannot edit a row the
+     * way they did before the triggers existed.
+     *
+     * A privileged second connection was tried and does not work: the test runs
+     * inside an uncommitted transaction, so another connection cannot see the
+     * rows, and attempting to lock them waits out the 50-second lock timeout.
+     *
+     * What matters is that **the verifier cannot tell how a row reached a bad
+     * state** — it compares contents against hashes and links. A row whose hash
+     * does not match its contents is indistinguishable from an edited one, and
+     * a skipped sequence is indistinguishable from a deleted row. So the state
+     * is constructed directly, which is faster, needs no credentials, and
+     * exercises exactly the same detectors.
+     *
+     * @param  array<string, mixed>  $overrides
+     */
+    private function appendRaw(array $overrides = []): string
+    {
+        $id = Uuid::v7();
+
+        DB::insert(
+            'INSERT INTO `audit_events`
+                (`id`, `occurred_at`, `organisation_id`, `sequence`, `actor_id`, `actor_type`,
+                 `action`, `payload`, `prev_hash`, `hash`)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            array_values(array_merge([
+                'id' => $id,
+                'occurred_at' => now()->format('Y-m-d H:i:s.v'),
+                'organisation_id' => $this->organisation->id,
+                'sequence' => 1,
+                'actor_id' => $this->actorId,
+                'actor_type' => 'user',
+                'action' => 'raw.appended',
+                'payload' => '[]',
+                'prev_hash' => null,
+                'hash' => random_bytes(32),
+            ], $overrides)),
+        );
+
+        return $id;
+    }
+
+    /**
      * Run the verifier and capture BOTH its exit code and its output.
      *
      * `Artisan::call()` rather than `$this->artisan()->run()`: the latter
@@ -115,36 +165,41 @@ final class AuditChainTest extends TestCase
      * verification — the visible row would say one thing while the chain
      * vouched for another.
      */
-    public function test_a_manual_row_edit_fails_verification_and_names_the_row(): void
+    public function test_a_row_whose_contents_do_not_match_its_hash_is_named(): void
     {
         $this->record('project.created');
-        $tamperedId = $this->record('project.updated');
-        $this->record('project.deleted');
+        $this->record('project.updated');
 
-        DB::update(
-            'UPDATE `audit_events` SET `action` = ? WHERE `id` = ?',
-            ['project.destroyed', $tamperedId],
-        );
+        // A third row carrying a hash that does not describe it: exactly the
+        // state a hand-edited row leaves behind.
+        $planted = $this->appendRaw([
+            'sequence' => 3,
+            'action' => 'project.destroyed',
+            'prev_hash' => DB::selectOne(
+                'SELECT `hash` FROM `audit_events` WHERE `chain_key` = ? ORDER BY `sequence` DESC LIMIT 1',
+                [$this->organisation->id],
+            )->hash,
+        ]);
 
         [$exit, $output] = $this->verify();
 
-        $this->assertSame(1, $exit, 'a tampered row verified clean');
+        $this->assertSame(1, $exit, 'a row inconsistent with its hash verified clean');
         $this->assertStringContainsString('hash mismatch', $output);
         $this->assertStringContainsString(
-            Uuid::toText($tamperedId),
+            Uuid::toText($planted),
             $output,
             'the failure did not name the offending row, which is the half of the criterion that matters'
         );
     }
 
-    /** A deleted row is caught twice over: the gap and the broken link. */
-    public function test_a_deleted_row_is_detected(): void
+    /** A missing row is caught twice over: the gap and the broken link. */
+    public function test_a_missing_row_is_detected(): void
     {
         $this->record('a');
-        $deletedId = $this->record('b');
-        $this->record('c');
+        $this->record('b');
 
-        DB::delete('DELETE FROM `audit_events` WHERE `id` = ?', [$deletedId]);
+        // Sequence 4 where 3 is expected: what a deleted row leaves behind.
+        $this->appendRaw(['sequence' => 4, 'prev_hash' => random_bytes(32)]);
 
         [$exit, $output] = $this->verify();
 

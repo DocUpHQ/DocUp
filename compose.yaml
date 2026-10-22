@@ -79,6 +79,17 @@ services:
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-docup-root}
     volumes:
       - db:/var/lib/mysql
+      # 🛑 SPEC 8.22.1: makes the audit log append-only to the application and
+      # creates the separate maintenance principal. The MySQL image runs
+      # everything in this directory as root on FIRST initialisation, which is
+      # the only point at which the application's own user could not do it —
+      # a table-level REVOKE is inexpressible against a schema grant, and
+      # CREATE TRIGGER needs SUPER while binary logging is on.
+      #
+      # On an existing installation this does nothing, because the directory is
+      # only read when the data volume is empty. Run the script by hand there;
+      # `docup:doctor` fails until it has been.
+      - ./deploy/mysql/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${DB_ROOT_PASSWORD:-docup-root}"]
       interval: 5s

@@ -46,6 +46,7 @@ final class DoctorCommand extends Command
         $this->checkMail();
         $this->checkAuditKey();
         $this->checkAuditPartitions();
+        $this->checkAuditAppendOnly();
         $this->notePending();
 
         if ($this->option('json')) {
@@ -177,6 +178,54 @@ final class DoctorCommand extends Command
             count($partitions).' partitions, next month covered, catch-all empty',
             'SPEC 8.22.1',
         );
+    }
+
+    /**
+     * 🛑 §8.22.1: the audit log must be insert-only for the application.
+     *
+     * A failure, not a warning. An operator who skipped the setup script has a
+     * log that looks chained and verifies, while being rewritable by the very
+     * application that writes it — a worse position than having no audit log,
+     * because it is believed.
+     *
+     * Checked by looking for the guards rather than by attempting an UPDATE:
+     * `doctor` must be safe to run against a production installation, and a
+     * diagnostic that writes to the audit log in order to prove it cannot
+     * write to the audit log is not one anybody should run twice.
+     */
+    private function checkAuditAppendOnly(): void
+    {
+        /** @var list<object{EVENT_OBJECT_TABLE: string, EVENT_MANIPULATION: string}> $triggers */
+        $triggers = DB::select(
+            'SELECT EVENT_OBJECT_TABLE, EVENT_MANIPULATION
+               FROM information_schema.TRIGGERS
+              WHERE TRIGGER_SCHEMA = ? AND EVENT_OBJECT_TABLE IN (?, ?)',
+            [DB::connection()->getDatabaseName(), 'audit_events', 'audit_anchors'],
+        );
+
+        $present = [];
+
+        foreach ($triggers as $trigger) {
+            $present[$trigger->EVENT_OBJECT_TABLE.':'.$trigger->EVENT_MANIPULATION] = true;
+        }
+
+        $missing = array_values(array_filter(
+            ['audit_events:UPDATE', 'audit_events:DELETE', 'audit_anchors:UPDATE', 'audit_anchors:DELETE'],
+            static fn (string $guard): bool => ! isset($present[$guard]),
+        ));
+
+        if ($missing !== []) {
+            $this->recordFail(
+                'Audit log is append-only',
+                'missing guards ('.implode(', ', $missing).'); apply '
+                .'deploy/mysql/init/10-audit-append-only.sql as a database administrator',
+                'SPEC 8.22.1',
+            );
+
+            return;
+        }
+
+        $this->recordPass('Audit log is append-only', 'UPDATE and DELETE refused on both tables', 'SPEC 8.22.1');
     }
 
     private function recordPass(string $check, string $detail, string $ref): void

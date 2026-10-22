@@ -161,6 +161,13 @@ return [
         // PCI DSS 4.0.1 §10.5.1 and cannot drop below a year if the operator
         // claims it. The purge job and `retention:report` read this one value.
         'retention_days' => (int) env('DOCUP_AUDIT_RETENTION_DAYS', 400),
+
+        // 🛑 §8.22.1's separate maintenance principal: partition management and
+        // retention purging, with its credentials absent from the application
+        // container. Named here because the append-only triggers must let it
+        // purge while still refusing the application — see the migration that
+        // creates them for why this is a trigger rather than a GRANT.
+        'maintenance_user' => env('DOCUP_AUDIT_MAINTENANCE_USER', 'docup_maintenance'),
     ],
 
 ];
