@@ -32,9 +32,17 @@
 --
 -- Idempotent: safe to run again.
 --
--- Covers the `docup` schema only. The development stack's `docup_test` schema
--- gets 20-audit-append-only-test.sql, mounted by compose.dev.yaml, for the same
--- reason MailPit lives there: a production installation must not carry it.
+-- 🛑 Deliberately UNQUALIFIED: it applies to whichever schema it is run
+-- against, so the same file serves production, the development stack and CI.
+-- An earlier version hardcoded `docup` and broke in CI, where the tables live
+-- in `docup_test` — a script that names its own schema cannot be the script
+-- that proves the configuration operators actually run.
+--
+-- The MySQL image's entrypoint runs docker-entrypoint-initdb.d/*.sql with
+-- --database="$MYSQL_DATABASE", so the compose mount gets the right default
+-- without anything being passed. Run by hand, pass it:
+--
+--     mysql -u root docup < deploy/mysql/init/10-audit-append-only.sql
 
 -- ---------------------------------------------------------------------------
 -- The maintenance principal (SPEC 8.22.1)
@@ -48,8 +56,8 @@ CREATE USER IF NOT EXISTS 'docup_maintenance'@'%' IDENTIFIED BY 'docup-maintenan
 
 -- ALTER, CREATE and INSERT are what MySQL requires for ALTER TABLE … ADD
 -- PARTITION; DROP is for retention by DROP PARTITION.
-GRANT SELECT, INSERT, CREATE, ALTER, DROP ON `docup`.`audit_events` TO 'docup_maintenance'@'%';
-GRANT SELECT, DELETE ON `docup`.`audit_anchors` TO 'docup_maintenance'@'%';
+GRANT SELECT, INSERT, CREATE, ALTER, DROP ON `audit_events` TO 'docup_maintenance'@'%';
+GRANT SELECT, DELETE ON `audit_anchors` TO 'docup_maintenance'@'%';
 
 -- ---------------------------------------------------------------------------
 -- Append-only enforcement
@@ -65,22 +73,22 @@ GRANT SELECT, DELETE ON `docup`.`audit_anchors` TO 'docup_maintenance'@'%';
 
 DELIMITER $$
 
-DROP TRIGGER IF EXISTS `docup`.`audit_events_no_update`$$
-CREATE TRIGGER `docup`.`audit_events_no_update` BEFORE UPDATE ON `docup`.`audit_events`
+DROP TRIGGER IF EXISTS `audit_events_no_update`$$
+CREATE TRIGGER `audit_events_no_update` BEFORE UPDATE ON `audit_events`
 FOR EACH ROW
 BEGIN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit_events is append-only (SPEC 8.22.1)';
 END$$
 
-DROP TRIGGER IF EXISTS `docup`.`audit_events_no_delete`$$
-CREATE TRIGGER `docup`.`audit_events_no_delete` BEFORE DELETE ON `docup`.`audit_events`
+DROP TRIGGER IF EXISTS `audit_events_no_delete`$$
+CREATE TRIGGER `audit_events_no_delete` BEFORE DELETE ON `audit_events`
 FOR EACH ROW
 BEGIN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit_events is append-only; purge by DROP PARTITION (SPEC 20.3)';
 END$$
 
-DROP TRIGGER IF EXISTS `docup`.`audit_anchors_no_update`$$
-CREATE TRIGGER `docup`.`audit_anchors_no_update` BEFORE UPDATE ON `docup`.`audit_anchors`
+DROP TRIGGER IF EXISTS `audit_anchors_no_update`$$
+CREATE TRIGGER `audit_anchors_no_update` BEFORE UPDATE ON `audit_anchors`
 FOR EACH ROW
 BEGIN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'an anchor may never be re-signed (SPEC 8.22.1)';
@@ -89,8 +97,8 @@ END$$
 -- Anchors ARE purged by row under SPEC 20.3, so the maintenance principal is
 -- allowed through. SESSION_USER() is the account that connected, unlike
 -- CURRENT_USER() which would be the trigger's definer and make this vacuous.
-DROP TRIGGER IF EXISTS `docup`.`audit_anchors_no_delete`$$
-CREATE TRIGGER `docup`.`audit_anchors_no_delete` BEFORE DELETE ON `docup`.`audit_anchors`
+DROP TRIGGER IF EXISTS `audit_anchors_no_delete`$$
+CREATE TRIGGER `audit_anchors_no_delete` BEFORE DELETE ON `audit_anchors`
 FOR EACH ROW
 BEGIN
     IF SUBSTRING_INDEX(SESSION_USER(), '@', 1) <> 'docup_maintenance' THEN

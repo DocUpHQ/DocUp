@@ -12,6 +12,15 @@
 -- application connection is actually refused, rather than asserting that a
 -- SQL file says it would be. A test that runs against an unhardened schema
 -- would pass while proving nothing.
+--
+-- 🛑 Why this duplicates 10-audit-append-only.sql instead of reusing it: that
+-- script is deliberately schema-agnostic and applies to whichever schema it is
+-- run against, while the MySQL entrypoint runs every file in
+-- docker-entrypoint-initdb.d against a SINGLE default schema
+-- ($MYSQL_DATABASE). So 10-* hardens `docup` and this file is the only way to
+-- reach `docup_test` during the same initialisation. CI does not use this file
+-- at all — it runs 10-* against docup_test directly, which is why the
+-- production script is the one under test.
 
 GRANT SELECT, INSERT, CREATE, ALTER, DROP ON `docup_test`.`audit_events` TO 'docup_maintenance'@'%';
 GRANT SELECT, DELETE ON `docup_test`.`audit_anchors` TO 'docup_maintenance'@'%';
