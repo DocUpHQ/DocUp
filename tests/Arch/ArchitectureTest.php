@@ -590,4 +590,60 @@ final class ArchitectureTest extends TestCase
             'documentation bytes must not traverse PHP (SPEC 8.9.8): '.implode('; ', $offenders),
         );
     }
+
+    /**
+     * 🛑 SPEC 10.8: "**One** registry, because ten uncoordinated counters
+     * produce an irreproducible stale-authorisation bug."
+     *
+     * So exactly one class may increment an epoch column. The bug the
+     * requirement names is specific and nasty: with several places bumping,
+     * one of them forgets a case, and the resulting staleness depends on which
+     * code path ran — so it cannot be reproduced from the symptom.
+     *
+     * Asserted on the column names rather than on a method, because the bypass
+     * is writing the SQL by hand rather than calling the wrong helper.
+     */
+    public function test_only_the_invalidation_registry_bumps_an_epoch(): void
+    {
+        $epochColumns = [
+            'routing_epoch',
+            'authz_epoch',
+            'identity_epoch',
+            'permission_epoch',
+            'serving_epoch',
+            'search_generation',
+            'policy_generation',
+        ];
+
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            /*
+             * The registry itself, and the migrations that create the columns.
+             * Allowlisted by path so the exemption cannot be claimed elsewhere
+             * by writing the right words.
+             */
+            if ($relative === 'app/Support/Invalidation.php' || str_starts_with($relative, 'database/migrations/')) {
+                continue;
+            }
+
+            $source = $this->code($file);
+
+            foreach ($epochColumns as $column) {
+                // An increment, in any spelling. A read is fine - SPEC 8.9.10
+                // requires the resolver to READ routing_epoch from the snapshot.
+                if (preg_match('/'.preg_quote($column, '/').'\s*(\+\+|\+\s*1|=\s*\S+\s*\+)/', $source) === 1) {
+                    $offenders[] = $relative.' increments '.$column;
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'only App\Support\Invalidation may bump an epoch (SPEC 10.8): '.implode('; ', $offenders),
+        );
+    }
 }

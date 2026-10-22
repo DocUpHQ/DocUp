@@ -67,6 +67,11 @@ arch()->preset()->laravel()
         // `X-DocUp-Resolver` and operator alerting, which is exactly the kind
         // of contract the stricter analysis exists for.
         'App\Serving',
+        // And App\Support, for §10.8's Epoch. The registry is deliberately
+        // cross-cutting — one epoch per concern, exactly one registry — so it
+        // cannot live inside any one of the concerns it coordinates, and
+        // App\Enums would file it by the fact that it is an enum.
+        'App\Support',
     ]);
 
 arch()->preset()->strict()
@@ -121,8 +126,17 @@ arch()
 
 arch()
     ->expect('App\Support')
-    ->toBeFinal()
     ->toUseStrictTypes();
+
+arch()
+    ->expect('App\Support')
+    ->toBeFinal()
+    // PHP enums are implicitly final and the keyword is a syntax error on one,
+    // so the rule is inapplicable rather than relaxed. §10.8's registry lives
+    // in App\Support because it is cross-cutting: every epoch belongs to a
+    // different concern, which is the whole reason the specification insists
+    // there be only one of it.
+    ->ignoring(['App\Support\Epoch']);
 
 /*
 | 🛑 Restating what the two exemptions above still leave in force for

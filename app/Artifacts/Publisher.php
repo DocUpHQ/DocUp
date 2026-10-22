@@ -19,6 +19,7 @@ use App\Models\Project;
 use App\Models\ProjectVersion;
 use App\Models\ProjectVersionManifest;
 use App\Models\VersionPointerEvent;
+use App\Support\Invalidation;
 use App\Support\Uuid;
 use Illuminate\Support\Facades\DB;
 
@@ -399,6 +400,21 @@ final class Publisher
                     'pinned_at' => $pinReason !== null ? now() : $locked->pinned_at,
                     'pinned_by' => $pinReason !== null ? $actorId : $locked->pinned_by,
                     'updated_at' => now(),
+
+                    /*
+                     * 🛑 §10.8's `serving_epoch`, folded into THIS statement
+                     * rather than bumped beside it. §8.8.4 requires publication
+                     * to be "a **single** compare-and-swap row update", and
+                     * §10.8 gives this epoch a staleness bound of "0 (CAS)" —
+                     * both of which are literally true only if the pointer and
+                     * the epoch are the same write. A second UPDATE in the same
+                     * transaction was close enough to be tempting and is not
+                     * what either requirement says.
+                     *
+                     * The expression comes from the registry, so Invalidation
+                     * remains the only place that knows how an epoch advances.
+                     */
+                    'serving_epoch' => Invalidation::servingEpochIncrement(),
                 ]);
 
             if ($affected === 0) {
@@ -419,6 +435,29 @@ final class Publisher
             }
 
             $build?->forceFill(['state' => 'published', 'finished_at' => now()])->save();
+
+            /*
+             * 🛑 §10.8: a version pointer change bumps the **routing** epoch
+             * too. `serving_epoch` already moved, inside the compare-and-swap
+             * above; this is the other half.
+             *
+             * `routing_epoch` is "0 (in key)" because it is part of the
+             * resolution cache key, so a bump addresses different keys and no
+             * stale entry exists to be read — §8.9.10's own words: "A failed CDN
+             * purge then degrades to stale public HTML for `max-age`, never to
+             * wrong routing."
+             *
+             * Only in this branch, the one that moved the pointer. A build that
+             * lost the compare-and-swap changed nothing, and bumping an epoch
+             * for it would flush every reader's resolution cache to reflect a
+             * flip that did not happen.
+             */
+            Invalidation::bumpRouting(
+                projectId: $locked->project_id,
+                cause: 'version pointer change',
+                organisationId: $locked->organisation_id,
+                actorId: $actorId,
+            );
 
             $event = new VersionPointerEvent;
             $event->forceFill([
