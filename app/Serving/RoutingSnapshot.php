@@ -40,56 +40,43 @@ final class RoutingSnapshot
     ) {}
 
     /**
-     * The mount covering a path: longest `path_prefix` first, on a segment
-     * boundary (§7.3).
+     * The mount covering a path, and the path left inside it (§7.3).
      *
-     * 🛑 "On a segment boundary" is not decoration. A mount at `api` must not
-     * match a request for `apiary/guide.html`, and a plain `str_starts_with`
-     * would — which is how one project's portal mount quietly swallows another
-     * project's URLs on a shared domain.
+     * 🛑 The boundary rule lives in {@see SegmentPrefix} and nowhere else, so
+     * matching and consuming cannot disagree. They used to: this method
+     * returned only the mount and the resolver stripped the prefix again, which
+     * left a defensive branch for a disagreement that could not happen — dead
+     * code guarding two implementations of one rule.
      *
      * @param  string  $path  the request path, leading slash included
      */
-    public function mountFor(string $path): ?SnapshotMount
+    public function matchFor(string $path): ?DomainMountMatch
     {
         $relative = ltrim($path, '/');
-        $best = null;
-        $bestLength = -1;
 
-        foreach ($this->mounts as $mount) {
-            $prefix = $mount->pathPrefix;
-            $length = strlen($prefix);
+        $prefixes = array_map(
+            static fn (SnapshotMount $mount): string => $mount->pathPrefix,
+            $this->mounts,
+        );
 
-            if ($length <= $bestLength) {
-                continue;
-            }
+        $match = SegmentPrefix::longest($prefixes, $relative);
 
-            if ($prefix === '') {
-                // The root mount matches everything, and is the shortest
-                // possible match — so it only wins when nothing longer does.
-                $best = $mount;
-                $bestLength = 0;
-
-                continue;
-            }
-
-            if (! str_starts_with($relative, $prefix)) {
-                continue;
-            }
-
-            // The match must end at the end of the path or immediately before a
-            // separator.
-            $next = $relative[$length] ?? '/';
-
-            if ($next !== '/') {
-                continue;
-            }
-
-            $best = $mount;
-            $bestLength = $length;
+        if ($match === null) {
+            return null;
         }
 
-        return $best;
+        [$prefix, $remainder] = $match;
+
+        foreach ($this->mounts as $mount) {
+            if ($mount->pathPrefix === $prefix) {
+                return new DomainMountMatch($mount, $remainder);
+            }
+        }
+
+        // Unreachable: the prefix came from this list. Returning null rather
+        // than asserting, because a 404 is the safe answer on the serving path
+        // and a type error is not.
+        return null;
     }
 
     /** An unroutable host: known to the matcher, unknown to the installation. */

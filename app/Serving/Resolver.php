@@ -93,11 +93,13 @@ final class Resolver
         }
 
         // Step 1: the domain mount, longest prefix on a segment boundary.
-        $mount = $snapshot->mountFor($path);
+        $match = $snapshot->matchFor($path);
 
-        if ($mount === null) {
+        if ($match === null) {
             return RouteOutcome::rejected('mount.no_match', RejectionReason::MountNotFound);
         }
+
+        $mount = $match->mount;
 
         if ($mount->mode === 'redirect') {
             /*
@@ -110,14 +112,12 @@ final class Resolver
             return RouteOutcome::rejected('mount.redirect_mode', RejectionReason::MountNotFound);
         }
 
-        $afterMount = $this->strip($relative, $mount->pathPrefix);
-
-        if ($afterMount === null) {
-            // mountFor() matched on a segment boundary, so this cannot happen
-            // for the prefix it returned. Kept because the alternative is
-            // trusting two methods to agree about boundaries forever.
-            return RouteOutcome::rejected('mount.prefix_mismatch', RejectionReason::MountNotFound);
-        }
+        /*
+         * No second strip. SegmentPrefix matched and consumed in one operation,
+         * so there is nothing here that could disagree with the match — which
+         * is what let the defensive `mount.prefix_mismatch` branch go.
+         */
+        $afterMount = $match->remainder;
 
         // Steps 2 and 3: the project is the mount's, and its optional prefix.
         $project = $mount->project;
@@ -201,22 +201,25 @@ final class Resolver
      */
     public function resolveMount(array $mounts, string $remainder): ?MountMatch
     {
-        $mount = $this->longestMount($mounts, $remainder);
+        $match = SegmentPrefix::longest(
+            array_map(static fn (array $mount): string => $mount['mount_path'], $mounts),
+            $remainder,
+        );
 
-        if ($mount === null) {
+        if ($match === null) {
             return null;
         }
 
-        $within = $this->strip($remainder, $mount['mount_path']);
+        [$prefix, $within] = $match;
 
-        if ($within === null) {
-            // longestMount() matched on a boundary, so this cannot happen for
-            // the prefix it returned. Kept rather than assumed, because the
-            // alternative is two methods trusting each other about boundaries.
-            return null;
+        foreach ($mounts as $mount) {
+            if ($mount['mount_path'] === $prefix) {
+                return new MountMatch($prefix, $mount['build_id'], $within);
+            }
         }
 
-        return new MountMatch($mount['mount_path'], $mount['build_id'], $within);
+        // Unreachable: the prefix came from this list.
+        return null;
     }
 
     /**
@@ -446,49 +449,6 @@ final class Resolver
         }
 
         return substr($path, strlen($prefix) + 1);
-    }
-
-    /**
-     * The component mount covering a path: longest first, on a boundary.
-     *
-     * @param  list<array{mount_path: string, build_id: string|null}>  $mounts
-     * @return array{mount_path: string, build_id: string|null}|null
-     */
-    private function longestMount(array $mounts, string $path): ?array
-    {
-        $best = null;
-        $bestLength = -1;
-
-        foreach ($mounts as $mount) {
-            $prefix = $mount['mount_path'];
-            $length = strlen($prefix);
-
-            if ($length <= $bestLength) {
-                continue;
-            }
-
-            if ($prefix === '') {
-                $best = $mount;
-                $bestLength = 0;
-
-                continue;
-            }
-
-            if (! str_starts_with($path, $prefix)) {
-                continue;
-            }
-
-            $next = $path[$length] ?? '/';
-
-            if ($next !== '/') {
-                continue;
-            }
-
-            $best = $mount;
-            $bestLength = $length;
-        }
-
-        return $best;
     }
 
     /**

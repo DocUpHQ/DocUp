@@ -203,9 +203,19 @@ final class ResolverTest extends TestCase
 
         $snapshot = $this->snapshot([$root, $guides, $deep]);
 
-        $this->assertSame('deep', $snapshot->mountFor('/guides/api/en/latest/x.html')?->id);
-        $this->assertSame('guides', $snapshot->mountFor('/guides/en/latest/x.html')?->id);
-        $this->assertSame('root', $snapshot->mountFor('/en/latest/x.html')?->id);
+        $this->assertSame('deep', $snapshot->matchFor('/guides/api/en/latest/x.html')?->mount->id);
+        $this->assertSame('guides', $snapshot->matchFor('/guides/en/latest/x.html')?->mount->id);
+        $this->assertSame('root', $snapshot->matchFor('/en/latest/x.html')?->mount->id);
+
+        // And the remainder comes back with it, so nothing strips the prefix a
+        // second time. See SegmentPrefix for why that duplication had to go.
+        // No null guard: the assertions above already established that this
+        // host matches, and the analyser narrows accordingly — a redundant
+        // assertNotNull here is itself a finding.
+        $this->assertSame(
+            'en/latest/x.html',
+            $snapshot->matchFor('/guides/api/en/latest/x.html')->remainder,
+        );
     }
 
     /**
@@ -223,9 +233,9 @@ final class ResolverTest extends TestCase
 
         $snapshot = $this->snapshot([$root, $api]);
 
-        $this->assertSame('api', $snapshot->mountFor('/api/en/latest/')?->id);
-        $this->assertSame('api', $snapshot->mountFor('/api')?->id);
-        $this->assertSame('root', $snapshot->mountFor('/apiary/en/latest/')?->id, 'apiary must not match api');
+        $this->assertSame('api', $snapshot->matchFor('/api/en/latest/')?->mount->id);
+        $this->assertSame('api', $snapshot->matchFor('/api')?->mount->id);
+        $this->assertSame('root', $snapshot->matchFor('/apiary/en/latest/')?->mount->id, 'apiary must not match api');
     }
 
     public function test_a_host_whose_mounts_do_not_cover_the_path_is_a_404(): void
@@ -375,6 +385,40 @@ final class ResolverTest extends TestCase
 
         $this->assertSame(RejectionReason::VersionNotFound, $outcome->reason);
         $this->assertSame('version.no_default', $outcome->matchedRule);
+    }
+
+    /**
+     * The mount root WITH its project prefix present also redirects.
+     *
+     * `/portal/docs` has consumed both prefixes and has no version left, which
+     * is §8.9.7's empty path reached by the other route — through the project
+     * prefix rather than past it. Covered explicitly because the two paths into
+     * that redirect are different branches, and only one of them was tested.
+     */
+    public function test_a_consumed_project_prefix_with_no_version_redirects(): void
+    {
+        $snapshot = $this->snapshot([
+            $this->mount($this->project([$this->version()], urlPrefix: 'docs'), pathPrefix: 'portal'),
+        ]);
+
+        $outcome = $this->resolver->resolveRoute($snapshot, '/portal/docs');
+
+        $this->assertSame(RouteKind::Redirect, $outcome->kind);
+        $this->assertSame('/portal/docs/en/latest/', $outcome->redirectTo);
+        $this->assertSame('version.default_redirect', $outcome->matchedRule);
+    }
+
+    /** `multi_version` with a slug no version carries. */
+    public function test_multi_version_rejects_an_unknown_slug(): void
+    {
+        $snapshot = $this->snapshot([
+            $this->mount($this->project([$this->version()], scheme: 'multi_version')),
+        ]);
+
+        $outcome = $this->resolver->resolveRoute($snapshot, '/v9/guide.html');
+
+        $this->assertSame(RejectionReason::VersionNotFound, $outcome->reason);
+        $this->assertSame('version.no_match', $outcome->matchedRule);
     }
 
     /** A mount override beats the project's own scheme (§10.5). */
@@ -760,6 +804,34 @@ final class ResolverTest extends TestCase
         $outcome = $this->resolveFile($mounts, $this->files('html/apiary/x.html'), 'apiary/x.html');
 
         $this->assertSame('html/apiary/x.html', $outcome->key);
+    }
+
+    /**
+     * The longest component mount wins whatever order the manifest lists them.
+     *
+     * §10.4 fixes no order on `mounts_json`, so a manifest may well list the
+     * longest first — and then the scan's "a shorter candidate cannot beat a
+     * longer one" short-circuit is the branch that runs. Tested in both orders
+     * because only one of them was, and a scan that depended on the order would
+     * have passed.
+     */
+    public function test_the_longest_component_mount_wins_in_either_order(): void
+    {
+        $descending = [
+            ['mount_path' => 'api/v2', 'build_id' => 'api-v2'],
+            ['mount_path' => 'api', 'build_id' => 'api'],
+            ['mount_path' => '', 'build_id' => 'root'],
+        ];
+
+        $match = $this->resolver->resolveMount($descending, 'api/v2/ref.html');
+
+        $this->assertNotNull($match);
+        $this->assertSame('api/v2', $match->mountPath);
+        $this->assertSame('ref.html', $match->within);
+
+        $ascending = array_reverse($descending);
+
+        $this->assertSame('api/v2', $this->resolver->resolveMount($ascending, 'api/v2/ref.html')?->mountPath);
     }
 
     public function test_a_path_covered_by_no_component_mount_is_rejected(): void

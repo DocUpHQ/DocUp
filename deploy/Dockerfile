@@ -29,6 +29,7 @@ FROM dunglas/frankenphp:latest
 #   pcntl      queue workers and the build runner (SPEC 8.5.13)
 #   opcache    production throughput
 #   redis      Valkey is mandatory (SPEC 11.1)
+#   pcov       coverage measurement (SPEC 8.9.1, SPEC 9.4)
 RUN install-php-extensions \
         pdo_mysql \
         intl \
@@ -39,7 +40,25 @@ RUN install-php-extensions \
         pcntl \
         opcache \
         redis \
+        pcov \
     && rm -rf /var/lib/apt/lists/*
+
+# 🛑 pcov is INSTALLED and DISABLED (SPEC 8.9.1, SPEC 9.4).
+#
+# SPEC 8.9.1 requires the resolver to sustain >=95% branch coverage and >=80%
+# mutation score, and neither can be claimed without a coverage driver. Phase 04
+# could not measure its own exit criterion until this line existed.
+#
+# Disabled by default because it is instrumentation: it costs nothing when off,
+# and it must not be on for a normal test run or a production boot. Pest enables
+# it per run with --coverage.
+#
+# pcov rather than Xdebug on purpose: far faster, and enough for line coverage.
+# 🛑 It does NOT measure BRANCH coverage, which is what SPEC 8.9.1 asks for —
+# that needs Xdebug. The gap is recorded in the build log rather than papered
+# over by reporting line coverage as though it were branch coverage.
+RUN echo "pcov.enabled=0" > /usr/local/etc/php/conf.d/20-pcov.ini
+
 
 # 🛑 SPEC 8.12.16: Laravel's ArgonHasher default is m=1024 KiB, roughly 19x
 # below the OWASP floor. config/hashing.php overrides it; this ensures the
