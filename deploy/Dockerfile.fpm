@@ -1,0 +1,149 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The nginx-accel application image (SPEC 11.3, ADR 0001).
+#
+# 🛑 A SECOND image, and it is not duplication for its own sake. SPEC 11.3:
+# "nginx + php-fpm is an equal alternative (`nginx-accel` driver, using
+# `X-Accel-Redirect` into an `internal` location) behind one `ArtifactHandoff`
+# interface, implemented from day one and run as a CI matrix leg, not merely
+# documented."
+#
+# It cannot be a stage of deploy/Dockerfile: that image is FrankenPHP, which is
+# Caddy with PHP embedded and exposes no FastCGI listener at all. A different
+# SAPI needs a different base.
+#
+# 🛑 And the leg must drive the config operators actually run. deploy/nginx.conf
+# uses `fastcgi_pass`, so proving the driver by proxying to FrankenPHP over HTTP
+# instead would be testing a different configuration from the shipped one — the
+# anti-pattern .github/workflows/gate.yml already calls out for the audit
+# hardening script ("testing a script that is not the one operators run is worse
+# than not testing it").
+#
+# What this proves that the static parity test cannot: that a running nginx
+# HONOURS the re-emission list. SPEC 18.18's failure mode is "silent security
+# degradation" — a private document served with no `private, no-store` behind a
+# correct-looking 200 — and a configuration that fails to apply looks exactly
+# like one that works.
+
+FROM php:8.5-fpm
+
+# 🛑 Extensions installed with the base image's OWN tooling rather than a
+# third-party installer script. The FrankenPHP image ships
+# `install-php-extensions`; this one does not, and fetching it would add an
+# unpinned supply-chain dependency to the image build — SPEC 9.3.6 requires
+# pinned actions and a malware-blocking Composer policy, and reaching for
+# `releases/latest/download` here would undercut that for no benefit.
+#
+# The list is deploy/Dockerfile's MINUS what this base image already compiles in
+# statically: `sodium` and `opcache` ship built into php:8.5-fpm, and asking
+# docker-php-ext-install for one of them configures a build that then compiles
+# nothing, so `make install` dies on `cp: cannot stat 'modules/*'` — which names
+# neither the extension nor the reason. That is how this failed the first time.
+#
+# 🛑 Which makes the list alone an unsafe way to state the requirement: it now
+# reads shorter than the primary image's for a reason that lives in the base
+# image and could change under us. The assertion below is the real statement of
+# intent — it checks the SET of loaded extensions, however each one arrived, so
+# a base image that stops bundling opcache fails the build instead of quietly
+# producing an application that differs from the one it is compared against.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        libicu-dev \
+        libzip-dev \
+        libpng-dev \
+        libjpeg62-turbo-dev \
+        libfreetype6-dev \
+        libsodium-dev \
+        libwebp-dev \
+    ; \
+    docker-php-ext-configure gd --with-jpeg --with-freetype --with-webp; \
+    docker-php-ext-install -j"$(nproc)" \
+        pdo_mysql \
+        intl \
+        zip \
+        gd \
+        bcmath \
+        pcntl \
+    ; \
+    pecl install redis pcov; \
+    docker-php-ext-enable redis; \
+    rm -rf /var/lib/apt/lists/*
+
+# 🛑 The -dev packages are NOT purged, and that is deliberate rather than an
+# oversight of the usual `apt-get purge -y --auto-remove` tail.
+#
+# --auto-remove removed libicu itself along with libicu-dev, because nothing apt
+# knows about depends on it: the thing that needs it is intl.so, a file this
+# build produced, which dpkg has never heard of. The image then built cleanly and
+# shipped an intl that could not load. The parity assertion below caught it on
+# the very next layer, which is the entire reason that assertion is there.
+#
+# The primary image does not have this problem because FrankenPHP's
+# `install-php-extensions` re-marks runtime libraries manual before purging. The
+# upstream docker-php idiom for doing that by hand is an ldd-over-awk-over-
+# dpkg-query pipeline; a few MB of build headers in a CI image is the cheaper
+# trade, and unlike the pipeline it cannot be subtly wrong.
+
+# 🛑 Every extension deploy/Dockerfile requires is loaded, whether this image
+# built it or the base image bundled it. SPEC 11.3 calls nginx-accel an "equal
+# alternative", and an alternative missing an extension is not equal — it is a
+# second application that happens to answer the same URLs. sodium is SPEC
+# 8.12.11's Ed25519 grant tokens and opcache is production throughput; both are
+# load-bearing, and both are exactly what goes missing silently when a base
+# image's bundled set changes.
+RUN set -eux; \
+    for ext in pdo_mysql intl zip gd bcmath sodium pcntl redis; do \
+        php -m | grep -qxF "$ext" \
+            || (echo "missing from the nginx-accel image: $ext" && exit 1); \
+    done; \
+    php -m | grep -qxF "Zend OPcache" \
+        || (echo "opcache missing from the nginx-accel image" && exit 1); \
+    echo "extension parity with deploy/Dockerfile: ok"
+
+# pcov installed and disabled, for the same reason as the primary image
+# (SPEC 8.9.1, SPEC 9.4): it is instrumentation, and Pest enables it per run.
+RUN echo "pcov.enabled=0" > /usr/local/etc/php/conf.d/20-pcov.ini
+
+# 🛑 SPEC 8.21.6's 1 GB archive. The same values as the primary image, because a
+# driver that accepted a different upload size would not be an "equal
+# alternative" — and the limit that bit was PHP's 2M default, which is a
+# property of the SAPI's ini, not of the edge.
+RUN { \
+      echo "upload_max_filesize=1G"; \
+      echo "post_max_size=1G"; \
+    } > /usr/local/etc/php/conf.d/30-docup-uploads.ini
+
+# 🛑 SPEC 8.12.16: the same argon2id check as the primary image. A missing
+# argon2 silently falls back to bcrypt, which would make the two drivers hash
+# passwords differently — a difference nobody would notice until a reader could
+# sign in on one and not the other.
+RUN php -r 'exit(defined("PASSWORD_ARGON2ID") ? 0 : 1);' \
+    || (echo "argon2id unavailable in this PHP build" && exit 1)
+
+WORKDIR /app
+
+COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
+
+# The artifact root nginx serves (SPEC 8.9.8). The same path as the primary
+# image and the same path deploy/nginx.conf aliases, which a test asserts.
+RUN mkdir -p /var/lib/docup/artifacts \
+    && chown -R www-data:www-data /var/lib/docup
+
+# php-fpm listens on 9000, which is what deploy/nginx.conf's `fastcgi_pass
+# app:9000` expects. Stated rather than left to the base image's default,
+# because the two must agree and only one of them is in this repository.
+EXPOSE 9000
+
+# 🛑 An entrypoint, which the primary image does not need. php-fpm drops
+# privileges to www-data while the bind-mounted tree arrives owned by whoever
+# owns the checkout, so Laravel cannot write its own log; FrankenPHP serves as
+# root and never meets it. The script says why in full, and fails at start-up
+# rather than letting it surface as a Monolog 500 on the first request.
+COPY deploy/fpm-entrypoint.sh /usr/local/bin/docup-fpm-entrypoint
+RUN chmod +x /usr/local/bin/docup-fpm-entrypoint
+
+ENTRYPOINT ["/usr/local/bin/docup-fpm-entrypoint"]
+
+CMD ["php-fpm", "--nodaemonize"]

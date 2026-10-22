@@ -87,6 +87,66 @@ interface ArtifactHandoff
         'Last-Modified',
     ];
 
+    /**
+     * The subset of {@see self::PRESERVED_HEADERS} that `nginx-accel` must
+     * re-emit inside the internal location, because nginx drops or overwrites
+     * these and only these.
+     *
+     * 🛑 MEASURED on nginx 1.27.5, not derived. SPEC 18.18 records that nginx
+     * "replaces the entire response header set" on an internal redirect, and
+     * re-emitting the whole of PRESERVED_HEADERS on that basis is itself a
+     * defect: `add_header` APPENDS, so a header nginx already kept is then sent
+     * twice, and SPEC 8.9.8 requires each exactly once. That is not a cosmetic
+     * fault — two `Cache-Control` headers are two policies, and which one a
+     * cache obeys is its choice, not ours.
+     *
+     * SPEC 18.18 is right about the consequence and wrong about the mechanism.
+     * Measured with the re-emission removed, a `members` document kept
+     * `Cache-Control: no-store, private` and lost `CDN-Cache-Control` entirely:
+     * a private document reaching a CDN with nothing on the CDN axis telling it
+     * not to store, behind a correct-looking 200. That is SPEC 9.3.2 breaking
+     * exactly where SPEC 18.18 said it would, for a different reason.
+     *
+     * @see self::NGINX_NATIVE_HEADERS for the complement, and why it is a
+     *      declared decision rather than an omission.
+     */
+    public const NGINX_REEMITTED_HEADERS = [
+        'CDN-Cache-Control',
+        'Vary',
+        'Cache-Tag',
+        'Content-Security-Policy',
+        'Content-Encoding',
+        'Link',
+        'X-Robots-Tag',
+        'X-Content-Type-Options',
+    ];
+
+    /**
+     * The complement: headers `nginx-accel` must NOT re-emit, each with the
+     * measured reason.
+     *
+     * 🛑 Declared rather than left implicit, because the two constants together
+     * must partition {@see self::PRESERVED_HEADERS} with nothing left over. A
+     * test asserts that, which is what makes adding a header to PRESERVED_HEADERS
+     * force a decision about nginx instead of silently defaulting to one. An
+     * unclassified header is the SPEC 18.18 failure in its original form.
+     *
+     * - `Cache-Control`, `Content-Type`, `Content-Disposition` — nginx KEEPS the
+     *   upstream value through the internal redirect. Re-emitting duplicates it.
+     * - `ETag`, `Last-Modified` — nginx REPLACES these with the served file's
+     *   own, and SPEC 8.9.8 wants precisely that: the handoff is what "buys
+     *   ETags, If-None-Match and Range from the web server". Re-emitting the
+     *   application's would send two ETags and break conditional requests,
+     *   which is worse than either value alone.
+     */
+    public const NGINX_NATIVE_HEADERS = [
+        'Cache-Control',
+        'Content-Type',
+        'Content-Disposition',
+        'ETag',
+        'Last-Modified',
+    ];
+
     /** `caddy-intercept` or `nginx-accel`, for `X-DocUp-Resolver` and `doctor`. */
     public function driver(): string;
 

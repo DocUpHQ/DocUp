@@ -91,6 +91,42 @@ return [
             'serve' => false,
             'throw' => true,
             'report' => false,
+
+            /*
+             * 🛑 Explicit, because Flysystem's default is 'private' and private
+             * means directory mode 0700 -- and under SPEC 8.9.8 the process that
+             * reads these bytes is NOT the one that wrote them. The application
+             * authorises and hands off; a separate edge process opens the file.
+             * With 0700 directories owned by the application's user, nginx got
+             * `openat() ... failed (13: Permission denied)` and the reader got a
+             * 403 behind a correct authorisation -- found by the nginx CI matrix
+             * leg, and invisible under caddy-intercept because FrankenPHP serves
+             * as root and can traverse anything.
+             *
+             * 🛑 These modes are NOT the containment boundary and MUST NOT be
+             * read as one. What makes an artifact unreachable without
+             * authorisation is the `internal` location plus the application's
+             * decision (SPEC 8.9.8), proven by the private-asset containment
+             * self-test (SPEC 8.12.22). Tightening these modes would not add a
+             * boundary; it would only break the handoff.
+             *
+             * The rejected alternative is a shared group -- 0750/0440 with the
+             * edge's user in the application's group. It is tighter on a host
+             * with untrusted local users, and it requires two containers to
+             * agree on a numeric gid that neither declares. When it is wrong the
+             * symptom is this same 403, which is SPEC 18.18's "silent security
+             * degradation" shape: a configuration that fails to apply looking
+             * like one that works. Recorded as a proposed amendment to SPEC
+             * 8.9.8 rather than decided here.
+             *
+             * The file mode is 0444 to agree with LocalArtifactStore's
+             * write-once chmod; disagreeing would make the first write fight the
+             * adapter.
+             */
+            'permissions' => [
+                'file' => ['public' => 0o444, 'private' => 0o444],
+                'dir' => ['public' => 0o755, 'private' => 0o755],
+            ],
         ],
 
         'artifacts-s3' => [

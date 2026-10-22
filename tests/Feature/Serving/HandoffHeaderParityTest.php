@@ -135,44 +135,152 @@ final class HandoffHeaderParityTest extends TestCase
     }
 
     /**
-     * 🛑 The list in `deploy/nginx.conf` matches
-     * {@see ArtifactHandoff::PRESERVED_HEADERS}, exactly and in both directions.
+     * 🛑 The re-emission list in `deploy/nginx.conf` matches
+     * {@see ArtifactHandoff::NGINX_REEMITTED_HEADERS}, exactly and in both
+     * directions.
      *
-     * This is the drift §18.18 is about. A header added to the constant and not
-     * to the config reaches readers on Caddy and not on nginx; one added to the
-     * config and not to the constant is dead configuration that reads as
-     * protection. Both directions are asserted, because only checking one of
-     * them is how a list rots from the other end.
+     * This is the drift SPEC 18.18 is about. A header added to the constant and
+     * not to the config reaches readers on Caddy and not on nginx; one added to
+     * the config and not to the constant is dead configuration that reads as
+     * protection. Both directions are asserted, because checking only one is how
+     * a list rots from the other end.
      */
-    public function test_the_nginx_config_re_emits_exactly_the_preserved_headers(): void
+    public function test_the_nginx_config_re_emits_exactly_the_measured_headers(): void
     {
-        $config = (string) file_get_contents(base_path('deploy/nginx.conf'));
-
-        // Only the re-emission block inside the internal location counts. A
-        // header set elsewhere in the file is not a re-emission and must not be
-        // credited as one.
-        $start = strpos($config, 'location /_internal/');
-        $this->assertNotFalse($start, 'deploy/nginx.conf must declare the internal handoff location');
-
-        $block = substr($config, $start);
-        $end = strpos($block, "\n    location ");
-        $block = $end === false ? $block : substr($block, 0, $end);
-
-        preg_match_all('/^\s*add_header\s+(\S+)\s+\$upstream_http_\S+\s+always;/m', $block, $matches);
-
-        $reEmitted = $matches[1];
+        $reEmitted = $this->reEmittedHeaders();
         sort($reEmitted, SORT_STRING);
 
-        $expected = ArtifactHandoff::PRESERVED_HEADERS;
+        $expected = ArtifactHandoff::NGINX_REEMITTED_HEADERS;
         sort($expected, SORT_STRING);
 
         $this->assertSame(
             $expected,
             $reEmitted,
-            "deploy/nginx.conf's re-emission list has drifted from ArtifactHandoff::PRESERVED_HEADERS. "
-            .'A header in one and not the other is §18.18 happening: present on Caddy, absent on nginx, '
-            .'with nothing failing.',
+            "deploy/nginx.conf's re-emission list has drifted from "
+            .'ArtifactHandoff::NGINX_REEMITTED_HEADERS. A header in one and not the other is '
+            .'SPEC 18.18 happening: present on Caddy, absent on nginx, with nothing failing.',
         );
+    }
+
+    /**
+     * 🛑 Every preserved header is CLASSIFIED for nginx: re-emitted, or left to
+     * nginx, and never both and never neither.
+     *
+     * This is the assertion that keeps the measurement honest over time. The
+     * re-emission list is a measured subset, so the natural failure mode is no
+     * longer a short config — it is a header added to PRESERVED_HEADERS that
+     * nobody decided about, which then silently defaults to "not re-emitted"
+     * and goes missing on one driver only. Partitioning the set makes that a
+     * build failure instead of a reader-visible difference between two drivers
+     * SPEC 11.3 calls equal.
+     *
+     * An overlap is asserted too: a header in both lists would be re-emitted on
+     * top of one nginx already sent, which is the duplicate SPEC 8.9.8 forbids.
+     */
+    public function test_every_preserved_header_is_classified_for_nginx(): void
+    {
+        $reEmitted = ArtifactHandoff::NGINX_REEMITTED_HEADERS;
+        $native = ArtifactHandoff::NGINX_NATIVE_HEADERS;
+
+        $this->assertSame(
+            [],
+            array_values(array_intersect($reEmitted, $native)),
+            'a header cannot be both re-emitted and left to nginx: re-emitting one nginx '
+            .'already sent is the duplicate SPEC 8.9.8 forbids.',
+        );
+
+        $classified = array_merge($reEmitted, $native);
+        sort($classified, SORT_STRING);
+
+        $preserved = ArtifactHandoff::PRESERVED_HEADERS;
+        sort($preserved, SORT_STRING);
+
+        $this->assertSame(
+            $preserved,
+            $classified,
+            'every header in PRESERVED_HEADERS must be classified for nginx-accel, as '
+            .'re-emitted or as left to nginx. Unclassified means nobody decided, and the '
+            .'default is silence on one driver only.',
+        );
+    }
+
+    /**
+     * 🛑 The headers nginx is trusted to keep are not merely absent from the
+     * config — the config must not set them at all.
+     *
+     * Asserted separately from the list comparison because the two fail for
+     * different reasons: the comparison above catches a missing re-emission,
+     * this catches a re-emission that was measured as harmful being added back
+     * by someone reading SPEC 18.18 literally and reasonably.
+     */
+    public function test_the_nginx_config_does_not_re_emit_what_nginx_keeps(): void
+    {
+        $reEmitted = $this->reEmittedHeaders();
+
+        foreach (ArtifactHandoff::NGINX_NATIVE_HEADERS as $header) {
+            $this->assertNotContains(
+                $header,
+                $reEmitted,
+                "deploy/nginx.conf re-emits {$header}, which nginx already supplies. "
+                .'add_header APPENDS, so this sends two of them and SPEC 8.9.8 requires one.',
+            );
+        }
+    }
+
+    /**
+     * 🛑 `gzip_vary` is off inside the internal location.
+     *
+     * nginx's gzip filter sets its own `Vary: Accept-Encoding`, which does two
+     * things wrong at once: it is a second Vary overlapping the re-emitted one
+     * (SPEC 8.9.8 allows multiple Vary only with DISTINCT values), and without
+     * the re-emission it REPLACES the application's `Vary: Cookie,
+     * Accept-Encoding`, dropping the Cookie axis SPEC 9.3.2 requires on a
+     * private response. Both were measured.
+     */
+    public function test_the_internal_location_disables_gzip_vary(): void
+    {
+        $this->assertMatchesRegularExpression(
+            '/^\s*gzip_vary\s+off\s*;/m',
+            $this->internalLocation(),
+            'the internal location must set gzip_vary off: nginx would otherwise add a '
+            .'second, overlapping Vary, and replace the application\'s when it is not '
+            .'re-emitted.',
+        );
+    }
+
+    /**
+     * The `add_header` directives inside the internal handoff location.
+     *
+     * Only that block counts: a header set elsewhere in the file is not a
+     * re-emission and must not be credited as one.
+     *
+     * @return list<string>
+     */
+    private function reEmittedHeaders(): array
+    {
+        preg_match_all(
+            '/^\s*add_header\s+(\S+)\s+\$upstream_http_\S+\s+always;/m',
+            $this->internalLocation(),
+            $matches,
+        );
+
+        return $matches[1];
+    }
+
+    /**
+     * The text of the `location /_internal/` block.
+     */
+    private function internalLocation(): string
+    {
+        $config = (string) file_get_contents(base_path('deploy/nginx.conf'));
+
+        $start = strpos($config, 'location /_internal/');
+        $this->assertNotFalse($start, 'deploy/nginx.conf must declare the internal handoff location');
+
+        $block = substr($config, $start);
+        $end = strpos($block, "\n    location ");
+
+        return $end === false ? $block : substr($block, 0, $end);
     }
 
     /**
