@@ -72,6 +72,23 @@ arch()->preset()->laravel()
         // cannot live inside any one of the concerns it coordinates, and
         // App\Enums would file it by the fact that it is an enum.
         'App\Support',
+        // Phase 05, and the same reason a fourth, fifth and sixth time.
+        // phpstan-strict.neon raises app/Egress, app/Source and
+        // app/Credentials to level 9, on §9.4's own argument: a type error in
+        // an SSRF deny list or a credential envelope is a security bug rather
+        // than a crash. Collecting AddressClass, EgressRejection, Provider,
+        // IdentifierShape, SourceRejection and CredentialKind under App\Enums
+        // would move them OUT of the namespaces the higher bar covers, and
+        // would file them by the least interesting thing about them.
+        //
+        // EgressRefused and SourceRefused stay beside the policies that throw
+        // them for the reason the App\Audit note gives: each is meaningless
+        // outside its concern, and EgressRefused carries an EgressRejection,
+        // so a shared App\Exceptions would import the egress namespace into a
+        // namespace everything else depends on.
+        'App\Egress',
+        'App\Source',
+        'App\Credentials',
     ]);
 
 arch()->preset()->strict()

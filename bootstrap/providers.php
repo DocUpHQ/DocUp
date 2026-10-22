@@ -10,6 +10,7 @@ use App\Providers\ArtifactServiceProvider;
 use App\Providers\AuthServiceProvider;
 use App\Providers\FortifyServiceProvider;
 use App\Providers\SchemaServiceProvider;
+use App\Providers\SourceServiceProvider;
 
 return [
     AppServiceProvider::class,
@@ -17,4 +18,5 @@ return [
     AuthServiceProvider::class,
     FortifyServiceProvider::class,
     SchemaServiceProvider::class,
+    SourceServiceProvider::class,
 ];

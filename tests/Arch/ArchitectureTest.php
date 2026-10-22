@@ -8,6 +8,8 @@ declare(strict_types=1);
 namespace Tests\Arch;
 
 use App\Artifacts\RejectionCode;
+use App\Logging\RedactSecrets;
+use App\Source\SourceRejection;
 use Tests\TestCase;
 
 /**
@@ -645,5 +647,232 @@ final class ArchitectureTest extends TestCase
             $offenders,
             'only App\Support\Invalidation may bump an epoch (SPEC 10.8): '.implode('; ', $offenders),
         );
+    }
+
+    /**
+     * 🛑 SPEC 8.3.9: "The system MUST route every outbound request derived
+     * from user-supplied configuration ... through **one**
+     * `HardenedEgressClient` ... One class, sole call site,
+     * architecture-tested."
+     *
+     * This is that test, and it is the same argument SPEC 8.8.2 makes for
+     * `ArtifactIngestor`: a second outbound path is not a duplication bug but
+     * an **unvalidated** one. It gets written in a hurry, for a webhook or an
+     * avatar fetch or an OIDC discovery document, by somebody who did not know
+     * this class existed - and it is the one the attacker uses, because it is
+     * the one with no address policy, no pin and no redirect refusal.
+     *
+     * Two things are forbidden outside `app/Egress`: making a request by any
+     * mechanism, and constructing the transport or the options. The second
+     * catches a caller who found the pieces and assembled a client of their
+     * own with the controls turned off.
+     *
+     * `app/Providers` is allowlisted **by path**, exactly as the artifact test
+     * allowlists it, because binding a class in a container is not calling it.
+     * A path rather than a comment marker, so the exemption cannot be claimed
+     * by writing the right words in a file somewhere else.
+     */
+    public function test_only_the_egress_namespace_makes_outbound_requests(): void
+    {
+        $offenders = [];
+
+        /*
+         * Each entry is a way to speak HTTP from PHP. `file_get_contents` and
+         * `fopen` are included because a URL is a stream wrapper argument and
+         * they are the two that do not look like network calls at a glance -
+         * which is why they are the two that get written.
+         */
+        $mechanisms = [
+            'curl_init(' => 'calls curl directly',
+            'curl_exec(' => 'calls curl directly',
+            'GuzzleHttp\\' => 'names Guzzle',
+            'Facades\\Http' => 'uses the Http facade',
+            'Http::get(' => 'uses the Http facade',
+            'Http::post(' => 'uses the Http facade',
+            'Http::withHeaders(' => 'uses the Http facade',
+            'fsockopen(' => 'opens a socket',
+            'stream_socket_client(' => 'opens a socket',
+            'stream_context_create(' => 'builds a stream context, which is how a URL fetch is configured',
+            'new PinnedCurlTransport' => 'constructs the egress transport',
+            'new HardenedEgressClient' => 'constructs a second egress client',
+            'new EgressOptions' => 'constructs its own egress budget',
+        ];
+
+        /*
+         * 🛑 One allowlisted file, and the boundary it sits on the right side
+         * of. SPEC 8.3.9's rule is about requests "derived from user-supplied
+         * configuration"; `doctor` opens a socket to two **hard-coded** hosts
+         * — `mailpit` and `phpmyadmin` — to assert SPEC 8.1.3, that neither is
+         * reachable in production. No user input reaches it, there is no URL,
+         * and it reads no bytes.
+         *
+         * Stated rather than quietly skipped, because an allowlist that grows
+         * by one legitimate case per phase stops being a gate. If a second
+         * entry is ever proposed, the question to ask is whether its
+         * destination can be influenced by anything a tenant controls - and if
+         * it can, the answer is the egress client, not this list.
+         */
+        $fixedHostLivenessProbe = ['app/Console/Commands/DoctorCommand.php'];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            if (str_starts_with($relative, 'app/Egress/') || str_starts_with($relative, 'app/Providers/')) {
+                continue;
+            }
+
+            if (in_array($relative, $fixedHostLivenessProbe, true)) {
+                continue;
+            }
+
+            $source = $this->code($file);
+
+            foreach ($mechanisms as $needle => $what) {
+                if (str_contains($source, $needle)) {
+                    $offenders[] = $relative.' '.$what;
+                }
+            }
+
+            // A URL handed to a stream function, in either quoting style.
+            if (preg_match('/(file_get_contents|fopen|readfile|simplexml_load_file)\s*\(\s*[\'"]https?:/', $source) === 1) {
+                $offenders[] = $relative.' fetches a URL through a stream function';
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'only App\Egress may make an outbound request (SPEC 8.3.9): '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 Nothing in the application stands the egress address policy down.
+     *
+     * `EgressOptions::$enforceAddressPolicy` exists so that the redirect and
+     * byte-cap controls can be proven against a **running** loopback origin -
+     * SPEC 18.18's lesson from Phase 04, that a config asserted only against a
+     * constant is a config nobody has run. The flag is a test affordance, and
+     * this is what keeps it one.
+     *
+     * It is deliberately NOT reachable from the environment: SPEC 20.4's
+     * invariant is that no security control sits behind a flag that defaults
+     * open, and the cheapest way to honour that is to have no flag an operator
+     * can reach. `EgressConfigurationTest` asserts the shipped config has none.
+     */
+    public function test_nothing_in_the_application_disables_the_egress_address_policy(): void
+    {
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+            $source = $this->code($file);
+
+            if (preg_match('/enforceAddressPolicy\s*:\s*false/', $source) === 1) {
+                $offenders[] = $relative.' passes enforceAddressPolicy: false';
+            }
+
+            if (preg_match('/[\'"]enforce_address_policy[\'"]\s*=>\s*false/', $source) === 1) {
+                $offenders[] = $relative.' configures enforce_address_policy => false';
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'the egress address policy may not be disabled in application code (SPEC 8.3.9): '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 Every log channel redacts secrets (SPEC 8.5.21).
+     *
+     * Phase 05's exit criterion is "no token appears in any log, at any log
+     * level". The level is the easy half - a Monolog processor runs on every
+     * record a channel accepts. The criterion is lost by a **channel** being
+     * added six phases from now for a new deployment profile, by somebody who
+     * has never read `App\Credentials\SecretRedactor`.
+     *
+     * `stack` is exempt because it delegates to the channels it names, and
+     * `null` because it discards. Everything else writes somewhere.
+     */
+    public function test_every_log_channel_redacts_secrets(): void
+    {
+        /** @var array<string, mixed> $channels */
+        $channels = (array) config('logging.channels');
+        $missing = [];
+
+        foreach ($channels as $name => $channel) {
+            if (in_array($name, ['stack', 'null'], true)) {
+                continue;
+            }
+
+            $taps = is_array($channel) ? (array) ($channel['tap'] ?? []) : [];
+
+            if (! in_array(RedactSecrets::class, $taps, true)) {
+                $missing[] = (string) $name;
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $missing,
+            'log channels without the SPEC 8.5.21 redaction tap: '.implode(', ', $missing),
+        );
+    }
+
+    /**
+     * Every `git_url` case in the abuse corpus names an identifier
+     * `App\Source\SourceRejection` actually carries.
+     *
+     * The corpus is the commitment Phase 00 made before any of this code
+     * existed; this is what stops the implementation quietly choosing
+     * different words. Cases that predate Phase 05 say `reject` rather than an
+     * identifier and are skipped - the corpus README records why they were
+     * restated rather than edited.
+     */
+    public function test_the_corpus_git_url_expectations_name_real_rejections(): void
+    {
+        /** @var array{cases: list<array<string, mixed>>} $corpus */
+        $corpus = json_decode(
+            (string) file_get_contents(base_path('tests/Fixtures/AbuseCorpus/corpus.json')),
+            true,
+            512,
+            JSON_THROW_ON_ERROR,
+        );
+
+        $known = array_map(
+            static fn (SourceRejection $case): string => $case->value,
+            SourceRejection::cases(),
+        );
+
+        $unknown = [];
+        $named = 0;
+
+        foreach ($corpus['cases'] as $case) {
+            if (($case['category'] ?? null) !== 'git_url') {
+                continue;
+            }
+
+            $expect = (string) ($case['expect'] ?? '');
+
+            if ($expect === 'reject') {
+                continue;
+            }
+
+            $named++;
+
+            if (! in_array($expect, $known, true)) {
+                $unknown[] = $case['id'].' expects '.$expect;
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $unknown,
+            'corpus cases expecting an identifier no SourceRejection carries: '.implode('; ', $unknown),
+        );
+
+        $this->assertGreaterThanOrEqual(9, $named, 'Phase 05 appended nine git_url cases naming an identifier');
     }
 }

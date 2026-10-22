@@ -5,6 +5,7 @@ declare(strict_types=1);
 // SPDX-FileCopyrightText: 2026 The DocUp contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use App\Logging\RedactSecrets;
 use Monolog\Handler\NullHandler;
 use Monolog\Handler\StreamHandler;
 use Monolog\Handler\SyslogUdpHandler;
@@ -57,6 +58,24 @@ return [
 
     'channels' => [
 
+        /*
+    |--------------------------------------------------------------------------
+    | 🛑 Every channel redacts secrets (SPEC 8.5.21, Phase 05)
+    |--------------------------------------------------------------------------
+    | Phase 05's exit criterion is "no token appears in any log, at any log
+    | level". The level is the easy half - Monolog applies a processor to every
+    | record a channel accepts, whatever its level. The hard half is the
+    | CHANNEL: the criterion is lost not by somebody forgetting a level but by
+    | a channel being added for a new deployment profile six phases from now,
+    | by somebody who has never read this file.
+    |
+    | So `ArchitectureTest::test_every_log_channel_redacts_secrets` fails CI
+    | for any channel declared below without the tap. `stack` is exempt because
+    | it delegates to the channels it names, `null` because it discards, and
+    | `emergency` because Laravel builds it without consulting taps - it is
+    | declared there anyway so the intent survives a framework change.
+    */
+
         'stack' => [
             'driver' => 'stack',
             'channels' => explode(',', (string) env('LOG_STACK', 'single')),
@@ -64,6 +83,7 @@ return [
         ],
 
         'single' => [
+            'tap' => [RedactSecrets::class],
             'driver' => 'single',
             'path' => storage_path('logs/laravel.log'),
             'level' => env('LOG_LEVEL', 'debug'),
@@ -71,6 +91,7 @@ return [
         ],
 
         'daily' => [
+            'tap' => [RedactSecrets::class],
             'driver' => 'daily',
             'path' => storage_path('logs/laravel.log'),
             'level' => env('LOG_LEVEL', 'debug'),
@@ -79,6 +100,7 @@ return [
         ],
 
         'monthly' => [
+            'tap' => [RedactSecrets::class],
             'driver' => 'monthly',
             'path' => storage_path('logs/laravel.log'),
             'level' => env('LOG_LEVEL', 'debug'),
@@ -87,6 +109,7 @@ return [
         ],
 
         'slack' => [
+            'tap' => [RedactSecrets::class],
             'driver' => 'slack',
             'url' => env('LOG_SLACK_WEBHOOK_URL'),
             'username' => env('LOG_SLACK_USERNAME', env('APP_NAME', 'Laravel')),
@@ -96,6 +119,7 @@ return [
         ],
 
         'papertrail' => [
+            'tap' => [RedactSecrets::class],
             'driver' => 'monolog',
             'level' => env('LOG_LEVEL', 'debug'),
             'handler' => env('LOG_PAPERTRAIL_HANDLER', SyslogUdpHandler::class),
@@ -108,6 +132,7 @@ return [
         ],
 
         'stderr' => [
+            'tap' => [RedactSecrets::class],
             'driver' => 'monolog',
             'level' => env('LOG_LEVEL', 'debug'),
             'handler' => StreamHandler::class,
@@ -119,6 +144,7 @@ return [
         ],
 
         'syslog' => [
+            'tap' => [RedactSecrets::class],
             'driver' => 'syslog',
             'level' => env('LOG_LEVEL', 'debug'),
             'facility' => env('LOG_SYSLOG_FACILITY', LOG_USER),
@@ -126,6 +152,7 @@ return [
         ],
 
         'errorlog' => [
+            'tap' => [RedactSecrets::class],
             'driver' => 'errorlog',
             'level' => env('LOG_LEVEL', 'debug'),
             'replace_placeholders' => true,
@@ -137,6 +164,7 @@ return [
         ],
 
         'emergency' => [
+            'tap' => [RedactSecrets::class],
             'path' => storage_path('logs/laravel.log'),
         ],
 

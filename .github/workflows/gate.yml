@@ -57,7 +57,10 @@ jobs:
           # ADR 0007: the floor is 8.4.1. Dom\HTMLDocument is a language-level
           # requirement of the section extractor and is absent in 8.3.
           php-version: '8.4'
-          extensions: pdo_mysql, intl, zip, gd, bcmath, sodium, pcntl
+          # curl is explicit from Phase 05: the SPEC 8.3.9 egress client owns
+          # its own cURL handle rather than inheriting Guzzle's defaults, so
+          # ext-curl is a composer requirement and not an incidental.
+          extensions: pdo_mysql, intl, zip, gd, bcmath, sodium, pcntl, curl
           coverage: none
           tools: composer:v2
 
@@ -258,7 +261,10 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
-          extensions: pdo_mysql, intl, zip, gd, bcmath, sodium, pcntl
+          # curl is explicit from Phase 05: the SPEC 8.3.9 egress client owns
+          # its own cURL handle rather than inheriting Guzzle's defaults, so
+          # ext-curl is a composer requirement and not an incidental.
+          extensions: pdo_mysql, intl, zip, gd, bcmath, sodium, pcntl, curl
           coverage: none
           tools: composer:v2
 

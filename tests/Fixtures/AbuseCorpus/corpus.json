@@ -320,6 +320,61 @@
     },
 
     {
+      "id": "git_url-009", "category": "git_url", "defends": "8.3.4",
+      "input": "ext::sh -c id",
+      "expect": "git_url.remote_helper_forbidden",
+      "note": "🛑 exit criterion 1 of 5. git's <transport>::<address> syntax runs git-remote-ext, which runs the rest as a shell command. Must be refused on the RAW string: parse_url reports no scheme for it, so a check that waited for a parsed scheme would never fire"
+    },
+    {
+      "id": "git_url-010", "category": "git_url", "defends": "8.3.4",
+      "input": "file:///etc/passwd",
+      "expect": "git_url.local_path_forbidden",
+      "note": "🛑 exit criterion 2 of 5. Local file disclosure. Distinct from git_url-009 because execution and disclosure are different capabilities and an operator triaging an alert needs to know which fired"
+    },
+    {
+      "id": "git_url-011", "category": "git_url", "defends": "8.3.4",
+      "input": "https://169.254.169.254/latest/meta-data/repo.git",
+      "expect": "git_url.metadata_address_denied",
+      "note": "🛑 exit criterion 3 of 5. Cloud instance metadata, which on most providers returns role credentials to an unauthenticated GET. Its own identifier rather than link_local, because 169.254.169.254 is a credential-theft primitive and 169.254.0.0/16 is a misconfiguration"
+    },
+    {
+      "id": "git_url-012", "category": "git_url", "defends": "8.3.4",
+      "input": "a TTL-0 DNS name answering 93.184.216.34 then 127.0.0.1",
+      "expect": "git_url.dns_rebind_detected",
+      "note": "🛑 exit criterion 4 of 5. Distinct from the address identifiers: those fire on the FIRST answer, this one on a second answer that disagrees with it. Resolve-then-pin already makes the second answer unusable; this turns a name that tried into a refusal rather than a request quietly served from the pinned address"
+    },
+    {
+      "id": "git_url-013", "category": "git_url", "defends": "8.3.4",
+      "input": "an HTTPS origin answering 302 Location: http://10.0.0.1/internal",
+      "expect": "git_url.redirect_refused",
+      "note": "🛑 exit criterion 5 of 5. Refused on the 3xx itself, before the target is examined: re-validating after following is the shape of every SSRF bypass, where the second request is made by a layer that has forgotten the first one's constraints"
+    },
+    {
+      "id": "git_url-014", "category": "git_url", "defends": "8.3.4",
+      "input": "https://[::ffff:169.254.169.254]/repo.git",
+      "expect": "git_url.metadata_address_denied",
+      "note": "IPv4-mapped IPv6. The same metadata address, spelled so that a deny list written in dotted quads does not recognise it"
+    },
+    {
+      "id": "git_url-015", "category": "git_url", "defends": "8.3.4",
+      "input": "https://[64:ff9b::a00:1]/repo.git",
+      "expect": "git_url.private_address_denied",
+      "note": "NAT64 well-known prefix embedding 10.0.0.1; reaches RFC1918 through any NAT64 gateway"
+    },
+    {
+      "id": "git_url-016", "category": "git_url", "defends": "8.3.3",
+      "input": "https://x-access-token:ghp_0123456789abcdefghijklmnopqrstuvwxyz@github.com/acme/docs.git",
+      "expect": "git_url.credentials_in_url",
+      "note": "A token in the URL authority. Refused, not stripped: §8.5.7 supplies credentials through a file descriptor precisely so they never appear in a remote URL, and silently tidying it would hide from the operator that the token is already in their shell history"
+    },
+    {
+      "id": "git_url-017", "category": "git_url", "defends": "8.3.5",
+      "input": "a repository requesting recursive submodule cloning",
+      "expect": "git_url.submodule_recursion_forbidden",
+      "note": "CVE-2025-48384 and CVE-2023-22490 are both reached by recursing into a submodule the operator never named. Recursion is not a setting with a safe default; GitSafety::submoduleArguments refuses the request loudly rather than silently doing the safe thing and leaving the caller believing recursion happened"
+    },
+
+    {
       "id": "saml-001", "category": "saml", "defends": "8.12.18",
       "builder": "unsigned", "expect": "reject", "note": "no signature at all"
     },

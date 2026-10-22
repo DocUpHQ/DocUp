@@ -141,10 +141,35 @@ final class SchemaConformanceTest extends TestCase
         // Laravel's queue driver reads those integer keys directly.
         $frameworkTables = ['jobs', 'job_batches', 'failed_jobs', 'migrations', 'sessions'];
 
+        /*
+         * 🛑 Columns that end in `_id` and are **not DocUp identifiers**.
+         *
+         * §9.1.1 governs "every primary and foreign key" — the keys DocUp
+         * issues, where UUIDv7's time ordering is the index-locality property
+         * the whole decision rests on (ADR 0006). A column holding a *foreign
+         * system's* identifier is data, not a key: ADR 0009 verified that the
+         * five providers of §8.3.1 issue an `int64` or a braced UUIDv4, so
+         * `BINARY(16)` is not merely inconvenient here but impossible, and the
+         * locality argument does not apply to a value we did not mint.
+         *
+         * Exempted by exact `table.column`, never by pattern, so adding one is
+         * a visible act with a reviewer. The matching rule is deliberately
+         * crude and this list is deliberately short: if it ever grows past a
+         * handful, the question to ask is whether the naming convention is
+         * wrong rather than whether the test is.
+         */
+        $foreignIdentifierColumns = [
+            'repositories.provider_repo_id',    // §18.27 / ADR 0009: the provider's own id
+        ];
+
         $wrong = [];
 
         foreach ($rows as $row) {
             if (in_array($row->TABLE_NAME, $frameworkTables, true)) {
+                continue;
+            }
+
+            if (in_array($row->TABLE_NAME.'.'.$row->COLUMN_NAME, $foreignIdentifierColumns, true)) {
                 continue;
             }
 
