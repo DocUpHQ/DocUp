@@ -39,6 +39,50 @@ declare(strict_types=1);
 | file pins only what must never be inherited.
 */
 
+/*
+|--------------------------------------------------------------------------
+| Parallel testing is not supported yet
+|--------------------------------------------------------------------------
+|
+| 🛑 Refused loudly rather than left to fail strangely.
+|
+| `pest --parallel` gives each process its own database (docup_test_1,
+| docup_test_2, …). Two things break:
+|
+|  1. This file pins DB_DATABASE, so all 28 processes would share one database
+|     and interfere with each other. Observed: 113 failures that look like
+|     application bugs and are not.
+|  2. Even token-aware, the per-process databases cannot be hardened. The
+|     §8.22.1 append-only triggers need SUPER while binary logging is on, which
+|     the application's database user must never hold — so
+|     tests/Feature/AuditAppendOnlyTest.php would fail on every parallel
+|     database, or worse, pass against an unhardened schema and prove nothing.
+|
+| CLAUDE.md rule 5 asks for --parallel on full-suite runs. It is not available
+| until the hardening can be applied per test database, which needs a
+| privileged setup hook. Recorded in the build log as owed; the serial suite is
+| the supported run.
+*/
+if (getenv('TEST_TOKEN') !== false || getenv('LARAVEL_PARALLEL_TESTING') !== false) {
+    fwrite(STDERR, <<<'MESSAGE'
+
+        Parallel testing is not supported in DocUp yet.
+
+        Each parallel process gets its own database, and the SPEC 8.22.1
+        append-only triggers cannot be installed on one: CREATE TRIGGER needs
+        SUPER while binary logging is enabled, and the application user must
+        never hold it. A parallel run would either fail on
+        AuditAppendOnlyTest or silently test an unhardened audit log.
+
+        Run the suite serially:
+
+            ./vendor/bin/pest
+
+        MESSAGE);
+
+    exit(1);
+}
+
 $pinned = [
     'APP_ENV' => 'testing',
     'DB_CONNECTION' => 'mysql',
