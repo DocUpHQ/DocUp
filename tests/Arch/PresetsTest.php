@@ -59,6 +59,14 @@ arch()->preset()->laravel()
         // RejectionCode, so a shared App\Exceptions would import the artifact
         // namespace into a namespace everything else depends on.
         'App\Artifacts',
+        // And App\Serving, third time for the same reason. §9.4 names
+        // app/Serving as a level-9 namespace because "a type error in request
+        // resolution is a security bug rather than a crash" — so HostKind and
+        // RejectionReason belong inside it, not collected under App\Enums by
+        // the fact that they are enums. RejectionReason's values also reach
+        // `X-DocUp-Resolver` and operator alerting, which is exactly the kind
+        // of contract the stricter analysis exists for.
+        'App\Serving',
     ]);
 
 arch()->preset()->strict()
@@ -128,6 +136,25 @@ arch()
 arch()
     ->expect('App\Artifacts')
     ->toUseStrictTypes();
+
+/*
+| 🛑 And the same restatement for App\Serving. §8.9.1 requires the resolver to
+| have "no framework dependencies", which is a stronger claim than any preset
+| checks, so these are the parts a preset can still hold it to.
+*/
+arch()
+    ->expect('App\Serving')
+    ->toUseStrictTypes();
+
+arch()
+    ->expect('App\Serving')
+    ->toBeFinal()
+    ->ignoring([
+        // PHP enums are implicitly final and the keyword is a syntax error on
+        // one, so the rule is inapplicable rather than relaxed.
+        'App\Serving\HostKind',
+        'App\Serving\RejectionReason',
+    ]);
 
 arch()
     ->expect('App\Artifacts')
