@@ -186,28 +186,49 @@ final class Resolver
     }
 
     /**
-     * Finish the grammar: the component mount, then the file.
+     * §7.3's fifth step: the component mount, longest match on a boundary.
      *
-     * @param  array<string, array{sha256: string, bytes: int, content_type: string}>  $manifestFiles
-     *                                                                                                 the published manifest's `files` map, keyed by path
-     *                                                                                                 relative to `builds/{build_id}/`
+     * Separate from {@see self::resolveFile()} because each mount resolves to
+     * its own build and therefore its own file manifest — see {@see MountMatch}
+     * for what that fixed. The caller loads the matched build's manifest
+     * between the two calls, which is also where the single storage read
+     * belongs: visible, rather than hidden inside a resolver that §8.9.1
+     * requires to make none.
+     *
      * @param  list<array{mount_path: string, build_id: string|null}>  $mounts
      *                                                                          the version manifest's component mounts
      * @param  string  $remainder  what {@see self::resolveRoute()} left over
      */
-    public function resolveFile(array $mounts, array $manifestFiles, string $remainder): FileOutcome
+    public function resolveMount(array $mounts, string $remainder): ?MountMatch
     {
-        $componentMount = $this->longestMount($mounts, $remainder);
+        $mount = $this->longestMount($mounts, $remainder);
 
-        if ($componentMount === null) {
-            return FileOutcome::rejected(RejectionReason::MountNotFound);
+        if ($mount === null) {
+            return null;
         }
 
-        $within = $this->strip($remainder, $componentMount['mount_path']);
+        $within = $this->strip($remainder, $mount['mount_path']);
 
         if ($within === null) {
-            return FileOutcome::rejected(RejectionReason::MountNotFound);
+            // longestMount() matched on a boundary, so this cannot happen for
+            // the prefix it returned. Kept rather than assumed, because the
+            // alternative is two methods trusting each other about boundaries.
+            return null;
         }
+
+        return new MountMatch($mount['mount_path'], $mount['build_id'], $within);
+    }
+
+    /**
+     * §7.3's last step: the file, from the matched component's manifest.
+     *
+     * @param  array<string, array{sha256: string, bytes: int, content_type: string}>  $manifestFiles
+     *                                                                                                 the matched build's manifest `files` map, keyed by
+     *                                                                                                 path relative to `builds/{build_id}/`
+     */
+    public function resolveFile(array $manifestFiles, MountMatch $match): FileOutcome
+    {
+        $within = $match->within;
 
         /*
          * §8.9.7: "a directory path MUST resolve `index.html` and 302 to the
@@ -220,10 +241,10 @@ final class Resolver
          * every relative link in the document resolve one level too high.
          */
         if ($within === '' || str_ends_with($within, '/')) {
-            $candidate = $within.'index.html';
+            $candidate = 'html/'.$within.'index.html';
 
-            if (isset($manifestFiles['html/'.$candidate])) {
-                return FileOutcome::file('html/'.$candidate, $manifestFiles['html/'.$candidate]);
+            if (isset($manifestFiles[$candidate])) {
+                return FileOutcome::file($candidate, $manifestFiles[$candidate], $match->buildId);
             }
 
             return FileOutcome::rejected(RejectionReason::FileNotFound);
@@ -232,7 +253,7 @@ final class Resolver
         $key = 'html/'.$within;
 
         if (isset($manifestFiles[$key])) {
-            return FileOutcome::file($key, $manifestFiles[$key]);
+            return FileOutcome::file($key, $manifestFiles[$key], $match->buildId);
         }
 
         // Not a file. If it is a directory — something in the manifest lives

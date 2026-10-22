@@ -155,6 +155,8 @@ arch()
         // rather than by namespace so that adding an enum here is a deliberate
         // act: the suite fails loudly until the new name is added, which is
         // cheaper than a blanket exemption that would also excuse a class.
+        // An interface; the final rule does not apply.
+        'App\Serving\ArtifactHandoff',
         'App\Serving\FileKind',
         'App\Serving\HostKind',
         'App\Serving\RejectionReason',

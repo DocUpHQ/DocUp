@@ -21,7 +21,9 @@ final class FileOutcome
 {
     /**
      * @param  string|null  $key  the manifest path, which is also the storage
-     *                            key relative to `builds/{build_id}/`
+     *                            key relative to `builds/{build_id}/` — the
+     *                            prefix itself is built by the artifact store
+     *                            and nowhere else (§8.8.1)
      * @param  array{sha256: string, bytes: int, content_type: string}|null  $entry
      * @param  string|null  $directoryRedirect  the slash form to 302 to (§8.9.7)
      */
@@ -29,16 +31,20 @@ final class FileOutcome
         public readonly FileKind $kind,
         public readonly ?string $key = null,
         public readonly ?array $entry = null,
+        public readonly ?string $buildId = null,
         public readonly ?string $directoryRedirect = null,
         public readonly ?RejectionReason $reason = null,
     ) {}
 
     /**
      * @param  array{sha256: string, bytes: int, content_type: string}  $entry
+     * @param  string|null  $buildId  the build whose prefix the key sits under;
+     *                                null when the manifest named none, which
+     *                                §10.4 permits and which serves nothing
      */
-    public static function file(string $key, array $entry): self
+    public static function file(string $key, array $entry, ?string $buildId): self
     {
-        return new self(FileKind::File, key: $key, entry: $entry);
+        return new self(FileKind::File, key: $key, entry: $entry, buildId: $buildId);
     }
 
     /** §8.9.7: a directory without its trailing slash. */

@@ -8,7 +8,9 @@ declare(strict_types=1);
 namespace Tests\Feature\Serving;
 
 use App\Serving\FileKind;
+use App\Serving\FileOutcome;
 use App\Serving\HostKind;
+use App\Serving\MountMatch;
 use App\Serving\RejectionReason;
 use App\Serving\Resolver;
 use App\Serving\RouteKind;
@@ -635,9 +637,31 @@ final class ResolverTest extends TestCase
         return $files;
     }
 
+    /**
+     * Both halves of the file step, as the controller sequences them.
+     *
+     * A helper rather than two calls in every test, because the sequencing is
+     * the controller's job and these tests are about the answers. The one thing
+     * it deliberately does NOT hide is that the manifest belongs to the matched
+     * mount's build — see {@see MountMatch}.
+     *
+     * @param  list<array{mount_path: string, build_id: string|null}>  $mounts
+     * @param  array<string, array{sha256: string, bytes: int, content_type: string}>  $manifestFiles
+     */
+    private function resolveFile(array $mounts, array $manifestFiles, string $remainder): FileOutcome
+    {
+        $match = $this->resolver->resolveMount($mounts, $remainder);
+
+        if ($match === null) {
+            return FileOutcome::rejected(RejectionReason::MountNotFound);
+        }
+
+        return $this->resolver->resolveFile($manifestFiles, $match);
+    }
+
     public function test_it_resolves_a_file_from_the_manifest(): void
     {
-        $outcome = $this->resolver->resolveFile(
+        $outcome = $this->resolveFile(
             [['mount_path' => '', 'build_id' => 'build-1']],
             $this->files('html/index.html', 'html/guide.html'),
             'guide.html',
@@ -651,7 +675,7 @@ final class ResolverTest extends TestCase
     /** §8.9.7: "a directory path MUST resolve `index.html`". */
     public function test_a_slash_terminated_path_resolves_index_html(): void
     {
-        $outcome = $this->resolver->resolveFile(
+        $outcome = $this->resolveFile(
             [['mount_path' => '', 'build_id' => 'build-1']],
             $this->files('html/index.html', 'html/deep/index.html'),
             'deep/',
@@ -663,7 +687,7 @@ final class ResolverTest extends TestCase
 
     public function test_an_empty_remainder_resolves_the_root_index(): void
     {
-        $outcome = $this->resolver->resolveFile(
+        $outcome = $this->resolveFile(
             [['mount_path' => '', 'build_id' => 'build-1']],
             $this->files('html/index.html'),
             '',
@@ -675,7 +699,7 @@ final class ResolverTest extends TestCase
     /** §8.9.7: "and 302 to the slash form". */
     public function test_a_directory_without_a_slash_is_a_redirect(): void
     {
-        $outcome = $this->resolver->resolveFile(
+        $outcome = $this->resolveFile(
             [['mount_path' => '', 'build_id' => 'build-1']],
             $this->files('html/index.html', 'html/deep/index.html'),
             'deep',
@@ -688,7 +712,7 @@ final class ResolverTest extends TestCase
 
     public function test_a_missing_file_is_a_404_from_the_manifest_alone(): void
     {
-        $outcome = $this->resolver->resolveFile(
+        $outcome = $this->resolveFile(
             [['mount_path' => '', 'build_id' => 'build-1']],
             $this->files('html/index.html'),
             'nothing/here.html',
@@ -700,7 +724,7 @@ final class ResolverTest extends TestCase
 
     public function test_a_directory_form_with_no_index_is_a_404(): void
     {
-        $outcome = $this->resolver->resolveFile(
+        $outcome = $this->resolveFile(
             [['mount_path' => '', 'build_id' => 'build-1']],
             $this->files('html/deep/guide.html'),
             'deep/',
@@ -719,7 +743,7 @@ final class ResolverTest extends TestCase
 
         // The component mount is consumed, so the manifest key is relative to
         // the component rather than to the version.
-        $outcome = $this->resolver->resolveFile($mounts, $this->files('html/ref.html'), 'api/v2/ref.html');
+        $outcome = $this->resolveFile($mounts, $this->files('html/ref.html'), 'api/v2/ref.html');
 
         $this->assertSame('html/ref.html', $outcome->key);
     }
@@ -733,14 +757,14 @@ final class ResolverTest extends TestCase
 
         // `apiary/x.html` must fall to the root mount, so the key keeps the
         // full path rather than having `api` stripped from it.
-        $outcome = $this->resolver->resolveFile($mounts, $this->files('html/apiary/x.html'), 'apiary/x.html');
+        $outcome = $this->resolveFile($mounts, $this->files('html/apiary/x.html'), 'apiary/x.html');
 
         $this->assertSame('html/apiary/x.html', $outcome->key);
     }
 
     public function test_a_path_covered_by_no_component_mount_is_rejected(): void
     {
-        $outcome = $this->resolver->resolveFile(
+        $outcome = $this->resolveFile(
             [['mount_path' => 'api', 'build_id' => 'api']],
             $this->files('html/x.html'),
             'guides/x.html',

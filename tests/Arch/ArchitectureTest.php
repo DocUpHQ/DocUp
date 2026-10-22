@@ -316,6 +316,14 @@ final class ArchitectureTest extends TestCase
      * if nothing outside App\Artifacts calls put(), nothing outside can store a
      * byte without going through the ingestor.
      *
+     * 🛑 **Writes, not references.** The first version forbade naming the store
+     * at all outside the namespace, and Phase 04 showed that to be wrong rather
+     * than merely strict: the serving path legitimately READS `manifest.json`
+     * through the store, which is the thing §8.4.18 requires it to do instead of
+     * probing storage per request. §8.8.2's rule is about ingest — "no caller
+     * bypasses it" — and a read bypasses nothing. So the assertion is on the
+     * mutating calls, which is where the requirement actually lives.
+     *
      * The reason the specification asks for a test rather than a convention is
      * that a second ingest path is not a duplication bug, it is an unvalidated
      * one. It gets written in a hurry, for an import or a migration, by somebody
@@ -334,27 +342,57 @@ final class ArchitectureTest extends TestCase
                 continue;
             }
 
+            /*
+             * A service provider must name the drivers to bind them, and
+             * binding a class is not calling put(). Allowlisted by path rather
+             * than by a comment marker, so the exemption cannot be claimed by
+             * writing the right words somewhere else.
+             */
+            if (str_starts_with($relative, 'app/Providers/')) {
+                continue;
+            }
+
             $source = $this->code($file);
 
-            // The store is reached either through the interface or through a
-            // concrete driver. Naming any of them outside the namespace is the
-            // thing being refused, because a reference is what a call needs.
-            foreach (['ArtifactStore', 'LocalArtifactStore', 'S3ArtifactStore', 'ArtifactIngestor'] as $symbol) {
-                if (! str_contains($source, $symbol)) {
-                    continue;
-                }
+            /*
+             * 🛑 Two signals, not one. `->put(` alone matched
+             * `$session->put()` and `Cache::put()` — a needle that flags the
+             * session handler for writing a session is a needle nobody will
+             * keep. So a file offends only when it BOTH names an artifact store
+             * type and calls a mutating method on something: that pairing is
+             * what a write through the store actually looks like, and a reader
+             * like ManifestReader names the type and calls neither.
+             *
+             * The class name rather than a formal import, because
+             * `app(ArtifactStore::class)` reaches a store without importing it.
+             */
+            $namesAStore = false;
 
-                /*
-                 * A service provider must name these to bind them, and that is
-                 * the one legitimate reference: binding a class is not calling
-                 * put(). Allowlisted by path rather than by a comment marker, so
-                 * the exemption cannot be claimed by writing the right words.
-                 */
-                if (str_starts_with($relative, 'app/Providers/')) {
-                    continue;
-                }
+            foreach (['ArtifactStore', 'LocalArtifactStore', 'S3ArtifactStore'] as $type) {
+                if (str_contains($source, $type)) {
+                    $namesAStore = true;
 
-                $offenders[] = $relative.' references '.$symbol;
+                    break;
+                }
+            }
+
+            if ($namesAStore) {
+                foreach (['->put(', '->deletePrefix('] as $call) {
+                    if (str_contains($source, $call)) {
+                        $offenders[] = $relative.' names a store and calls '.$call;
+                    }
+                }
+            }
+
+            /*
+             * Constructing a driver or the ingestor outside the provider is how
+             * a caller gets something to write with in the first place, so it is
+             * refused on its own without needing a second signal.
+             */
+            foreach (['new LocalArtifactStore', 'new S3ArtifactStore', 'new ArtifactIngestor'] as $construction) {
+                if (str_contains($source, $construction)) {
+                    $offenders[] = $relative.' constructs '.$construction;
+                }
             }
         }
 
@@ -437,6 +475,119 @@ final class ArchitectureTest extends TestCase
             [],
             $unknown,
             'corpus cases expecting an identifier no RejectionCode carries: '.implode('; ', $unknown),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 9.3.2: "An architecture test MUST forbid any code path setting a
+     * public CDN cache directive outside the single three-way public check
+     * (project public ∧ version public ∧ rule publicly cacheable)."
+     *
+     * This is that test. The failure it guards is the worst one in the serving
+     * path: a private document handed to a shared cache. That does not look
+     * like a bug from inside — the response is a correct 200 with correct
+     * content — and it is discovered by a reader being served somebody else's
+     * private page.
+     *
+     * Two things are asserted: nothing outside CachePolicy may construct a
+     * publicly cacheable set of directives, and nothing outside CacheDirectives
+     * may write a public directive literal. The first catches a caller who
+     * found the value object; the second catches a header set by hand.
+     *
+     * 🛑 It does NOT forbid naming `CDN-Cache-Control`. The first version did,
+     * and it flagged `ArtifactHandoff::PRESERVED_HEADERS` — which lists the
+     * header precisely so nginx re-emits it. Forbidding the name would have
+     * meant allowlisting the one file that must mention it, and an allowlist
+     * that grows by one legitimate case each phase stops being a gate. What
+     * §9.3.2 forbids is *setting a public directive*, and that is what is
+     * checked.
+     */
+    public function test_only_the_cache_policy_may_emit_a_public_cdn_directive(): void
+    {
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            // The policy and the value object it constructs are the single
+            // permitted site. Allowlisted by path, so the exemption cannot be
+            // claimed by writing the right words somewhere else.
+            if (in_array($relative, ['app/Serving/CachePolicy.php', 'app/Serving/CacheDirectives.php'], true)) {
+                continue;
+            }
+
+            $source = $this->code($file);
+
+            if (str_contains($source, 'publiclyCacheable')) {
+                $offenders[] = $relative.' constructs publicly cacheable directives';
+            }
+
+            // The literal a hand-written public directive would have to contain.
+            if (preg_match('/[\'"]public,\s*max-age/', $source) === 1) {
+                $offenders[] = $relative.' writes a public cache directive literal';
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'only CachePolicy may decide public cacheability (SPEC 9.3.2): '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 4.3/2 and SPEC 8.9.8: documentation bytes never traverse PHP.
+     *
+     * Asserted as the absence of a file read on the serving path. The handoff
+     * exists so that PHP authorises and the edge moves bytes; a
+     * `file_get_contents` or a `readfile` in App\Serving would be the
+     * architecture quietly becoming something else, and SPEC 9.2's flat-memory
+     * budget would go with it.
+     *
+     * `file_get_contents` IS permitted in the serving TESTS, which read
+     * deploy/nginx.conf to assert its contents — that is configuration, not an
+     * artifact, and the tests are not the serving path.
+     */
+    public function test_nothing_on_the_serving_path_reads_a_file(): void
+    {
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            if (! str_starts_with($relative, 'app/Serving/')) {
+                continue;
+            }
+
+            $source = $this->code($file);
+
+            /*
+             * 🛑 `file(` is deliberately NOT in this list, and the reason is
+             * worth keeping: as a bare substring it matches
+             * `FileOutcome::file(` and flagged both the resolver and the value
+             * object it returns. PHP's own `file()` is vanishingly rare and the
+             * needle for it is unusable, so the list names the readers that
+             * actually move bytes.
+             */
+            foreach ([
+                'file_get_contents',
+                'file_put_contents',
+                'readfile',
+                'fpassthru',
+                'fread',
+                'fopen',
+                'SplFileObject',
+            ] as $reader) {
+                if (str_contains($source, $reader)) {
+                    $offenders[] = $relative.' uses '.$reader;
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'documentation bytes must not traverse PHP (SPEC 8.9.8): '.implode('; ', $offenders),
         );
     }
 }

@@ -17,19 +17,35 @@ use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Middleware\SubstituteBindings;
+use Illuminate\Support\Facades\Route;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
-        web: __DIR__.'/../routes/web.php',
         /*
-         * Registered with `then:` rather than `api:` so the prefix and the
-         * middleware group come from routes/api.php itself. Laravel's `api:`
-         * helper applies its own `api` prefix and `api` group, which would have
-         * produced /api/api/v3 and attached the stateless group to routes that
-         * already declare their own - SPEC 8.21.2's bearer authentication is
-         * ours, not the framework's.
+         * 🛑 `using:` rather than `web:` + `then:`, because the ORDER matters
+         * and Laravel has no route priority — only registration order.
+         *
+         * The documentation routes are domain-scoped (SPEC 8.1.4) and must be
+         * registered FIRST. With the dashboard first, its unconstrained `/` and
+         * Fortify's unconstrained `/login` matched on documentation hosts too:
+         * a reader asking a documentation host for `/` was redirected to the
+         * dashboard's login page, and `/login` inside a documentation tree would
+         * have served the dashboard's own form on the attacker-controlled
+         * origin SPEC 8.1.4 exists to keep separate. Registering the
+         * domain-scoped routes first costs nothing — they cannot match the
+         * dashboard host — and closes both.
+         *
+         * routes/api.php is required rather than passed as `api:` so its prefix
+         * and middleware come from the file. Laravel's `api:` helper applies its
+         * own `api` prefix and group, which would have produced /api/api/v3 and
+         * attached the stateless group to routes that declare their own —
+         * SPEC 8.21.2's bearer authentication is ours, not the framework's.
          */
-        then: function (): void {
+        using: function (): void {
+            require __DIR__.'/../routes/docs.php';
+
+            Route::middleware('web')->group(__DIR__.'/../routes/web.php');
+
             require __DIR__.'/../routes/api.php';
         },
         commands: __DIR__.'/../routes/console.php',
