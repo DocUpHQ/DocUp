@@ -77,7 +77,14 @@ final class ComposeFilesTest extends TestCase
 
         // SPEC 8.1.1: application, MySQL, Valkey, a queue worker and the egress
         // proxy, with no external service account required.
-        foreach (['app:', 'db:', 'cache:', 'runner:'] as $service) {
+        //
+        // 🛑 `worker` and `runner` are both here from Phase 06, and they are
+        // different things: `worker` is the queue worker in SPEC 11.2's app
+        // zone, holding the database credentials; `runner` is the sandbox
+        // broker in the runner zone, holding the container-runtime socket
+        // and no credentials at all. Phase 01 had one service called
+        // `runner` doing the first job, which is why the rename happened.
+        foreach (['app:', 'db:', 'cache:', 'worker:', 'runner:'] as $service) {
             $this->assertStringContainsString($service, $production);
         }
 
@@ -87,10 +94,12 @@ final class ComposeFilesTest extends TestCase
 
     /**
      * SPEC 8.5.13: the runner is a separate service from the application
-     * because when builds arrive it becomes the sole holder of the
-     * container-runtime socket, and no request-handling process may hold one.
-     * Keeping them separate from Phase 01 means that boundary is never
-     * retrofitted.
+     * because it is the sole holder of the container-runtime socket, and no
+     * request-handling process may hold one. Separate since Phase 01, so the
+     * boundary was never retrofitted — Phase 06 only had to fill it in.
+     *
+     * `RunnerIsolationTest` asserts what each side may hold; this asserts
+     * only that the two are distinct.
      */
     public function test_the_runner_is_a_separate_service_from_the_application(): void
     {

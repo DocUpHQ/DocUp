@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The build runner image (SPEC 8.5.13, SPEC 11.2's "runner" trust zone).
+#
+# 🛑 The application image plus a Docker client, and nothing else. The runner
+# runs DocUp's own code - it renders the fixed argv template and parses the
+# typed run specification - so sharing the application image keeps those two
+# implementations identical rather than merely similar. What makes it a
+# different trust zone is its ENVIRONMENT, not its contents: compose gives it
+# no DB_* variables and no APP_KEY, so it cannot read the database, cannot
+# open an envelope-encrypted credential, and cannot decrypt a session cookie.
+#
+# 🛑 The Docker CLI is here and NOT in the application image, deliberately.
+# SPEC 8.5.13: "No request-handling or queue-worker process MUST hold a
+# container-runtime socket." Keeping the client out of the app image means a
+# request-handling process could not use the socket even if one were mounted
+# into it by mistake - defence that survives a compose edit.
+
+FROM docup-app:latest AS base
+
+USER root
+
+# The client only. `docker-cli` is the CLI without the daemon, which is the
+# whole point: this container talks to the host's daemon over the socket and
+# must never be able to start one of its own.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+ && install -m 0755 -d /etc/apt/keyrings \
+ && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+ && chmod a+r /etc/apt/keyrings/docker.asc \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends docker-ce-cli \
+ && apt-get purge -y --auto-remove gnupg \
+ && rm -rf /var/lib/apt/lists/*
+
+# 🛑 Asserted rather than assumed, the same way the application image asserts
+# its extension set: an image that cannot reach the client it exists to run is
+# a container that starts cleanly and fails on its first job.
+RUN docker --version && test ! -S /var/run/docker.sock || true
+
+WORKDIR /app

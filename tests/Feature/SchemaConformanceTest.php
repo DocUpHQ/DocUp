@@ -160,6 +160,7 @@ final class SchemaConformanceTest extends TestCase
          */
         $foreignIdentifierColumns = [
             'repositories.provider_repo_id',    // §18.27 / ADR 0009: the provider's own id
+            'build_requests.delivery_id',       // §8.5.4: the provider's own webhook delivery id
         ];
 
         $wrong = [];

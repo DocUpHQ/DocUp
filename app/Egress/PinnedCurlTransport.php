@@ -148,7 +148,14 @@ final class PinnedCurlTransport implements Transport
         $ok = curl_exec($handle);
         $errno = curl_errno($handle);
         $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
-        curl_close($handle);
+
+        /*
+         * No `curl_close()`: deprecated in PHP 8.5 and a no-op since 8.0,
+         * where the handle became an object freed by refcount. Calling it
+         * emits a deprecation on every outbound request, which is noise in
+         * exactly the logs this phase spent effort keeping readable.
+         */
+        unset($handle);
 
         if ($exceededBody || $exceededHeaders) {
             throw new EgressRefused(EgressRejection::ResponseTooLarge, $host, ['pinned' => $pinnedAddress]);

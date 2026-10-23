@@ -6,6 +6,7 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\Serving\DocumentController;
+use App\Http\Controllers\Serving\ProvenanceController;
 use App\Http\Middleware\RejectNonCanonicalPath;
 use Illuminate\Support\Facades\Route;
 
@@ -61,6 +62,22 @@ foreach ($apexes as $index => $apex) {
     Route::domain('{docupHostLabel}.'.$apex)
         ->middleware([RejectNonCanonicalPath::class])
         ->group(function () use ($index): void {
+            /*
+             * SPEC 8.5.24's build provenance, at SPEC 20.2's reserved path.
+             *
+             * 🛑 Registered BEFORE the catch-all, and that ordering is the
+             * whole reason it works. SPEC 7.3 makes `/_/` reserved and
+             * unmountable, so the resolver refuses it — correctly — and a
+             * provenance route declared after `/{docupPath?}` would never be
+             * reached. The reserved namespace exists precisely so that routes
+             * like this one can be carved out of a grammar that otherwise
+             * owns every path.
+             */
+            Route::get('/_/provenance/{build}', [ProvenanceController::class, 'show'])
+                ->where('docupHostLabel', '[a-z0-9]([a-z0-9-]*[a-z0-9])?')
+                ->where('build', '[0-9a-fA-F-]{36}')
+                ->name('docs.provenance.'.$index);
+
             /*
              * One route for every documentation path. SPEC 7.3's grammar is the
              * resolver's, not the router's — a router pattern per versioning

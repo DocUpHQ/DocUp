@@ -46,6 +46,25 @@ final class Uuid
         return $bytes;
     }
 
+    /**
+     * {@see toBytes()}, returning null instead of throwing.
+     *
+     * For the boundary where a malformed identifier is a 404 rather than an
+     * error: a controller taking a UUID out of a URL should answer "no such
+     * thing" for `../../etc`, not raise. Added in Phase 06 for the §8.5.24
+     * provenance endpoint, which is the first route to take a raw UUID — and
+     * §8.2.2's "404, never 403" reasoning applies to malformed input for the
+     * same reason it applies to another tenant's row.
+     */
+    public static function tryToBytes(string $value): ?string
+    {
+        try {
+            return self::toBytes($value);
+        } catch (\InvalidArgumentException) {
+            return null;
+        }
+    }
+
     /** The canonical 36-character form for 16 raw bytes. Idempotent on canonical input. */
     public static function toText(string $value): string
     {

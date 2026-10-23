@@ -116,6 +116,30 @@ final class Build extends Model
         return $this->hasMany(BuildOutput::class);
     }
 
+    /**
+     * The §8.5.1 pinned sources, "recorded immutably on the build record".
+     *
+     * @return HasMany<BuildSource, $this>
+     */
+    public function sources(): HasMany
+    {
+        return $this->hasMany(BuildSource::class);
+    }
+
+    /**
+     * §8.5.6's twelve stages, in order.
+     *
+     * Ordered by `sequence` rather than by `created_at`: the rows are written
+     * in one loop and can share a millisecond, so a timestamp sort would
+     * present the pipeline in an arbitrary order on a fast machine.
+     *
+     * @return HasMany<BuildStep, $this>
+     */
+    public function steps(): HasMany
+    {
+        return $this->hasMany(BuildStep::class)->orderBy('sequence');
+    }
+
     public function isTerminal(): bool
     {
         return in_array($this->state, self::TERMINAL_STATES, true);

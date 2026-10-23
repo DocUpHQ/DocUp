@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The SPEC 8.5.7 fetcher image.
+#
+#   "`fetch` MUST run in a DocUp-authored image containing **no repository
+#    code**, with credentials supplied only through a git credential helper
+#    reading a file descriptor"
+#
+# 🛑 "No repository code" is a property of this image, and the way to keep it
+# is to keep the image empty of anything that could run some. There is no
+# Python, no Node, no compiler and no package manager left behind - this
+# container clones and exits, and the one credential it holds lives on a tmpfs
+# for the length of a `git clone`.
+#
+# Alpine rather than the application's base image for the same reason: the
+# application image carries PHP, Composer and the whole framework, and none of
+# that has any business in the one container that sees a credential.
+
+FROM alpine:3.21
+
+# git for the clone; ca-certificates so TLS verification can succeed, which is
+# the only thing standing between a credentialed clone and whoever is on the
+# path. openssh-client for the SPEC 8.3.3 deploy-key kind, which authenticates
+# over ssh rather than https.
+RUN apk add --no-cache git ca-certificates openssh-client \
+ && rm -rf /var/cache/apk/*
+
+COPY deploy/fetch-entrypoint.sh /usr/local/bin/docup-fetch
+RUN chmod 0555 /usr/local/bin/docup-fetch
+
+# 🛑 Never root. The container runs with --cap-drop ALL and a read-only root
+# anyway (SPEC 8.5.8), so this is defence in depth rather than the defence -
+# but a clone that runs as uid 0 writes a working tree owned by root into a
+# volume the build stage then mounts, and the build stage is not root.
+RUN addgroup -g 10001 docup && adduser -D -u 10001 -G docup docup
+USER 10001:10001
+
+ENTRYPOINT ["/usr/local/bin/docup-fetch"]

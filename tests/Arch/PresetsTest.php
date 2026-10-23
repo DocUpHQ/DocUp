@@ -89,6 +89,14 @@ arch()->preset()->laravel()
         'App\Egress',
         'App\Source',
         'App\Credentials',
+        // Phase 06, same argument again. Stage, FailureClass and
+        // EnvironmentScope are the build pipeline's vocabulary and mean
+        // nothing outside it; BuildFailure carries a FailureClass, so a
+        // shared App\Exceptions would import the build namespace into a
+        // namespace everything else depends on. SPEC 8.5.15's failure classes
+        // are also public contract — operators alert on the identifiers — so
+        // they belong beside the code that produces them.
+        'App\Builds',
     ]);
 
 arch()->preset()->strict()
@@ -97,6 +105,24 @@ arch()->preset()->strict()
     ->ignoring([
         // Laravel's generated providers predate our strict-types pass.
         'App\Providers',
+        /*
+         * 🛑 Phase 06: the strict preset forbids `sleep`/`usleep`, and these
+         * two genuinely wait.
+         *
+         * The runner is a separate process holding the container-runtime
+         * socket with NO database access (SPEC 8.5.13, and Phase 06's exit
+         * criterion that its environment carries no credentials), so the
+         * worker and the runner exchange work through a spool directory. A
+         * directory has no readiness signal, so waiting on one is a poll, and
+         * a poll without a sleep is a busy loop that burns a core.
+         *
+         * The exemption is two named classes, not the namespace: everything
+         * else in App\Builds is still held to the rule. It can be removed
+         * when the exchange gains something to block on — inotify, or the
+         * unix socket Phase 07's trust-zone work may bring with it.
+         */
+        'App\Builds\BuildPipeline',
+        'App\Console\Commands\RunnerCommand',
         // The framework base controller is abstract and exists to be extended,
         // so the preset's final-class rule cannot apply to it.
         'App\Http\Controllers\Controller',

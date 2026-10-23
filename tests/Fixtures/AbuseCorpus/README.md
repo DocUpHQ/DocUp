@@ -59,6 +59,7 @@ gate. If the two disagree, `corpus.json` and the PHP builders are right.
 | `saml` | §8.12.18 framework-enforced protocol validation | 25 |
 | `git_url` | §8.3.4 protocol and SSRF rejection | 05 |
 | `header` | §8.9.5 inbound header stripping, §8.9.4 no trusted resolver | 04 |
+| `runner` | §8.5.13 the typed run specification and fixed argv template, §8.5.7 credential separation, §8.5.21 log caps | 06, 07 |
 
 ### Phase 05 restated the `git_url` expectations
 
@@ -74,6 +75,26 @@ regressed.
 `App\Source\SourceRejection` identifier each must produce, and add the encodings a deny
 list written in dotted quads does not recognise (IPv4-mapped, NAT64). The originals are
 kept, per rule 1: they are coarse, not wrong, and they still pass.
+
+### Phase 06 added the `runner` category
+
+Six cases covering the build pipeline's own attack surface: a `build.os` value
+carrying extra `docker run` flags, a command argument spelled like a flag, control
+characters in argv, a run specification asking for a credential in the build stage, the
+`post_checkout` credential probe that is Phase 06's own exit criterion, and the §8.5.21
+log caps.
+
+🛑 Two of them are **not** "reject" cases, and the distinction is the interesting part.
+`runner-002` asserts a flag-shaped argument is accepted *as an argument* and lands after
+the image, where Docker does not read it — refusing every argument that starts with a
+dash would break legitimate build commands. `runner-006` asserts a 12 MB log is **capped
+rather than failed**: a chatty generator has not done anything wrong, and turning
+verbosity into a build failure would be worse than a truncated log.
+
+`runner-005` runs in the `runner` container rather than the application one, because
+§8.5.13 keeps the Docker client out of every other image — a test that could drive
+containers from the application container would itself be evidence the separation had
+been lost.
 
 ## Adding a case
 

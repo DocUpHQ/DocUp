@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The MkDocs build image (SPEC 8.5.14).
+#
+#   "Build images MUST be pre-baked and digest-pinned from an allowlisted
+#    `build.os` enum ... User-supplied Dockerfiles and arbitrary images MUST
+#    NOT be supported."
+#
+# 🛑 **Pre-baked is the security property, not the speed one.** A build that
+# installs its toolchain at run time needs network access to a package index
+# while running repository code, which is the combination SPEC 8.5.9 spends an
+# allowlisted proxy and an nftables backstop to contain. With the toolchain
+# already in the image, Phase 06's build container runs with `--network none`
+# and the question does not arise.
+#
+# One image is the whole `build.os` enum in Phase 06, because SPEC 17 scopes
+# this phase to "config schema beyond what MkDocs needs" being out of scope.
+# Phase 09's declarative toolchain presets (SPEC 11.4's `DocToolAdapter`) are
+# what make the second one a data file rather than another Dockerfile.
+
+FROM python:3.13-alpine
+
+# Pinned exactly. A floating version would make `env_digest` (SPEC 8.5.2) lie:
+# the digest would be unchanged while the toolchain that produced the output
+# had moved, and the short-circuit would refuse to rebuild documentation that
+# would now build differently.
+ARG MKDOCS_VERSION=1.6.1
+ARG MKDOCS_MATERIAL_VERSION=9.5.49
+
+RUN pip install --no-cache-dir \
+        "mkdocs==${MKDOCS_VERSION}" \
+        "mkdocs-material==${MKDOCS_MATERIAL_VERSION}" \
+ && find /usr/local -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+
+# 🛑 Never root, and never writable. The container also runs `--read-only`
+# with a `noexec` tmpfs at /tmp (SPEC 8.5.8), so a generator that downloads a
+# binary and tries to run it fails at the exec rather than succeeding quietly.
+RUN addgroup -g 10001 docup && adduser -D -u 10001 -G docup docup
+USER 10001:10001
+
+# No ENTRYPOINT. The runner passes a complete argv from the fixed template
+# (SPEC 8.5.13), and an ENTRYPOINT here would prepend something the template
+# does not control - which is the one thing a "fixed argv template" cannot
+# tolerate.
