@@ -24,6 +24,18 @@ parameters:
         - app/Source
         - app/Credentials
         - app/Logging
+        # Phase 06. The build pipeline renders the argv a container runtime
+        # executes and carries the one credential that reaches a sandbox,
+        # so SPEC 9.4's argument applies with full force: a type error here
+        # is a security bug rather than a crash.
+        #
+        # 🛑 app/Console/Commands is deliberately NOT here. `RunnerCommand`
+        # holds the socket, but all of its logic is in app/Builds - the
+        # command is a claim loop. Adding the namespace would pull in
+        # `doctor` and `install`, which predate this bar by five phases, and
+        # raising a gate for code a phase did not touch is how a phase ends
+        # up either ignoring findings or growing a second scope.
+        - app/Builds
         - app/Support
         - app/Concerns
         - app/Models

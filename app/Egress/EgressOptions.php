@@ -90,8 +90,24 @@ final readonly class EgressOptions
         return in_array(strtolower($scheme), $this->allowedSchemes, true);
     }
 
+    /**
+     * 🛑 An **empty** list means unrestricted, which is what `config/egress.php`
+     * documents and ships.
+     *
+     * The first version of this method read `in_array($port, [])`, which is
+     * false — so the shipped configuration denied every port while its own
+     * comment said it restricted none. Nothing caught it in Phase 05 because
+     * every test supplied an explicit port list, and it surfaced in Phase 06
+     * the first time real code called the client with the real config: every
+     * outbound request refused with `egress.port_not_allowed` on port 443.
+     *
+     * The lesson is the §18.18 one again, from the other side: a control was
+     * tested only against configurations the tests invented, never against
+     * the one that ships. `EgressConfigurationTest` now exercises the shipped
+     * values through the resolved object.
+     */
     public function permitsPort(int $port): bool
     {
-        return in_array($port, $this->allowedPorts, true);
+        return $this->allowedPorts === [] || in_array($port, $this->allowedPorts, true);
     }
 }

@@ -375,6 +375,43 @@
     },
 
     {
+      "id": "runner-001", "category": "runner", "defends": "8.5.13",
+      "input": "a build.os value of `ubuntu --privileged -v /:/host`",
+      "expect": "unknown build image: ubuntu --privileged -v /:/host",
+      "note": "🛑 §8.5.14: the image is an allowlist KEY, never a reference, so a YAML value naming an image plus two flags never reaches argv at all - it reaches an array_key_exists. The first thing anyone tries against a build system that takes `build.os` from a repository"
+    },
+    {
+      "id": "runner-002", "category": "runner", "defends": "8.5.13",
+      "input": "a build command argument of `--privileged`",
+      "expect": "argument-position-after-image",
+      "note": "Accepted as an ARGUMENT and refused as a FLAG. The image is the last flag-position element in the fixed argv template, so everything after it is the container's own argv and docker does not interpret it. Asserted by position rather than by rejection, because a legitimate command may contain a leading dash"
+    },
+    {
+      "id": "runner-003", "category": "runner", "defends": "8.5.13",
+      "input": "a command argument containing a newline, e.g. `build\n--privileged`",
+      "expect": "a command argument contains a control character",
+      "note": "A newline is how one argument becomes two lines in anything that logs or re-parses argv. Also refuses a NUL, which truncates at the execve boundary - everything after it is invisible to a check performed in PHP and still reaches the kernel"
+    },
+    {
+      "id": "runner-004", "category": "runner", "defends": "8.5.7",
+      "input": "a run specification for the `build` stage with accepts_stdin true",
+      "expect": "only the fetch stage may read a credential from stdin (§8.5.7)",
+      "note": "🛑 The credential separation, as an invariant rather than a convention. Read the Docs runs post_checkout in the credentialed context; §8.5.7 says plainly that doing so voids the entire separation"
+    },
+    {
+      "id": "runner-005", "category": "runner", "defends": "8.5.7",
+      "input": "a post_checkout-shaped fixture in the build sandbox reading env, /run/cred, .git/config and grepping the workspace",
+      "expect": "finds-nothing",
+      "note": "🛑 Phase 06's exit criterion. The fetcher is given a sentinel credential on stdin; the build container then looks everywhere it could have survived - its own environment, the fetcher's tmpfs, the clone's .git/config - and finds none of it. CredentialIsolationTest, run in the runner container because the application image has no docker client"
+    },
+    {
+      "id": "runner-006", "category": "runner", "defends": "8.5.21",
+      "input": "a build container emitting a 20 MB log, and a single line of 64 KB",
+      "expect": "capped-and-truncated",
+      "note": "§8.5.21: strip NUL bytes, truncate lines over 8 KiB, cap the log at 10 MiB. Enforced WHILE READING in the runner, not after: a cap applied once the bytes have crossed the spool is a cap on where they are stored rather than on what they cost"
+    },
+
+    {
       "id": "saml-001", "category": "saml", "defends": "8.12.18",
       "builder": "unsigned", "expect": "reject", "note": "no signature at all"
     },

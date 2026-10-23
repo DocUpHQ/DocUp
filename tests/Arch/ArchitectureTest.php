@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace Tests\Arch;
 
 use App\Artifacts\RejectionCode;
+use App\Builds\BuildEnvironment;
 use App\Logging\RedactSecrets;
 use App\Source\SourceRejection;
 use Tests\TestCase;
@@ -874,5 +875,144 @@ final class ArchitectureTest extends TestCase
         );
 
         $this->assertGreaterThanOrEqual(9, $named, 'Phase 05 appended nine git_url cases naming an identifier');
+    }
+
+    /**
+     * 🛑 SPEC 8.5.13: "No request-handling or queue-worker process MUST hold
+     * a container-runtime socket. The runner is the sole holder, and it MUST
+     * accept only a typed run specification rendered through a fixed argv
+     * template. There MUST be no code path from a webhook, a YAML value or
+     * an HTTP request to an arbitrary runtime call."
+     *
+     * This is the code half of that sentence; `RunnerIsolationTest` is the
+     * deployment half. Nothing outside `App\Builds\Runner` may name a
+     * container runtime at all - not `docker`, not `podman`, not the socket
+     * path, not the Engine API. The containment only means anything if there
+     * is exactly one place that could call one.
+     *
+     * `app/Providers` is allowlisted by path for the same reason the
+     * artifact test allowlists it: binding a class is not calling it.
+     */
+    public function test_only_the_runner_namespace_names_a_container_runtime(): void
+    {
+        $offenders = [];
+
+        $needles = [
+            "'docker'" => 'names the docker binary',
+            '"docker"' => 'names the docker binary',
+            'docker.sock' => 'names the runtime socket',
+            '/var/run/docker' => 'names the runtime socket',
+            "'podman'" => 'names a container runtime',
+            'containers/json' => 'names the Engine API',
+            'containers/create' => 'names the Engine API',
+        ];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            if (str_starts_with($relative, 'app/Builds/Runner/') || str_starts_with($relative, 'app/Providers/')) {
+                continue;
+            }
+
+            $source = $this->code($file);
+
+            foreach ($needles as $needle => $what) {
+                if (str_contains($source, $needle)) {
+                    $offenders[] = $relative.' '.$what;
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'only App\Builds\Runner may name a container runtime (SPEC 8.5.13): '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.7.10, through SPEC 8.4.6: no project-scoped input enters a
+     * build container in the default mode.
+     *
+     * > "The system MUST classify every injected environment variable into
+     * > one of three scopes, because SPEC 8.7.10 forbids project-scoped input
+     * > from entering a build container and SPEC 8.7.9 excludes it from the
+     * > content key - so 'inject the Read the Docs variables' and 'builds are
+     * > project-agnostic' cannot both be true unspecified."
+     *
+     * The four project-scoped names are the whole of the rule, and the
+     * damage from getting it wrong is not a crash: one project's canonical
+     * URL baked into an artifact that every other project mounting the same
+     * component then serves. `BuildEnvironment` is the single place they are
+     * declared, and it declares them in order to withhold them.
+     */
+    public function test_no_project_scoped_variable_reaches_a_build_container(): void
+    {
+        $environment = new BuildEnvironment(
+            productionDomain: 'docs.example.com',
+            componentKey: 'guides',
+            cloneUrl: 'https://example.com/r.git',
+            refIdentifier: 'main',
+            commitSha: str_repeat('0', 40),
+            versionLabel: 'main',
+        );
+
+        $injected = array_keys($environment->forContainer());
+
+        foreach ([
+            'READTHEDOCS_PROJECT',
+            'READTHEDOCS_VERSION',
+            'READTHEDOCS_LANGUAGE',
+            'READTHEDOCS_CANONICAL_URL',
+        ] as $forbidden) {
+            $this->assertNotContains(
+                $forbidden,
+                $injected,
+                $forbidden.' is project-scoped and must not enter a build container (SPEC 8.7.10)',
+            );
+        }
+
+        // 🛑 Absent, not empty. A `conf.py` doing `os.environ.get(...)` must
+        // see None rather than a string that some branches treat as set.
+        $this->assertArrayNotHasKey('READTHEDOCS_PROJECT', $environment->forContainer());
+
+        // The control: the component scope IS injected, so the assertions
+        // above are about the classification rather than about an empty map.
+        $this->assertContains('READTHEDOCS_GIT_COMMIT_HASH', $injected);
+        $this->assertContains('DOCUP_COMPONENT', $injected);
+
+        // SPEC 8.4.13 owes the migration guide fourteen aliases. Counted from
+        // the declaration rather than restated, so the two cannot drift.
+        $this->assertCount(14, BuildEnvironment::readTheDocsAliases());
+    }
+
+    /**
+     * 🛑 SPEC 8.4.5: "`$READTHEDOCS_OUTPUT` MUST be the **same directory**"
+     * as `$DOCUP_OUTPUT`.
+     *
+     * Not two directories merged afterwards - the same one, so a generator
+     * writing to either is writing where `collect` will read. A test because
+     * the failure is silent: a build that wrote to the other path produces
+     * an empty output directory and a `contract.no_output_directory` that
+     * points at the author rather than at us.
+     */
+    public function test_the_two_output_variables_name_one_directory(): void
+    {
+        $environment = (new BuildEnvironment(
+            productionDomain: 'docs.example.com',
+            componentKey: 'guides',
+            cloneUrl: 'https://example.com/r.git',
+            refIdentifier: 'main',
+            commitSha: str_repeat('0', 40),
+            versionLabel: 'main',
+        ))->forContainer();
+
+        $this->assertSame(
+            $environment['DOCUP_OUTPUT'],
+            $environment['READTHEDOCS_OUTPUT'],
+            'SPEC 8.4.5 makes these one directory, not two',
+        );
+
+        $this->assertSame(BuildEnvironment::OUTPUT_PATH, $environment['DOCUP_OUTPUT']);
     }
 }

@@ -10,6 +10,10 @@ namespace App\Artifacts;
 use App\Artifacts\Exceptions\IngestRejected;
 use App\Audit\ActorType;
 use App\Audit\Audit;
+use App\Builds\BuildPlan;
+use App\Builds\Provenance;
+use App\Builds\PublishSource;
+use App\Builds\RunnerArtifact;
 use App\Models\Build;
 use App\Models\BuildOutput;
 use App\Models\Component;
@@ -65,6 +69,7 @@ final class Publisher
         ProjectVersion $version,
         string $archivePath,
         ?string $actorId = null,
+        ?string $buildId = null,
     ): PublishOutcome {
         /*
          * The component is resolved here, not supplied by the caller. §17 gives
@@ -99,7 +104,14 @@ final class Publisher
          */
         $expectedManifestId = $version->published_manifest_id;
 
-        $buildId = Uuid::v7();
+        /*
+         * Supplied by the §8.5 pipeline, which has had a build row since
+         * `admit` for §10.3's `inflight` index and the twelve step rows;
+         * generated here for a direct upload, which has none until now. Phase
+         * 06 added the parameter rather than a second method, so that the two
+         * callers differ by one argument instead of by a code path (§8.21.6).
+         */
+        $buildId ??= Uuid::v7();
         $result = $this->ingestor->ingest($buildId, $archivePath);
 
         /*
@@ -128,6 +140,92 @@ final class Publisher
             reason: 'publish',
             actorId: $actorId,
         );
+    }
+
+    /**
+     * Publish through §11.4's `PublishSource` seam.
+     *
+     * 🛑 §8.21.6: "The built-in runner MUST be implemented as the **first
+     * consumer** of this path, not a privileged special case, so
+     * bring-your-own-CI is a permanent capability rather than a deferred
+     * feature."
+     *
+     * This is that path, and the only thing the runner supplies that an
+     * upload does not is a richer §8.5.24 provenance document — not a
+     * different ingest, not a relaxed validation, not a shortcut past the
+     * output contract. Both go through `publishUpload` below, which is Phase
+     * 03's code unchanged.
+     *
+     * @param  Build|null  $existing  the pipeline's build row, when there is one
+     */
+    public function publishFrom(PublishSource $source, ?Build $existing = null): PublishOutcome
+    {
+        $outcome = $this->publishUpload(
+            version: $source->version(),
+            archivePath: $source->archivePath(),
+            actorId: $source->actorId(),
+            buildId: $existing instanceof Build ? $existing->id : null,
+        );
+
+        if ($outcome->build instanceof Build) {
+            // Null only on a path that publishes an existing build's manifest
+            // rather than a new tree; there is nothing new to describe then,
+            // and inventing a provenance document for it would be a record of
+            // a build that did not happen here.
+            $this->recordProvenance($outcome->build, $source);
+        }
+
+        return $outcome;
+    }
+
+    /**
+     * Write `provenance.json` and its `build_outputs` row (§8.5.24).
+     *
+     * Stored beside the artifact under the build prefix, so §8.8.1's rule
+     * that nothing but the build id appears in a storage key holds for it
+     * too — and so a build's provenance is removed by the same
+     * `deletePrefix` that removes its bytes, rather than surviving as a
+     * document describing an artifact that no longer exists.
+     */
+    private function recordProvenance(Build $build, PublishSource $source): void
+    {
+        $provenance = $source instanceof RunnerArtifact
+            ? Provenance::forRunner(
+                build: $build,
+                sources: $build->sources,
+                imageReference: $this->configuredString('builds.images.mkdocs.reference') ?? '',
+                imageDigest: $this->configuredString('builds.images.mkdocs.digest'),
+                toolVersions: ['pipeline' => BuildPlan::PIPELINE_VERSION],
+                actorId: $source->actorId(),
+            )
+            : Provenance::forUpload($build, $source->actorId(), $source->provenanceFacts());
+
+        $body = $provenance->toJson();
+        $key = $this->store->prefixFor($build->id).'/provenance.json';
+
+        $this->store->put($key, $body);
+
+        /*
+         * `forceFill`, like every other write in this file: the models carry
+         * a §8.2.1 `Fillable` attribute that deliberately excludes keys, so
+         * `updateOrCreate` silently dropped `build_id` and the insert failed
+         * on a column with no default. Mass assignment protection doing
+         * exactly its job, in the one place the key is not user input.
+         */
+        $output = BuildOutput::query()
+            ->where('build_id', $build->id)
+            ->where('format', 'provenance')
+            ->first() ?? new BuildOutput;
+
+        $output->forceFill([
+            'build_id' => $build->id,
+            'format' => 'provenance',
+            'organisation_id' => $build->organisation_id,
+            'storage_key' => $key,
+            'file_count' => 1,
+            'total_bytes' => strlen($body),
+            'content_sha256' => hash('sha256', $body),
+        ])->save();
     }
 
     /**
@@ -284,13 +382,31 @@ final class Publisher
         string $chromeMode,
     ): Build {
         return DB::transaction(function () use ($version, $component, $buildId, $result, $chromeMode): Build {
-            $build = new Build;
+            /*
+             * 🛑 Find-or-new, added in Phase 06, and the reason is §8.21.6:
+             * "The built-in runner MUST be implemented as the first consumer
+             * of this path, not a privileged special case."
+             *
+             * A direct upload has no build row until this moment, so it
+             * inserts. The runner's pipeline has had one since `admit` —
+             * §10.3's `inflight` unique index and the twelve `build_steps`
+             * rows both need a build to point at while the build is still
+             * running — so it updates. Making the runner insert a *second*
+             * row here would have given it a shape the upload path does not
+             * have, which is exactly the privileged special case the
+             * requirement forbids.
+             */
+            $build = Build::withoutGlobalScopes()->find($buildId) ?? new Build;
+
             $build->forceFill([
                 'id' => $buildId,
                 'organisation_id' => $version->organisation_id,
                 'project_version_id' => $version->id,
                 'component_id' => $component->id,
-                'content_key' => $this->contentKeyForUpload($buildId),
+                // Kept when the pipeline already chose one. Unique per
+                // build either way: §8.7.9's cross-project content key needs
+                // the fragment digests of §8.5.19, which arrive in Phase 09.
+                'content_key' => $build->content_key ?? $this->contentKeyForUpload($buildId),
                 'state' => 'running',
                 'file_count' => $result->fileCount,
                 'total_bytes' => $result->totalBytes,
@@ -376,6 +492,14 @@ final class Publisher
      * it "the first consumer of this path, not a privileged special case", so it
      * supplies that key rather than this method being changed to guess one.
      */
+    /** A configuration value that must be a string, or null. */
+    private function configuredString(string $key): ?string
+    {
+        $value = config($key);
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
     private function contentKeyForUpload(string $buildId): string
     {
         return hash('sha256', 'docup.upload:'.Uuid::toText($buildId));

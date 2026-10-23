@@ -35,6 +35,10 @@ services:
       - .:/app
       - ./deploy/Caddyfile:/etc/frankenphp/Caddyfile:ro
       - artifacts:/var/lib/docup/artifacts
+      # The SPEC 8.5.13 spool. The application mounts it because the pipeline
+      # runs wherever a build is driven from - a dashboard request, an API
+      # call, or the test suite - and all three live here.
+      - spool:/var/lib/docup/spool
     environment:
       APP_ENV: ${APP_ENV:-production}
       APP_KEY: ${APP_KEY}
@@ -51,6 +55,7 @@ services:
       QUEUE_CONNECTION: database
       DOCUP_APP_HOST: ${DOCUP_APP_HOST}
       DOCUP_DOCS_APEX: ${DOCUP_DOCS_APEX}
+      DOCUP_RUNNER_SPOOL: /var/lib/docup/spool
       DOCUP_PREVIEW_APEX: ${DOCUP_PREVIEW_APEX}
       DOCUP_ASSET_HOST: ${DOCUP_ASSET_HOST}
       # 🛑 The same path the edge serves, and the same path the volume is
@@ -119,7 +124,13 @@ services:
   # container-runtime socket and no request-handling process may hold one. It is
   # a separate service from `app` for that reason, from the first phase, so the
   # boundary is never retrofitted.
-  runner:
+  # --- the queue worker (SPEC 11.2 'app' zone) ---
+  # 🛑 Renamed from `runner` in Phase 06. It holds the database credentials
+  # and the APP_KEY, which SPEC 11.2 places in the app zone and which the
+  # runner zone must not have - so calling this service `runner` while the
+  # real runner has neither would have been the one name guaranteed to
+  # mislead whoever next reads the trust-zone table.
+  worker:
     build:
       context: .
       dockerfile: deploy/Dockerfile
@@ -129,7 +140,7 @@ services:
       cache: { condition: service_started }
     command: ["php", "artisan", "queue:work", "--tries=1", "--max-time=3600"]
     # 🛑 This override is load-bearing. The FrankenPHP base image declares its
-    # own HEALTHCHECK against Caddy's admin API on port 2019, and the runner
+    # own HEALTHCHECK against Caddy's admin API on port 2019, and the worker
     # serves no HTTP at all - it is a queue worker. Inheriting it leaves the
     # container permanently "unhealthy", which is how it was found: anything
     # that waits on `condition: service_healthy` for the runner would wait for
@@ -150,6 +161,7 @@ services:
     volumes:
       - .:/app
       - artifacts:/var/lib/docup/artifacts
+      - spool:/var/lib/docup/spool
     working_dir: /app
     environment:
       APP_ENV: ${APP_ENV:-production}
@@ -163,8 +175,78 @@ services:
       QUEUE_CONNECTION: database
       DOCUP_APP_HOST: ${DOCUP_APP_HOST}
       DOCUP_DOCS_APEX: ${DOCUP_DOCS_APEX}
+      DOCUP_RUNNER_SPOOL: /var/lib/docup/spool
+
+  # --- the build runner (SPEC 8.5.13, SPEC 11.2 'runner' zone) ---
+  #
+  # 🛑 "No request-handling or queue-worker process MUST hold a
+  # container-runtime socket. The runner is the sole holder, and it MUST
+  # accept only a typed run specification rendered through a fixed argv
+  # template."
+  #
+  # 🛑 Phase 06's exit criterion, visible in this block: the environment below
+  # contains NO DB_* variables and NO APP_KEY. It cannot read the database, it
+  # cannot open an envelope-encrypted credential, and it cannot decrypt a
+  # session cookie. What it can do is start containers - so a compromise of
+  # the one process holding the socket yields no tenant data and no key.
+  # `RunnerIsolationTest` asserts this against the file, because a comment
+  # saying so is worth nothing the day somebody adds a variable "just to
+  # debug something".
+  runner:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.runner
+    restart: unless-stopped
+    command: ["php", "artisan", "docup:runner"]
+
+    # 🛑 The socket, and the reason this service exists. Read-only: the runner
+    # needs to create and remove containers, which the API allows over a
+    # read-only bind of the socket file itself - the flag stops the socket
+    # being replaced, not the calls being made.
+    volumes:
+      # 🛑 The application image carries no source - every service in this
+      # file bind-mounts it, and the runner is no exception. What it does NOT
+      # mount is the artifact volume: the runner never touches a published
+      # byte, it hands the worker a tarball and the worker ingests it
+      # (SPEC 8.21.6).
+      - .:/app
+
+      # 🛑 **`.env` is masked, and this is the difference between a claim and
+      # a fact.** The environment block below carries no DB_* and no APP_KEY
+      # — but every service bind-mounts the project directory, and Laravel's
+      # dotenv loader reads `/app/.env` off the filesystem. So a runner with
+      # a spotless compose environment could still read the database
+      # password, which was measured and is what this line fixes.
+      #
+      # `RunnerIsolationTest` asserts the mask, because the hole it closes is
+      # invisible from the environment block that looks like the answer.
+      - /dev/null:/app/.env:ro
+
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - spool:/var/lib/docup/spool
+    working_dir: /app
+
+    # Proves it can reach the runtime, which is the only thing it does.
+    # `queue:monitor` would need the database it deliberately cannot see.
+    healthcheck:
+      test: ["CMD", "docker", "version", "--format", "{{.Server.Version}}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      DOCUP_RUNNER_SPOOL: /var/lib/docup/spool
+      # Needed only because AppServiceProvider asserts the SPEC 8.1.4 origin
+      # separation at boot. Hostnames, not credentials.
+      DOCUP_APP_HOST: ${DOCUP_APP_HOST}
+      DOCUP_DOCS_APEX: ${DOCUP_DOCS_APEX}
 
 volumes:
   db:
   cache:
   artifacts:
+  # The SPEC 8.5.13 exchange between the worker and the runner. A named volume
+  # rather than a bind: the two containers are the only things that mount it.
+  spool:
