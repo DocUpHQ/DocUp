@@ -52,6 +52,13 @@ use Illuminate\Support\Facades\DB;
  * @property Carbon|null $webhook_triggering_disabled_at
  * @property bool $fork_builds_enabled
  * @property string|null $default_version_id
+ * @property string $version_comparator
+ * @property bool $pin_channels_to_top
+ * @property string|null $stable_version_id
+ * @property string|null $latest_version_id
+ * @property string|null $resolved_stable_version_id
+ * @property string|null $resolved_latest_version_id
+ * @property bool $has_ever_been_guarded
  */
 #[Tenancy(TenancyPosture::OrganisationScoped)]
 #[Fillable(['slug', 'name', 'description', 'visibility'])]
@@ -118,6 +125,8 @@ final class Project extends Model
             'visibility' => AccessLevel::class,
             'inherit_organisation_roles' => 'boolean',
             'fork_builds_enabled' => 'boolean',
+            'pin_channels_to_top' => 'boolean',
+            'has_ever_been_guarded' => 'boolean',
             'anonymous_build_logs' => 'boolean',
             'consecutive_build_failures' => 'integer',
             'webhook_triggering_disabled_at' => 'datetime:Y-m-d H:i:s.v',

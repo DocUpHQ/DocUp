@@ -111,6 +111,18 @@ arch()->preset()->laravel()
         // would import the configuration namespace into a namespace
         // everything else depends on.
         'App\Config',
+        // Phase 10, same argument once more. `RefKind`, `VersionComparator`
+        // and `VersionRejection` are the version model's vocabulary and mean
+        // nothing outside §8.6 — `RefKind::versionKind()` exists precisely to
+        // keep "a git ref's kind" and "a version's kind" as two ideas, which
+        // a shared App\Enums would file as one. `VersionRefused` carries a
+        // `VersionRejection`, so a shared App\Exceptions would import the
+        // version namespace into a namespace everything else depends on.
+        //
+        // The rejection identifiers are also §8.1.11 public contract:
+        // `version.slug_reserved` reaches an operator's tooling, which is
+        // the kind of thing that belongs beside the code producing it.
+        'App\Versions',
     ]);
 
 arch()->preset()->strict()

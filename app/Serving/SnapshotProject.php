@@ -23,6 +23,9 @@ final class SnapshotProject
      * @param  string  $id  raw 16 bytes
      * @param  list<SnapshotVersion>  $versions
      * @param  int  $routingEpoch  §8.9.10; part of the resolution cache key
+     * @param  array<string, string>  $formerSlugs  §8.6.6's 301 table, keyed
+     *                                              `<language>:<old slug>` =>
+     *                                              the version's id
      */
     public function __construct(
         public readonly string $id,
@@ -34,7 +37,42 @@ final class SnapshotProject
         public readonly string $chromeMode,
         public readonly ?string $defaultVersionId,
         public readonly array $versions = [],
+        public readonly array $formerSlugs = [],
     ) {}
+
+    /**
+     * §8.6.6: "a renamed slug MUST leave a working 301 behind it."
+     *
+     * 🛑 In the SNAPSHOT rather than queried per request. §8.9.1 requires
+     * the resolver to run "with no database queries", and a rename is rare
+     * while a 404 is not — looking the history up only on a miss would put
+     * a query behind every probe for a path that does not exist, which is
+     * precisely what §8.11.8's rate limiter exists because attackers send
+     * in volume.
+     *
+     * Returns the version the old slug now names, or null.
+     */
+    public function versionByFormerSlug(string $language, string $slug): ?SnapshotVersion
+    {
+        $id = $this->formerSlugs[$language.':'.$slug] ?? null;
+
+        if ($id === null) {
+            return null;
+        }
+
+        foreach ($this->versions as $version) {
+            if ($version->id === $id) {
+                /*
+                 * 🛑 Only if it would actually serve. A 301 to a URL that
+                 * 404s is worse than the 404: a crawler follows it, caches
+                 * the redirect, and returns to the same dead end tomorrow.
+                 */
+                return $version->isServable() ? $version : null;
+            }
+        }
+
+        return null;
+    }
 
     /** The version with this language and slug, whether servable or not. */
     public function version(string $language, string $slug): ?SnapshotVersion
