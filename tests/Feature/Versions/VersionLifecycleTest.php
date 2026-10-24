@@ -25,6 +25,7 @@ use App\Versions\VersionRejection;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 /**
@@ -47,6 +48,17 @@ final class VersionLifecycleTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        /*
+         * 🛑 A faked disk, as every artifact-touching test uses.
+         *
+         * §8.6.7's wipe and §8.6.11's existence check both reach the real
+         * store, whose configured root is `/var/lib/docup/artifacts` — a
+         * path the application container happens to have and a bare CI
+         * runner does not. This passed locally and failed in CI for that
+         * reason alone, which is the shape of green that means nothing.
+         */
+        Storage::fake('artifacts');
 
         app(OrganisationContext::class)->spanAllOrganisations();
 
