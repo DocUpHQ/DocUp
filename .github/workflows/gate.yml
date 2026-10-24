@@ -478,3 +478,166 @@ jobs:
       - name: Logs, on failure
         if: failure()
         run: docker compose -f '${{ matrix.compose }}' logs --tail 200
+
+  # 🛑 Phase 07 stands the build sandbox up IN CI, which is what Phase 06's
+  # build log recorded as owed: "The end-to-end criterion is demonstrated
+  # locally, not in CI … A skip is not a pass."
+  #
+  # Everything the container tests need is built here — the four images, the
+  # §11.2 sandboxes network, the §8.5.9 proxy, a workspace root and a runner
+  # consuming the spool — and `DOCUP_E2E=1` turns every skip in those files
+  # into a failure. If the sandbox is not standing, this job goes red rather
+  # than quietly reporting a green run that exercised nothing.
+  sandbox:
+    name: build sandbox and its exit criteria
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: docup-root
+          MYSQL_DATABASE: docup_test
+          MYSQL_USER: docup
+          MYSQL_PASSWORD: docup
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pdocup-root"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+
+    env:
+      DB_HOST: 127.0.0.1
+      DB_DATABASE: docup_test
+      DOCUP_WORKSPACE_ROOT: /var/lib/docup/workspaces
+      DOCUP_RUNNER_SPOOL: /var/lib/docup/spool
+      DOCUP_SANDBOX_NETWORK: docup_sandboxes
+      DOCUP_BUILD_ISOLATION: runc
+      DOCUP_SANDBOX_EGRESS: allowlist
+      # 🛑 §8.5.15's cgroup reading, at the path it has HERE. The compose
+      # runner mounts the hierarchy at /hostcg because it is a container;
+      # this job's PHP is the host process, so the real path is the one to
+      # use. Without it the sampler finds nothing, `pids.events:max` is
+      # never read, and a fork bomb reports success — which is exactly how
+      # this job first went red.
+      DOCUP_CGROUP_ROOT: /sys/fs/cgroup
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pdo_mysql, intl, zip, gd, bcmath, sodium, pcntl, curl
+          coverage: none
+          tools: composer:v2
+          ini-values: upload_max_filesize=1G, post_max_size=1G, memory_limit=512M
+
+      - name: Provide an environment file before anything boots the app
+        run: cp .env.example .env
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare the application
+        run: |
+          php artisan key:generate
+          php artisan migrate --force
+
+      # The four images the sandbox is made of. Built rather than pulled:
+      # none of them is published yet, and §8.5.14 would want the digest
+      # pinned if they were.
+      - name: Build the sandbox images
+        run: |
+          set -euo pipefail
+          docker build -q -t docup/fetch:1        -f deploy/Dockerfile.fetch  .
+          docker build -q -t docup/build-mkdocs:1 -f deploy/Dockerfile.mkdocs .
+          docker build -q -t docup/warden:1       -f deploy/Dockerfile.warden .
+          docker build -q -t docup/egress-proxy:1 -f deploy/Dockerfile.proxy  .
+          docker pull -q busybox:stable
+
+      # 🛑 The §11.2 topology, by hand rather than by compose: this job runs
+      # PHP on the runner itself, so the "app zone" is the GitHub runner and
+      # only the sandbox half needs building. `--internal` is the same flag
+      # compose.yaml sets, and the proxy is the only thing bridging it to a
+      # routed network — exactly as in the shipped file.
+      - name: Stand up the sandbox network and the egress proxy
+        run: |
+          set -euo pipefail
+          docker network create --internal docup_sandboxes
+          docker run -d --name docup-proxy \
+            --label docup.role=egress-proxy \
+            --network docup_sandboxes \
+            --cap-drop ALL --security-opt no-new-privileges --read-only \
+            --tmpfs /var/run/squid:rw,uid=31,gid=31,mode=0700 \
+            --tmpfs /var/log/squid:rw,uid=31,gid=31,mode=0700 \
+            --tmpfs /var/cache/squid:rw,uid=31,gid=31,mode=0700 \
+            docup/egress-proxy:1
+          docker network connect bridge docup-proxy
+
+          for _ in $(seq 1 30); do
+            if docker exec docup-proxy docup-proxy-healthcheck >/dev/null 2>&1; then
+              echo "proxy is refusing non-allowlisted hosts"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::the egress proxy never came up"
+          docker logs docup-proxy
+          exit 1
+
+      # 🛑 Root, and the reason is the same one the runner service has:
+      # every container in the pipeline runs as uid 10001 (§8.5.8) and the
+      # workspace has to be owned by it. On this runner PHP is the host
+      # process, so `chown` needs root rather than a container doing it.
+      - name: Create the spool and the workspace root
+        run: |
+          sudo mkdir -p /var/lib/docup/workspaces /var/lib/docup/spool
+          sudo chmod 0755 /var/lib/docup /var/lib/docup/workspaces /var/lib/docup/spool
+
+      # §8.5.12's self-test runs here, as part of starting the runner. A
+      # non-zero exit means the sandbox failed its isolation check and the
+      # job stops — which is the behaviour an operator gets from compose.
+      - name: Start the runner, which runs the §8.5.12 self-test
+        run: |
+          set -euo pipefail
+          sudo -E env "PATH=$PATH" php artisan docup:runner --once
+          test -f /var/lib/docup/spool/self-test.json
+          cat /var/lib/docup/spool/self-test.json
+          grep -q '"passed":true' /var/lib/docup/spool/self-test.json
+
+      - name: Run the runner in the background for the end-to-end build
+        run: |
+          # The log file is created by THIS user and the redirect is this
+          # shell's, deliberately: a root-owned log in /tmp would not be
+          # readable by the wait below or by the failure step at the end.
+          : > /tmp/runner.log
+          # shellcheck disable=SC2024
+          sudo -E env "PATH=$PATH" php artisan docup:runner >> /tmp/runner.log 2>&1 &
+          for _ in $(seq 1 20); do
+            if grep -q 'runner ready' /tmp/runner.log; then exit 0; fi
+            sleep 1
+          done
+          echo "::error::the runner never became ready"
+          cat /tmp/runner.log
+          exit 1
+
+      # 🛑 DOCUP_E2E=1 turns a skip into a failure. Without it this job
+      # could report green having exercised nothing at all, which is the
+      # exact state Phase 06 shipped in and recorded as owed.
+      - name: Phase 07 exit criteria and the end-to-end build
+        env:
+          DOCUP_E2E: '1'
+          NO_COLOR: '1'
+        run: |
+          set -o pipefail
+          sudo -E env "PATH=$PATH" ./vendor/bin/pest \
+            tests/Feature/Builds \
+            --colors=never 2>&1 | tee /tmp/sandbox.log
+
+      - name: Runner log, on failure
+        if: failure()
+        run: |
+          tail -200 /tmp/runner.log || true
+          docker logs --tail 100 docup-proxy || true
+          docker ps -a --filter label=docup.owner=build-runner || true

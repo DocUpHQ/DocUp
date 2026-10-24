@@ -11,8 +11,10 @@ use App\Artifacts\Publisher;
 use App\Artifacts\PublishOutcome;
 use App\Audit\ActorType;
 use App\Audit\Audit;
+use App\Builds\Admission\Dispatcher;
 use App\Builds\Runner\RunOutcome;
 use App\Builds\Runner\Spool;
+use App\Builds\Sandbox\SandboxPolicy;
 use App\Credentials\CredentialVault;
 use App\Credentials\SecretRedactor;
 use App\Models\Build;
@@ -53,7 +55,25 @@ final class BuildPipeline
         private readonly Publisher $publisher,
         private readonly CredentialVault $vault,
         private readonly SecretRedactor $redactor,
-    ) {}
+        ?SandboxPolicy $policy = null,
+        ?Dispatcher $dispatcher = null,
+    ) {
+        $this->policy = $policy ?? SandboxPolicy::fromConfig();
+        $this->dispatcher = $dispatcher ?? Dispatcher::fromConfig();
+    }
+
+    /** §8.5.5's admission control, resolved once for the same reason. */
+    private readonly Dispatcher $dispatcher;
+
+    /**
+     * 🛑 Resolved once per pipeline rather than read per stage.
+     *
+     * The failure this prevents is a build whose `fetch` ran under one
+     * isolation posture and whose `build` ran under another because a
+     * configuration cache was warmed in between — two halves of one build
+     * in two trust zones, with nothing in the record to show it happened.
+     */
+    private readonly SandboxPolicy $policy;
 
     /**
      * Take a request to a terminal state.
@@ -64,10 +84,68 @@ final class BuildPipeline
      */
     public function run(BuildRequest $request, ?int $waitSeconds = null): ?Build
     {
+        /*
+         * 🛑 §8.1.7's hosting-only mode, refused at the top and before
+         * anything is read. "with `DOCUP_BUILDS_ENABLED=false` the
+         * application boots with no runner, and a build trigger is refused
+         * with a stable identifier rather than queued forever."
+         *
+         * Queueing would be the kinder-looking failure and the worse one:
+         * a request sitting in `queued` on an installation that has
+         * deliberately removed its runner is indistinguishable from a busy
+         * queue, and the author would wait for a build nothing will ever
+         * claim.
+         */
+        if (! $this->policy->buildsEnabled) {
+            $request->settle('rejected', 'rejected.builds_disabled');
+
+            return null;
+        }
+
+        /*
+         * 🛑 §8.5.12's verdict, read from the spool because this process
+         * has no socket and cannot run the test itself. A sandbox that
+         * failed its self-test is an installation whose isolation nobody
+         * has verified, and §8.5.12 makes that a refusal rather than a
+         * degraded mode.
+         *
+         * Absent is not the same as failed, and both refuse: no verdict
+         * means no runner has started since this spool was created, so the
+         * same thing is true — nothing has checked.
+         */
+        $selfTest = $this->spool->readSelfTest();
+
+        if ($selfTest === null || ! $selfTest['passed']) {
+            $request->settle('rejected', 'infra.sandbox_self_test_failed');
+
+            return null;
+        }
+
         $version = $request->version;
 
         if (! $version instanceof ProjectVersion) {
             $request->settle('rejected', 'rejected.version_missing');
+
+            return null;
+        }
+
+        /*
+         * 🛑 §8.5.10: "Fork-PR builds MUST be **off by default** with an
+         * explicit opt-in and a written threat statement."
+         *
+         * Before the component, the source and the plan — before anything
+         * at all is read on behalf of this request. A fork build that got
+         * as far as `fetch` would already have asked a provider for a ref
+         * on somebody else's behalf, and a policy refusal that depends on
+         * a repository being attached is a policy refusal that reports
+         * something else entirely when one is not.
+         *
+         * `credentialFor()` independently withholds every secret from a
+         * fork build, so the two controls do not depend on each other
+         * being right.
+         */
+        if ($request->from_fork === true && $version->project?->fork_builds_enabled !== true) {
+            $request->settle('rejected', 'rejected.fork_builds_disabled');
 
             return null;
         }
@@ -147,7 +225,9 @@ final class BuildPipeline
         $buildHex = bin2hex($build->id);
 
         try {
-            $this->stage($recorder, $steps, Stage::Admit, fn () => null);
+            $this->stage($recorder, $steps, Stage::Admit, function () use ($build): void {
+                $this->admit($build);
+            });
 
             // Recorded against the step that produced it, after the fact: the
             // work happened above, because its result decides whether there
@@ -422,11 +502,20 @@ final class BuildPipeline
             volume: BuildConfig::string('volume_prefix', 'docup-build-').$buildId,
             workdir: '/workspace',
             timeoutSeconds: Stage::Fetch->timeoutSeconds(),
-            networkEnabled: true,
+
+            /*
+             * 🛑 `fetch` is the one stage that cannot work without egress,
+             * so it takes the §8.5.9 allowlist even where the installation
+             * has narrowed the build stage to `none`. The git hosts are on
+             * the same allowlist as the package indexes and the clone goes
+             * through the same CONNECT tunnel — verified on all five
+             * providers in ADR 0011, with the filter honoured.
+             */
+            egress: $this->policy->egressFor(Stage::Fetch),
             acceptsStdin: true,
         );
 
-        $outcome = $this->dispatch($spec, $this->credentialFor($repository), $waitSeconds);
+        $outcome = $this->dispatch($spec, $this->credentialFor($repository, $build), $waitSeconds);
 
         if (! $outcome->succeeded()) {
             throw BuildFailure::of(
@@ -554,11 +643,14 @@ final class BuildPipeline
             workdir: $workdir,
             timeoutSeconds: Stage::Build->timeoutSeconds(),
 
-            // 🛑 Phase 06 gives the generator no network at all. Stricter than
-            // §8.5.9's allowlisted proxy, which arrives in Phase 07 — and an
-            // allowlist that does not exist must not be approximated by
-            // leaving the network open.
-            networkEnabled: false,
+            /*
+             * §8.5.9's allowlist, which Phase 07 built. Phase 06 gave the
+             * generator no network at all because an allowlist that did not
+             * exist must not be approximated by leaving the network open;
+             * now it exists, the generator gets the mode the operator
+             * declared, and `none` remains a supported — stricter — choice.
+             */
+            egress: $this->policy->egressFor(Stage::Build),
             exportPath: BuildEnvironment::OUTPUT_PATH,
             releaseWorkspace: true,
         );
@@ -605,25 +697,93 @@ final class BuildPipeline
      */
     private function dispatch(RunSpecification $spec, ?string $credential, ?int $waitSeconds): RunOutcome
     {
-        $jobId = $this->spool->submit($spec);
+        /*
+         * 🛑 The channel is opened before the job is published, and closed
+         * however this method leaves. A runner that claimed the job first
+         * would find no socket and fetch anonymously — for a private
+         * repository that is an authentication failure reported as a
+         * missing ref, which is the least useful true thing we could say.
+         */
+        $channel = $credential === null
+            ? null
+            : $this->spool->openCredentialChannel($this->spool->jobId($spec), $credential);
 
-        if ($credential !== null) {
-            $this->spool->writeCredential($jobId, $credential);
-        }
+        try {
+            $jobId = $this->spool->submit($spec);
+            $deadline = microtime(true) + ($waitSeconds ?? ($spec->timeoutSeconds + 120));
 
-        $deadline = microtime(true) + ($waitSeconds ?? ($spec->timeoutSeconds + 120));
+            while (microtime(true) < $deadline) {
+                /*
+                 * The credential hand-over rides in the loop that was
+                 * already here. `serveOnce()` is a non-blocking accept, so
+                 * this costs one syscall per tick and cannot stall the
+                 * wait — which is the whole reason a unix socket works
+                 * where §8.5.7's FIFO deadlocked (see `CredentialChannel`).
+                 */
+                $channel?->serveOnce();
 
-        while (microtime(true) < $deadline) {
-            $result = $this->spool->readResult($jobId);
+                $result = $this->spool->readResult($jobId);
 
-            if ($result !== null) {
-                return $result;
+                if ($result !== null) {
+                    return $result;
+                }
+
+                usleep(200_000);
             }
-
-            usleep(200_000);
+        } finally {
+            $channel?->close();
         }
 
         throw BuildFailure::of(FailureClass::Infra, 'runner_did_not_answer', $spec->stage);
+    }
+
+    /**
+     * §8.5.5's admission, and §8.22.11's audit of an unsandboxed run.
+     *
+     * 🛑 The build is already in `running` by the time this stage executes —
+     * §10.3's `inflight` index put it there, which is what stops a second
+     * build for the same version existing at all. So admission here asks
+     * the narrower question the index cannot: is there room at the
+     * installation and organisation ceilings, and is this build next in the
+     * fair order? A refusal leaves the build queued rather than failing it.
+     *
+     * @throws BuildFailure when the installation has no room right now
+     */
+    private function admit(Build $build): void
+    {
+        $decision = $this->dispatcher->admit($build);
+
+        if (! $decision->admitted && $decision->reason !== 'admission.not_queued') {
+            /*
+             * `conflict` rather than `rejected`: the build is legitimate and
+             * will run, which is what §8.5.15's `conflict` class means and
+             * what makes it safe to retrigger. A `rejected` build is one
+             * that could never have run.
+             */
+            throw BuildFailure::of(FailureClass::Conflict, 'queued_behind_capacity', Stage::Admit);
+        }
+
+        /*
+         * 🛑 §8.5.11's "writes an audit event", recorded per BUILD rather
+         * than per boot. A boot event would be written once by whoever
+         * restarted the service and never again; what an auditor actually
+         * needs to answer later is "which builds ran with the kernel shared
+         * and the network open", and that is one row per build.
+         */
+        if ($this->policy->requiresUnsandboxedAudit()) {
+            Audit::record(
+                action: 'build.admitted_unsandboxed',
+                actorType: ActorType::System,
+                organisationId: $build->organisation_id,
+                subjectType: 'build',
+                subjectId: $build->id,
+                payload: [
+                    'isolation' => $this->policy->isolation,
+                    'egress' => $this->policy->egress->value,
+                    'flag' => 'DOCUP_ACKNOWLEDGE_UNSANDBOXED',
+                ],
+            );
+        }
     }
 
     /**
@@ -634,8 +794,24 @@ final class BuildPipeline
      * this process — §8.5.7's "never argv, never the remote URL, never the
      * environment" plus the obvious fourth, never at rest.
      */
-    private function credentialFor(Repository $repository): ?string
+    private function credentialFor(Repository $repository, Build $build): ?string
     {
+        /*
+         * 🛑 §8.5.10, as the second of two independent controls: "Fork and
+         * pull-request builds MUST receive **no secrets at all**."
+         *
+         * `run()` already refuses a fork build the project has not opted
+         * in to. This one applies to the builds that WERE opted in to —
+         * a project may accept fork builds and still never hand a fork's
+         * code the organisation's git credential, which is the whole point
+         * of the opt-in being survivable. Two controls rather than one,
+         * because the refusal and the withholding fail differently and
+         * neither should be the only thing standing there.
+         */
+        if ($build->buildRequest?->from_fork === true) {
+            return null;
+        }
+
         $credential = $repository->credential;
 
         if ($credential === null) {

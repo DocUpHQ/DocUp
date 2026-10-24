@@ -61,6 +61,18 @@ final class BuildFailure extends \RuntimeException
         return $this->class->value.'.'.$this->reason;
     }
 
+    /**
+     * The sentence an author reads, from {@see FailureCatalogue}.
+     *
+     * Separate from {@see identifier()} because the two have opposite
+     * obligations: the identifier never changes and the message is reworded
+     * whenever a clearer wording is found.
+     */
+    public function userMessage(): string
+    {
+        return FailureCatalogue::message($this->identifier());
+    }
+
     public function isRetryable(): bool
     {
         return $this->class->isRetryable() && ($this->stage?->mayRetry() ?? false);

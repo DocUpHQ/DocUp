@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# §8.5.9's network-namespace warden. See `warden-entrypoint.sh` for why it
+# exists at all; in short, the nftables backstop needs CAP_NET_ADMIN and the
+# container it protects must have no capabilities, so the two cannot be the
+# same container.
+#
+# 🛑 Pre-baked, and that is load-bearing rather than tidy. The sandbox
+# network is `internal: true`, so a warden that installed nftables at
+# start-up could not reach a package index to do it — the first attempt at
+# this ran `apk add nftables` in the entrypoint, the install failed
+# silently on the internal network, and the resulting container enforced
+# NOTHING while looking entirely healthy. A build would have had open
+# access to its siblings and the operator would have had a green
+# `docker ps`. Baking the binary in is what makes the failure impossible
+# rather than unlikely.
+
+FROM alpine:3.21
+
+RUN apk add --no-cache nftables
+
+COPY deploy/warden-entrypoint.sh /usr/local/bin/docup-warden
+RUN chmod 0755 /usr/local/bin/docup-warden
+
+# Root, and only root: `nft` needs CAP_NET_ADMIN, which the runner grants to
+# this container and to nothing else in the pipeline. The container it
+# shields runs as uid 10001 with every capability dropped.
+ENTRYPOINT ["/usr/local/bin/docup-warden"]

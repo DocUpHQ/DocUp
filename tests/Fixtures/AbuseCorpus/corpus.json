@@ -4,474 +4,873 @@
   "authored": "2026-10-19",
   "cases": [
     {
-      "id": "path-001", "category": "path", "defends": "8.9.6",
+      "id": "path-001",
+      "category": "path",
+      "defends": "8.9.6",
       "input": "/en/latest/../../../etc/passwd",
-      "expect": "400", "note": "classic dot-segment traversal"
+      "expect": "400",
+      "note": "classic dot-segment traversal"
     },
     {
-      "id": "path-002", "category": "path", "defends": "8.9.6",
+      "id": "path-002",
+      "category": "path",
+      "defends": "8.9.6",
       "input": "/en/latest/%2e%2e%2f%2e%2e%2fetc/passwd",
-      "expect": "400", "note": "percent-encoded traversal; must be rejected on the raw path, not after decoding"
+      "expect": "400",
+      "note": "percent-encoded traversal; must be rejected on the raw path, not after decoding"
     },
     {
-      "id": "path-003", "category": "path", "defends": "8.9.6",
+      "id": "path-003",
+      "category": "path",
+      "defends": "8.9.6",
       "input": "/en/latest/%252e%252e%252fadmin",
-      "expect": "400", "note": "double-encoded; a single decode pass would let this through"
+      "expect": "400",
+      "note": "double-encoded; a single decode pass would let this through"
     },
     {
-      "id": "path-004", "category": "path", "defends": "8.9.6",
+      "id": "path-004",
+      "category": "path",
+      "defends": "8.9.6",
       "input": "/en/latest/guide%00.html",
-      "expect": "400", "note": "NUL byte truncation"
+      "expect": "400",
+      "note": "NUL byte truncation"
     },
     {
-      "id": "path-005", "category": "path", "defends": "8.9.6",
+      "id": "path-005",
+      "category": "path",
+      "defends": "8.9.6",
       "input": "/en/latest/guide\\..\\..\\windows",
-      "expect": "400", "note": "backslash as a separator"
+      "expect": "400",
+      "note": "backslash as a separator"
     },
     {
-      "id": "path-006", "category": "path", "defends": "8.9.6",
+      "id": "path-006",
+      "category": "path",
+      "defends": "8.9.6",
       "input": "/en//latest///guide/",
-      "expect": "400", "note": "repeated slashes are not byte-canonical; must reject, not normalise-and-serve"
+      "expect": "400",
+      "note": "repeated slashes are not byte-canonical; must reject, not normalise-and-serve"
     },
     {
-      "id": "path-007", "category": "path", "defends": "8.9.6",
+      "id": "path-007",
+      "category": "path",
+      "defends": "8.9.6",
       "input": "//evil.example.com/en/latest/",
-      "expect": "400", "note": "protocol-relative path, a redirect-target smuggling vector"
+      "expect": "400",
+      "note": "protocol-relative path, a redirect-target smuggling vector"
     },
     {
-      "id": "path-008", "category": "path", "defends": "8.7.16",
+      "id": "path-008",
+      "category": "path",
+      "defends": "8.7.16",
       "input": "/_/x/../../etc/passwd",
-      "expect": "400", "note": "traversal through the reserved cross-reference namespace"
+      "expect": "400",
+      "note": "traversal through the reserved cross-reference namespace"
     },
-
     {
-      "id": "cache_deception-001", "category": "cache_deception", "defends": "9.3.2",
+      "id": "cache_deception-001",
+      "category": "cache_deception",
+      "defends": "9.3.2",
       "input": "/en/latest/private-page.html/nonexistent.css",
-      "expect": "400", "note": "suffix-confusion: a cache keyed on the .css extension would store a private HTML body"
+      "expect": "400",
+      "note": "suffix-confusion: a cache keyed on the .css extension would store a private HTML body"
     },
     {
-      "id": "cache_deception-002", "category": "cache_deception", "defends": "9.3.2",
+      "id": "cache_deception-002",
+      "category": "cache_deception",
+      "defends": "9.3.2",
       "input": "/en/latest/private-page.html;foo.css",
-      "expect": "400", "note": "path-parameter variant of the same attack"
+      "expect": "400",
+      "note": "path-parameter variant of the same attack"
     },
     {
-      "id": "cache_deception-003", "category": "cache_deception", "defends": "9.3.2",
+      "id": "cache_deception-003",
+      "category": "cache_deception",
+      "defends": "9.3.2",
       "input": "/en/latest/private-page.html%3Ffoo.css",
-      "expect": "400", "note": "encoded query delimiter; rejection must precede the cache lookup"
+      "expect": "400",
+      "note": "encoded query delimiter; rejection must precede the cache lookup"
     },
     {
-      "id": "cache_deception-004", "category": "cache_deception", "defends": "8.12.22",
+      "id": "cache_deception-004",
+      "category": "cache_deception",
+      "defends": "8.12.22",
       "input": "GET a known-private asset with no credentials through the real edge",
       "expect": "404-or-403-never-200",
       "note": "the boot-time and CI containment self-test; fails the build on any 200"
     },
-
     {
-      "id": "host-001", "category": "host", "defends": "8.9.3",
+      "id": "host-001",
+      "category": "host",
+      "defends": "8.9.3",
       "input": "docs.example.com.evil.net",
-      "expect": "404", "note": "look-alike suffix; must not match the verified domain"
+      "expect": "404",
+      "note": "look-alike suffix; must not match the verified domain"
     },
     {
-      "id": "host-002", "category": "host", "defends": "8.9.3",
+      "id": "host-002",
+      "category": "host",
+      "defends": "8.9.3",
       "input": "evildocs.example.com",
-      "expect": "404", "note": "prefix look-alike"
+      "expect": "404",
+      "note": "prefix look-alike"
     },
     {
-      "id": "host-003", "category": "host", "defends": "8.9.3",
+      "id": "host-003",
+      "category": "host",
+      "defends": "8.9.3",
       "input": "unknown-host.invalid",
-      "expect": "404", "note": "must be a hard 404 and must NOT fall through to a default project"
+      "expect": "404",
+      "note": "must be a hard 404 and must NOT fall through to a default project"
     },
     {
-      "id": "host-004", "category": "host", "defends": "8.10.7",
+      "id": "host-004",
+      "category": "host",
+      "defends": "8.10.7",
       "input": "dоcs.example.com",
       "expect": "reject-at-save",
       "note": "Cyrillic o (U+043E) homoglyph; mixed-script confusable"
     },
     {
-      "id": "host-005", "category": "host", "defends": "8.10.7",
+      "id": "host-005",
+      "category": "host",
+      "defends": "8.10.7",
       "input": "xn--dcs-8cd.example.com",
-      "expect": "reject-at-save", "note": "the punycode form of the same confusable"
+      "expect": "reject-at-save",
+      "note": "the punycode form of the same confusable"
     },
     {
-      "id": "host-006", "category": "host", "defends": "8.9.3",
+      "id": "host-006",
+      "category": "host",
+      "defends": "8.9.3",
       "input": "project--version--extra.preview.example.net",
       "expect": "split-on-last-double-hyphen",
       "note": "preview host parsing must split on the LAST '--', not the first"
     },
-
     {
-      "id": "header-001", "category": "header", "defends": "8.9.4",
+      "id": "header-001",
+      "category": "header",
+      "defends": "8.9.4",
       "input": "X-DocUp-Project: other-tenant",
-      "expect": "ignored", "note": "no trusted project-resolution header exists in any environment (GHSA-mp38-vprc-7hf5 class)"
+      "expect": "ignored",
+      "note": "no trusted project-resolution header exists in any environment (GHSA-mp38-vprc-7hf5 class)"
     },
     {
-      "id": "header-002", "category": "header", "defends": "8.9.5",
+      "id": "header-002",
+      "category": "header",
+      "defends": "8.9.5",
       "input": "X-Accel-Redirect: /_internal/other-build/html/secret.html",
-      "expect": "stripped", "note": "inbound accel header must be stripped at the edge"
+      "expect": "stripped",
+      "note": "inbound accel header must be stripped at the edge"
     },
     {
-      "id": "header-003", "category": "header", "defends": "8.9.8",
+      "id": "header-003",
+      "category": "header",
+      "defends": "8.9.8",
       "input": "storage upstream returns X-Accel-Redirect",
-      "expect": "ignored", "note": "nginx honours X-Accel-* from ANY upstream; the storage hop must be configured to ignore it"
+      "expect": "ignored",
+      "note": "nginx honours X-Accel-* from ANY upstream; the storage hop must be configured to ignore it"
     },
     {
-      "id": "header-004", "category": "header", "defends": "9.3.5",
+      "id": "header-004",
+      "category": "header",
+      "defends": "9.3.5",
       "input": "X-Forwarded-For: 1.2.3.4 beyond the trusted hop count",
       "expect": "ignored"
     },
     {
-      "id": "header-005", "category": "header", "defends": "8.9.8",
+      "id": "header-005",
+      "category": "header",
+      "defends": "8.9.8",
       "input": "a private response handed off by internal redirect",
       "expect": "carries Cache-Control: private, no-store AND Vary: Cookie, each exactly once",
       "note": "ADR 0001: the edge drops the application's headers unless they are re-emitted; this case is the guard"
     },
-
     {
-      "id": "archive-001", "category": "archive", "defends": "8.8.2",
-      "builder": "zip_slip", "expect": "contract.path_escapes_root"
+      "id": "archive-001",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "zip_slip",
+      "expect": "contract.path_escapes_root"
     },
     {
-      "id": "archive-002", "category": "archive", "defends": "8.8.2",
-      "builder": "absolute_symlink", "expect": "contract.symlink_rejected"
+      "id": "archive-002",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "absolute_symlink",
+      "expect": "contract.symlink_rejected"
     },
     {
-      "id": "archive-003", "category": "archive", "defends": "8.8.2",
-      "builder": "relative_symlink_escape", "expect": "contract.symlink_rejected"
+      "id": "archive-003",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "relative_symlink_escape",
+      "expect": "contract.symlink_rejected"
     },
     {
-      "id": "archive-004", "category": "archive", "defends": "8.8.2",
-      "builder": "hardlink", "expect": "contract.hardlink_rejected"
+      "id": "archive-004",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "hardlink",
+      "expect": "contract.hardlink_rejected"
     },
     {
-      "id": "archive-005", "category": "archive", "defends": "8.8.2",
-      "builder": "ratio_bomb", "expect": "contract.compression_ratio_exceeded"
+      "id": "archive-005",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "ratio_bomb",
+      "expect": "contract.compression_ratio_exceeded"
     },
     {
-      "id": "archive-006", "category": "archive", "defends": "8.8.2",
-      "builder": "reserved_user_ini", "expect": "contract.reserved_filename"
+      "id": "archive-006",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "reserved_user_ini",
+      "expect": "contract.reserved_filename"
     },
     {
-      "id": "archive-007", "category": "archive", "defends": "8.8.2",
-      "builder": "reserved_htaccess", "expect": "contract.reserved_filename"
+      "id": "archive-007",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "reserved_htaccess",
+      "expect": "contract.reserved_filename"
     },
     {
-      "id": "archive-008", "category": "archive", "defends": "8.8.2",
-      "builder": "php_file", "expect": "contract.reserved_filename"
+      "id": "archive-008",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "php_file",
+      "expect": "contract.reserved_filename"
     },
     {
-      "id": "archive-009", "category": "archive", "defends": "8.8.2",
-      "builder": "device_node", "expect": "contract.unsupported_entry_type"
+      "id": "archive-009",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "device_node",
+      "expect": "contract.unsupported_entry_type"
     },
     {
-      "id": "archive-010", "category": "archive", "defends": "8.8.2",
-      "builder": "missing_index", "expect": "contract.missing_html_index"
+      "id": "archive-010",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "missing_index",
+      "expect": "contract.missing_html_index"
     },
     {
-      "id": "archive-011", "category": "archive", "defends": "8.4.5",
-      "builder": "two_pdf_files", "expect": "contract.multiple_pdf_files"
+      "id": "archive-011",
+      "category": "archive",
+      "defends": "8.4.5",
+      "builder": "two_pdf_files",
+      "expect": "contract.multiple_pdf_files"
     },
     {
-      "id": "archive-012", "category": "archive", "defends": "8.8.2",
-      "builder": "overlong_name", "expect": "contract.filename_too_long"
-    },
-
-    {
-      "id": "archive-013", "category": "archive", "defends": "8.8.2", "builder": "backslash_name",
-      "expect": "contract.backslash_in_name", "note": "P03: backslash as a separator; its meaning differs between extractors, so the name is refused rather than interpreted"
+      "id": "archive-012",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "overlong_name",
+      "expect": "contract.filename_too_long"
     },
     {
-      "id": "archive-014", "category": "archive", "defends": "8.8.2", "builder": "nul_in_name",
-      "expect": "contract.control_character_in_name", "note": "P03: NUL truncates the name in any C library, so it is checked as one name and written as another"
+      "id": "archive-013",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "backslash_name",
+      "expect": "contract.backslash_in_name",
+      "note": "P03: backslash as a separator; its meaning differs between extractors, so the name is refused rather than interpreted"
     },
     {
-      "id": "archive-015", "category": "archive", "defends": "8.8.2", "builder": "absolute_path_entry",
-      "expect": "contract.absolute_path", "note": "P03: distinct from path_escapes_root, which is the exit criteria's point"
+      "id": "archive-014",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "nul_in_name",
+      "expect": "contract.control_character_in_name",
+      "note": "P03: NUL truncates the name in any C library, so it is checked as one name and written as another"
     },
     {
-      "id": "archive-016", "category": "archive", "defends": "8.8.2", "builder": "file_count_bomb",
-      "expect": "contract.file_count_exceeded", "note": "P03: 100,000 files against the 50,000 cap; refusing must cost no more than the cap"
+      "id": "archive-015",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "absolute_path_entry",
+      "expect": "contract.absolute_path",
+      "note": "P03: distinct from path_escapes_root, which is the exit criteria's point"
     },
     {
-      "id": "archive-017", "category": "archive", "defends": "8.8.1", "builder": "duplicate_entry",
-      "expect": "contract.duplicate_entry", "note": "P03: write-once storage cannot represent a duplicate; tar's last-one-wins would desync the manifest from the bytes"
+      "id": "archive-016",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "file_count_bomb",
+      "expect": "contract.file_count_exceeded",
+      "note": "P03: 100,000 files against the 50,000 cap; refusing must cost no more than the cap"
     },
     {
-      "id": "archive-018", "category": "archive", "defends": "8.4.5", "builder": "stray_top_level_file",
-      "expect": "contract.unknown_output_directory", "note": "P03: refused, not silently dropped - an author whose files vanish has no way to find out why"
+      "id": "archive-017",
+      "category": "archive",
+      "defends": "8.8.1",
+      "builder": "duplicate_entry",
+      "expect": "contract.duplicate_entry",
+      "note": "P03: write-once storage cannot represent a duplicate; tar's last-one-wins would desync the manifest from the bytes"
     },
     {
-      "id": "archive-019", "category": "archive", "defends": "8.8.2", "builder": "fifo_entry",
-      "expect": "contract.unsupported_entry_type", "note": "P03: FIFO alongside the device node of archive-009"
+      "id": "archive-018",
+      "category": "archive",
+      "defends": "8.4.5",
+      "builder": "stray_top_level_file",
+      "expect": "contract.unknown_output_directory",
+      "note": "P03: refused, not silently dropped - an author whose files vanish has no way to find out why"
     },
     {
-      "id": "archive-020", "category": "archive", "defends": "8.8.2", "builder": "zip_symlink",
-      "expect": "contract.symlink_rejected", "note": "P03: a zip stores a symlink in its external attributes; statIndex() alone cannot see one"
+      "id": "archive-019",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "fifo_entry",
+      "expect": "contract.unsupported_entry_type",
+      "note": "P03: FIFO alongside the device node of archive-009"
     },
     {
-      "id": "archive-021", "category": "archive", "defends": "8.8.2", "builder": "pax_smuggled_traversal",
-      "expect": "contract.path_escapes_root", "note": "P03: the real name is in a pax extended header; the 100-byte header field reads smuggled.html"
+      "id": "archive-020",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "zip_symlink",
+      "expect": "contract.symlink_rejected",
+      "note": "P03: a zip stores a symlink in its external attributes; statIndex() alone cannot see one"
     },
     {
-      "id": "archive-022", "category": "archive", "defends": "8.8.2", "builder": "dot_segment_in_middle",
-      "expect": "contract.path_escapes_root", "note": "P03: a/./b would make the manifest disagree with the served path"
+      "id": "archive-021",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "pax_smuggled_traversal",
+      "expect": "contract.path_escapes_root",
+      "note": "P03: the real name is in a pax extended header; the 100-byte header field reads smuggled.html"
     },
     {
-      "id": "archive-023", "category": "archive", "defends": "8.8.2", "builder": "not_an_archive",
-      "expect": "contract.unreadable_archive", "note": "P03: a JPEG must not publish as a tree of nothing"
+      "id": "archive-022",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "dot_segment_in_middle",
+      "expect": "contract.path_escapes_root",
+      "note": "P03: a/./b would make the manifest disagree with the served path"
     },
     {
-      "id": "archive-024", "category": "archive", "defends": "8.8.2", "builder": "lying_size_header",
-      "expect": "contract.unreadable_archive", "note": "P03: header declares 4096 bytes for a 32-byte member; if declared may differ from actual, pass one checked nothing"
-    },
-
-    {
-      "id": "redirect-001", "category": "redirect", "defends": "8.11.3",
-      "input": [{"from": "/a", "to": "/b"}, {"from": "/b", "to": "/a"}],
-      "expect": "reject-at-save", "note": "two-hop cycle, detectable on the literal rule graph"
+      "id": "archive-023",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "not_an_archive",
+      "expect": "contract.unreadable_archive",
+      "note": "P03: a JPEG must not publish as a tree of nothing"
     },
     {
-      "id": "redirect-002", "category": "redirect", "defends": "8.11.3",
-      "input": [{"from": "/a", "to": "/b"}, {"from": "/b", "to": "/c"}, {"from": "/c", "to": "/a"}],
-      "expect": "reject-at-save", "note": "three-hop cycle"
+      "id": "archive-024",
+      "category": "archive",
+      "defends": "8.8.2",
+      "builder": "lying_size_header",
+      "expect": "contract.unreadable_archive",
+      "note": "P03: header declares 4096 bytes for a 32-byte member; if declared may differ from actual, pass one checked nothing"
     },
     {
-      "id": "redirect-003", "category": "redirect", "defends": "8.11.3",
-      "input": [{"from": "/a/*", "to": "/a/:splat"}],
-      "expect": "404-after-hop-cap", "note": "self-referential wildcard; not detectable at save time, must hit the runtime hop cap"
+      "id": "redirect-001",
+      "category": "redirect",
+      "defends": "8.11.3",
+      "input": [
+        {
+          "from": "/a",
+          "to": "/b"
+        },
+        {
+          "from": "/b",
+          "to": "/a"
+        }
+      ],
+      "expect": "reject-at-save",
+      "note": "two-hop cycle, detectable on the literal rule graph"
     },
     {
-      "id": "redirect-004", "category": "redirect", "defends": "8.11.4",
-      "input": {"type": "regex", "pattern": "^(a+)+$"},
-      "expect": "reject-at-save", "note": "nested quantifier; catastrophic backtracking"
+      "id": "redirect-002",
+      "category": "redirect",
+      "defends": "8.11.3",
+      "input": [
+        {
+          "from": "/a",
+          "to": "/b"
+        },
+        {
+          "from": "/b",
+          "to": "/c"
+        },
+        {
+          "from": "/c",
+          "to": "/a"
+        }
+      ],
+      "expect": "reject-at-save",
+      "note": "three-hop cycle"
     },
     {
-      "id": "redirect-005", "category": "redirect", "defends": "8.11.4",
-      "input": {"type": "regex", "pattern": "(?:(?:(?:a*)*)*)*b"},
+      "id": "redirect-003",
+      "category": "redirect",
+      "defends": "8.11.3",
+      "input": [
+        {
+          "from": "/a/*",
+          "to": "/a/:splat"
+        }
+      ],
+      "expect": "404-after-hop-cap",
+      "note": "self-referential wildcard; not detectable at save time, must hit the runtime hop cap"
+    },
+    {
+      "id": "redirect-004",
+      "category": "redirect",
+      "defends": "8.11.4",
+      "input": {
+        "type": "regex",
+        "pattern": "^(a+)+$"
+      },
+      "expect": "reject-at-save",
+      "note": "nested quantifier; catastrophic backtracking"
+    },
+    {
+      "id": "redirect-005",
+      "category": "redirect",
+      "defends": "8.11.4",
+      "input": {
+        "type": "regex",
+        "pattern": "(?:(?:(?:a*)*)*)*b"
+      },
       "expect": "reject-at-save"
     },
     {
-      "id": "redirect-006", "category": "redirect", "defends": "8.11.2",
-      "input": {"type": "exact", "from": "/old", "to": "https://evil.example.com/"},
-      "expect": "reject-at-save", "note": "open redirect to an unverified host"
-    },
-
-    {
-      "id": "config-001", "category": "config", "defends": "8.4.9",
-      "builder": "yaml_billion_laughs", "expect": "config.alias_expansion_forbidden"
-    },
-    {
-      "id": "config-002", "category": "config", "defends": "8.4.9",
-      "builder": "yaml_depth_40", "expect": "config.max_depth_exceeded"
+      "id": "redirect-006",
+      "category": "redirect",
+      "defends": "8.11.2",
+      "input": {
+        "type": "exact",
+        "from": "/old",
+        "to": "https://evil.example.com/"
+      },
+      "expect": "reject-at-save",
+      "note": "open redirect to an unverified host"
     },
     {
-      "id": "config-003", "category": "config", "defends": "8.4.9",
-      "builder": "yaml_256kb_plus", "expect": "config.max_size_exceeded"
+      "id": "config-001",
+      "category": "config",
+      "defends": "8.4.9",
+      "builder": "yaml_billion_laughs",
+      "expect": "config.alias_expansion_forbidden"
     },
     {
-      "id": "config-004", "category": "config", "defends": "8.4.8",
-      "input": {"version": 2, "project": "other-tenant"},
+      "id": "config-002",
+      "category": "config",
+      "defends": "8.4.9",
+      "builder": "yaml_depth_40",
+      "expect": "config.max_depth_exceeded"
+    },
+    {
+      "id": "config-003",
+      "category": "config",
+      "defends": "8.4.9",
+      "builder": "yaml_256kb_plus",
+      "expect": "config.max_size_exceeded"
+    },
+    {
+      "id": "config-004",
+      "category": "config",
+      "defends": "8.4.8",
+      "input": {
+        "version": 2,
+        "project": "other-tenant"
+      },
       "expect": "config.unknown_property",
       "note": "the config file may never name a project; additionalProperties is false"
     },
     {
-      "id": "config-005", "category": "config", "defends": "8.4.8",
-      "input": {"version": 2, "visibility": "public"},
+      "id": "config-005",
+      "category": "config",
+      "defends": "8.4.8",
+      "input": {
+        "version": 2,
+        "visibility": "public"
+      },
       "expect": "config.unknown_property",
       "note": "nor visibility - repository content is attacker-controlled"
     },
     {
-      "id": "config-006", "category": "config", "defends": "8.4.9",
-      "builder": "yaml_multi_document", "expect": "config.single_document_required"
-    },
-
-    {
-      "id": "git_url-001", "category": "git_url", "defends": "8.3.4",
-      "input": "ext::sh -c id", "expect": "reject", "note": "remote code execution via git ext transport"
+      "id": "config-006",
+      "category": "config",
+      "defends": "8.4.9",
+      "builder": "yaml_multi_document",
+      "expect": "config.single_document_required"
     },
     {
-      "id": "git_url-002", "category": "git_url", "defends": "8.3.4",
-      "input": "file:///etc/passwd", "expect": "reject", "note": "local file disclosure"
+      "id": "git_url-001",
+      "category": "git_url",
+      "defends": "8.3.4",
+      "input": "ext::sh -c id",
+      "expect": "reject",
+      "note": "remote code execution via git ext transport"
     },
     {
-      "id": "git_url-003", "category": "git_url", "defends": "8.3.4",
-      "input": "https://169.254.169.254/latest/meta-data/", "expect": "reject", "note": "cloud metadata"
+      "id": "git_url-002",
+      "category": "git_url",
+      "defends": "8.3.4",
+      "input": "file:///etc/passwd",
+      "expect": "reject",
+      "note": "local file disclosure"
     },
     {
-      "id": "git_url-004", "category": "git_url", "defends": "8.3.4",
-      "input": "https://10.0.0.1/internal.git", "expect": "reject", "note": "RFC1918"
+      "id": "git_url-003",
+      "category": "git_url",
+      "defends": "8.3.4",
+      "input": "https://169.254.169.254/latest/meta-data/",
+      "expect": "reject",
+      "note": "cloud metadata"
     },
     {
-      "id": "git_url-005", "category": "git_url", "defends": "8.3.4",
-      "input": "https://[::1]/internal.git", "expect": "reject", "note": "IPv6 loopback"
+      "id": "git_url-004",
+      "category": "git_url",
+      "defends": "8.3.4",
+      "input": "https://10.0.0.1/internal.git",
+      "expect": "reject",
+      "note": "RFC1918"
     },
     {
-      "id": "git_url-006", "category": "git_url", "defends": "8.3.4",
-      "input": "https://[fd00::1]/internal.git", "expect": "reject", "note": "IPv6 ULA"
+      "id": "git_url-005",
+      "category": "git_url",
+      "defends": "8.3.4",
+      "input": "https://[::1]/internal.git",
+      "expect": "reject",
+      "note": "IPv6 loopback"
     },
     {
-      "id": "git_url-007", "category": "git_url", "defends": "8.3.4",
+      "id": "git_url-006",
+      "category": "git_url",
+      "defends": "8.3.4",
+      "input": "https://[fd00::1]/internal.git",
+      "expect": "reject",
+      "note": "IPv6 ULA"
+    },
+    {
+      "id": "git_url-007",
+      "category": "git_url",
+      "defends": "8.3.4",
       "input": "a TTL-0 DNS name resolving to 127.0.0.1 on second lookup",
-      "expect": "reject", "note": "DNS rebinding; resolve-then-pin is the defence"
+      "expect": "reject",
+      "note": "DNS rebinding; resolve-then-pin is the defence"
     },
     {
-      "id": "git_url-008", "category": "git_url", "defends": "8.3.4",
+      "id": "git_url-008",
+      "category": "git_url",
+      "defends": "8.3.4",
       "input": "https://public.example.com/repo.git redirecting to http://10.0.0.1/",
-      "expect": "reject", "note": "redirects must be disabled, not followed-then-checked"
+      "expect": "reject",
+      "note": "redirects must be disabled, not followed-then-checked"
     },
-
     {
-      "id": "git_url-009", "category": "git_url", "defends": "8.3.4",
+      "id": "git_url-009",
+      "category": "git_url",
+      "defends": "8.3.4",
       "input": "ext::sh -c id",
       "expect": "git_url.remote_helper_forbidden",
       "note": "🛑 exit criterion 1 of 5. git's <transport>::<address> syntax runs git-remote-ext, which runs the rest as a shell command. Must be refused on the RAW string: parse_url reports no scheme for it, so a check that waited for a parsed scheme would never fire"
     },
     {
-      "id": "git_url-010", "category": "git_url", "defends": "8.3.4",
+      "id": "git_url-010",
+      "category": "git_url",
+      "defends": "8.3.4",
       "input": "file:///etc/passwd",
       "expect": "git_url.local_path_forbidden",
       "note": "🛑 exit criterion 2 of 5. Local file disclosure. Distinct from git_url-009 because execution and disclosure are different capabilities and an operator triaging an alert needs to know which fired"
     },
     {
-      "id": "git_url-011", "category": "git_url", "defends": "8.3.4",
+      "id": "git_url-011",
+      "category": "git_url",
+      "defends": "8.3.4",
       "input": "https://169.254.169.254/latest/meta-data/repo.git",
       "expect": "git_url.metadata_address_denied",
       "note": "🛑 exit criterion 3 of 5. Cloud instance metadata, which on most providers returns role credentials to an unauthenticated GET. Its own identifier rather than link_local, because 169.254.169.254 is a credential-theft primitive and 169.254.0.0/16 is a misconfiguration"
     },
     {
-      "id": "git_url-012", "category": "git_url", "defends": "8.3.4",
+      "id": "git_url-012",
+      "category": "git_url",
+      "defends": "8.3.4",
       "input": "a TTL-0 DNS name answering 93.184.216.34 then 127.0.0.1",
       "expect": "git_url.dns_rebind_detected",
       "note": "🛑 exit criterion 4 of 5. Distinct from the address identifiers: those fire on the FIRST answer, this one on a second answer that disagrees with it. Resolve-then-pin already makes the second answer unusable; this turns a name that tried into a refusal rather than a request quietly served from the pinned address"
     },
     {
-      "id": "git_url-013", "category": "git_url", "defends": "8.3.4",
+      "id": "git_url-013",
+      "category": "git_url",
+      "defends": "8.3.4",
       "input": "an HTTPS origin answering 302 Location: http://10.0.0.1/internal",
       "expect": "git_url.redirect_refused",
       "note": "🛑 exit criterion 5 of 5. Refused on the 3xx itself, before the target is examined: re-validating after following is the shape of every SSRF bypass, where the second request is made by a layer that has forgotten the first one's constraints"
     },
     {
-      "id": "git_url-014", "category": "git_url", "defends": "8.3.4",
+      "id": "git_url-014",
+      "category": "git_url",
+      "defends": "8.3.4",
       "input": "https://[::ffff:169.254.169.254]/repo.git",
       "expect": "git_url.metadata_address_denied",
       "note": "IPv4-mapped IPv6. The same metadata address, spelled so that a deny list written in dotted quads does not recognise it"
     },
     {
-      "id": "git_url-015", "category": "git_url", "defends": "8.3.4",
+      "id": "git_url-015",
+      "category": "git_url",
+      "defends": "8.3.4",
       "input": "https://[64:ff9b::a00:1]/repo.git",
       "expect": "git_url.private_address_denied",
       "note": "NAT64 well-known prefix embedding 10.0.0.1; reaches RFC1918 through any NAT64 gateway"
     },
     {
-      "id": "git_url-016", "category": "git_url", "defends": "8.3.3",
+      "id": "git_url-016",
+      "category": "git_url",
+      "defends": "8.3.3",
       "input": "https://x-access-token:ghp_0123456789abcdefghijklmnopqrstuvwxyz@github.com/acme/docs.git",
       "expect": "git_url.credentials_in_url",
       "note": "A token in the URL authority. Refused, not stripped: §8.5.7 supplies credentials through a file descriptor precisely so they never appear in a remote URL, and silently tidying it would hide from the operator that the token is already in their shell history"
     },
     {
-      "id": "git_url-017", "category": "git_url", "defends": "8.3.5",
+      "id": "git_url-017",
+      "category": "git_url",
+      "defends": "8.3.5",
       "input": "a repository requesting recursive submodule cloning",
       "expect": "git_url.submodule_recursion_forbidden",
       "note": "CVE-2025-48384 and CVE-2023-22490 are both reached by recursing into a submodule the operator never named. Recursion is not a setting with a safe default; GitSafety::submoduleArguments refuses the request loudly rather than silently doing the safe thing and leaving the caller believing recursion happened"
     },
-
     {
-      "id": "runner-001", "category": "runner", "defends": "8.5.13",
+      "id": "runner-001",
+      "category": "runner",
+      "defends": "8.5.13",
       "input": "a build.os value of `ubuntu --privileged -v /:/host`",
       "expect": "unknown build image: ubuntu --privileged -v /:/host",
       "note": "🛑 §8.5.14: the image is an allowlist KEY, never a reference, so a YAML value naming an image plus two flags never reaches argv at all - it reaches an array_key_exists. The first thing anyone tries against a build system that takes `build.os` from a repository"
     },
     {
-      "id": "runner-002", "category": "runner", "defends": "8.5.13",
+      "id": "runner-002",
+      "category": "runner",
+      "defends": "8.5.13",
       "input": "a build command argument of `--privileged`",
       "expect": "argument-position-after-image",
       "note": "Accepted as an ARGUMENT and refused as a FLAG. The image is the last flag-position element in the fixed argv template, so everything after it is the container's own argv and docker does not interpret it. Asserted by position rather than by rejection, because a legitimate command may contain a leading dash"
     },
     {
-      "id": "runner-003", "category": "runner", "defends": "8.5.13",
+      "id": "runner-003",
+      "category": "runner",
+      "defends": "8.5.13",
       "input": "a command argument containing a newline, e.g. `build\n--privileged`",
       "expect": "a command argument contains a control character",
       "note": "A newline is how one argument becomes two lines in anything that logs or re-parses argv. Also refuses a NUL, which truncates at the execve boundary - everything after it is invisible to a check performed in PHP and still reaches the kernel"
     },
     {
-      "id": "runner-004", "category": "runner", "defends": "8.5.7",
+      "id": "runner-004",
+      "category": "runner",
+      "defends": "8.5.7",
       "input": "a run specification for the `build` stage with accepts_stdin true",
       "expect": "only the fetch stage may read a credential from stdin (§8.5.7)",
       "note": "🛑 The credential separation, as an invariant rather than a convention. Read the Docs runs post_checkout in the credentialed context; §8.5.7 says plainly that doing so voids the entire separation"
     },
     {
-      "id": "runner-005", "category": "runner", "defends": "8.5.7",
+      "id": "runner-005",
+      "category": "runner",
+      "defends": "8.5.7",
       "input": "a post_checkout-shaped fixture in the build sandbox reading env, /run/cred, .git/config and grepping the workspace",
       "expect": "finds-nothing",
       "note": "🛑 Phase 06's exit criterion. The fetcher is given a sentinel credential on stdin; the build container then looks everywhere it could have survived - its own environment, the fetcher's tmpfs, the clone's .git/config - and finds none of it. CredentialIsolationTest, run in the runner container because the application image has no docker client"
     },
     {
-      "id": "runner-006", "category": "runner", "defends": "8.5.21",
+      "id": "runner-006",
+      "category": "runner",
+      "defends": "8.5.21",
       "input": "a build container emitting a 20 MB log, and a single line of 64 KB",
       "expect": "capped-and-truncated",
       "note": "§8.5.21: strip NUL bytes, truncate lines over 8 KiB, cap the log at 10 MiB. Enforced WHILE READING in the runner, not after: a cap applied once the bytes have crossed the spool is a cap on where they are stored rather than on what they cost"
     },
-
     {
-      "id": "saml-001", "category": "saml", "defends": "8.12.18",
-      "builder": "unsigned", "expect": "reject", "note": "no signature at all"
+      "id": "saml-001",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "unsigned",
+      "expect": "reject",
+      "note": "no signature at all"
     },
     {
-      "id": "saml-002", "category": "saml", "defends": "8.12.18",
-      "builder": "response_signed_assertion_unsigned", "expect": "reject",
+      "id": "saml-002",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "response_signed_assertion_unsigned",
+      "expect": "reject",
       "note": "signature required on Response AND Assertion"
     },
     {
-      "id": "saml-003", "category": "saml", "defends": "8.12.18",
-      "builder": "signature_wrapping", "expect": "reject",
+      "id": "saml-003",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "signature_wrapping",
+      "expect": "reject",
       "note": "XSW: a signed decoy alongside an unsigned injected assertion"
     },
     {
-      "id": "saml-004", "category": "saml", "defends": "8.12.18",
-      "builder": "alg_none", "expect": "reject"
+      "id": "saml-004",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "alg_none",
+      "expect": "reject"
     },
     {
-      "id": "saml-005", "category": "saml", "defends": "8.12.18",
-      "builder": "two_assertions", "expect": "reject", "note": "exactly one Assertion is permitted"
+      "id": "saml-005",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "two_assertions",
+      "expect": "reject",
+      "note": "exactly one Assertion is permitted"
     },
     {
-      "id": "saml-006", "category": "saml", "defends": "8.12.18",
-      "builder": "wrong_audience", "expect": "reject"
+      "id": "saml-006",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "wrong_audience",
+      "expect": "reject"
     },
     {
-      "id": "saml-007", "category": "saml", "defends": "8.12.18",
-      "builder": "wrong_destination", "expect": "reject"
+      "id": "saml-007",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "wrong_destination",
+      "expect": "reject"
     },
     {
-      "id": "saml-008", "category": "saml", "defends": "8.12.18",
-      "builder": "expired_notonorafter", "expect": "reject"
+      "id": "saml-008",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "expired_notonorafter",
+      "expect": "reject"
     },
     {
-      "id": "saml-009", "category": "saml", "defends": "8.12.18",
-      "builder": "replayed_assertion_id", "expect": "reject", "note": "the assertion-id replay cache"
+      "id": "saml-009",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "replayed_assertion_id",
+      "expect": "reject",
+      "note": "the assertion-id replay cache"
     },
     {
-      "id": "saml-010", "category": "saml", "defends": "8.12.18",
-      "builder": "comment_truncation", "expect": "reject",
+      "id": "saml-010",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "comment_truncation",
+      "expect": "reject",
       "note": "XML comment in NameID splits the parsed value (CVE-2017-11427 class)"
     },
     {
-      "id": "saml-011", "category": "saml", "defends": "8.12.18",
-      "builder": "xxe_external_entity", "expect": "reject",
+      "id": "saml-011",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "xxe_external_entity",
+      "expect": "reject",
       "note": "must never reach an entity-expanding parser"
     },
     {
-      "id": "saml-012", "category": "saml", "defends": "8.12.18",
-      "builder": "encrypted_unsigned", "expect": "reject",
+      "id": "saml-012",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "encrypted_unsigned",
+      "expect": "reject",
       "note": "encrypted assertion without a signature"
     },
     {
-      "id": "saml-013", "category": "saml", "defends": "8.12.18",
-      "builder": "idp_initiated", "expect": "reject-unless-enabled",
+      "id": "saml-013",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "idp_initiated",
+      "expect": "reject-unless-enabled",
       "note": "IdP-initiated is off by default"
     },
     {
-      "id": "saml-014", "category": "saml", "defends": "8.12.18",
-      "builder": "clock_skew_130s", "expect": "reject", "note": "skew tolerance is 120s"
+      "id": "saml-014",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "clock_skew_130s",
+      "expect": "reject",
+      "note": "skew tolerance is 120s"
+    },
+    {
+      "id": "sandbox-001",
+      "category": "sandbox",
+      "defends": "8.5.18",
+      "input": "a build that forks without bound (`bomb() { bomb & bomb & }; bomb`)",
+      "expect": "resource.pid_limit_exceeded",
+      "note": "🛑 The kernel refuses the forks at --pids-limit and the shell still EXITS 0, so `docker inspect` reports a clean run. `pids.events:max` in the cgroup is the only evidence it happened, and it has no daemon equivalent - which is why §8.5.15's 'read authoritatively from cgroup' is not a stylistic preference."
+    },
+    {
+      "id": "sandbox-002",
+      "category": "sandbox",
+      "defends": "8.5.18",
+      "input": "a build writing 10 GB into its workspace",
+      "expect": "resource.disk_quota_exceeded",
+      "note": "🛑 There is no portable filesystem quota to hand the kernel: --storage-opt needs overlay-on-xfs with pquota, and a tmpfs volume is remounted empty between stages (both measured, ADR 0011). So the runner measures the tree it can see and kills the container, which is enforcement rather than §8.5.18's 'unenforced soft limits'."
+    },
+    {
+      "id": "sandbox-003",
+      "category": "sandbox",
+      "defends": "8.5.9",
+      "input": "a dependency install reaching deb.debian.org, which is not on the egress allowlist",
+      "expect": "user.package_host_not_allowlisted",
+      "note": "The allowlist carries package INDEXES (PyPI, npm, crates.io, the Go proxy, RubyGems) and git hosts. A distribution package manager is deliberately absent: §8.5.14 pre-bakes images, so a build installing system packages is a build doing something the image was supposed to have done."
+    },
+    {
+      "id": "sandbox-004",
+      "category": "sandbox",
+      "defends": "8.5.9",
+      "input": "a build opening an outbound request to a host nobody allowlisted",
+      "expect": "user.egress_host_not_allowlisted",
+      "note": "Refused by the CONNECT proxy with a 403, attributed to this build by the warden's address in the proxy's own access log - so the message can name the host rather than saying 'something was blocked'."
+    },
+    {
+      "id": "sandbox-005",
+      "category": "sandbox",
+      "defends": "8.5.9",
+      "input": "a conf.py fetching http://169.254.169.254/latest/meta-data/ at import time",
+      "expect": "user.egress_metadata_endpoint_denied",
+      "note": "🛑 Its OWN identifier, distinct from any other blocked host, because the two need different words: an unreachable package index is a packaging problem and a build reaching for cloud instance credentials is an incident. Blocked twice over - the proxy refuses it and the nftables backstop drops the packet if the build goes round the proxy."
+    },
+    {
+      "id": "sandbox-006",
+      "category": "sandbox",
+      "defends": "8.5.9",
+      "input": "a build that ignores http_proxy and opens a socket directly",
+      "expect": "user.egress_blocked_at_layer3",
+      "note": "🛑 Read from a named nft counter, not from the build's own words: 'Connection timed out' is what a dropped packet and a dependency server being down both look like. The counter distinguishes them, which is what makes the identifier stable enough to alert on."
+    },
+    {
+      "id": "sandbox-007",
+      "category": "sandbox",
+      "defends": "8.5.13",
+      "input": "a spool document carrying `mounts: [/var/run/docker.sock:/var/run/docker.sock]`",
+      "expect": "rejected.runtime_socket_requested",
+      "note": "🛑 Until Phase 07 an unrecognised spool field was IGNORED, which is safe only while the argv template stays exactly as narrow as it is today. Refusing means a document the constructor does not understand never runs - and the privilege-seeking names get their own identifier so an operator sees an attempt rather than a typo."
+    },
+    {
+      "id": "sandbox-008",
+      "category": "sandbox",
+      "defends": "8.5.18",
+      "input": "a build that sleeps for twenty minutes",
+      "expect": "timeout.stage_timeout",
+      "note": "Not retried (§8.5.16): a build that exceeded its clock once will exceed it again, and a retry buys a second slot for the same answer."
+    },
+    {
+      "id": "sandbox-009",
+      "category": "sandbox",
+      "defends": "8.5.9",
+      "input": "a build container reaching ANOTHER build container on the sandbox network",
+      "expect": "dropped by the nftables backstop",
+      "note": "🛑 The case an `internal: true` network does NOT close: internal means no route off the host, not no route across it. Two organisations' builds share that network, so without the per-build warden one could open a socket to the other's. Measured in ADR 0011."
+    },
+    {
+      "id": "sandbox-010",
+      "category": "sandbox",
+      "defends": "8.5.12",
+      "input": "a sandbox from which the database is reachable",
+      "expect": "the runner refuses to start",
+      "note": "§8.5.12 says 'Startup MUST fail', and a non-zero exit from the runner is how that reaches an init system. Demonstrated by attaching the database to the sandbox network and watching the self-test refuse."
     }
   ]
 }

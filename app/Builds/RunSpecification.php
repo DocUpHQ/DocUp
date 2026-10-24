@@ -7,6 +7,9 @@ declare(strict_types=1);
 
 namespace App\Builds;
 
+use App\Builds\Exceptions\RunSpecificationRefused;
+use App\Builds\Sandbox\EgressMode;
+
 /**
  * The typed run specification of §8.5.13.
  *
@@ -58,7 +61,19 @@ final readonly class RunSpecification
         public string $volume,
         public string $workdir,
         public int $timeoutSeconds,
-        public bool $networkEnabled,
+
+        /**
+         * 🛑 What this stage may reach, as §8.5.9's three-state mode rather
+         * than a boolean.
+         *
+         * Phase 06 carried `networkEnabled: bool`, and the replacement is
+         * not cosmetic: `none` is **stricter** than the default allowlist
+         * and `open` is weaker, so a boolean put the safest and the most
+         * dangerous configuration on the same side of one question. The
+         * runner renders each mode to a different network namespace, and
+         * only `allowlist` gets a warden and a proxy.
+         */
+        public EgressMode $egress,
         public bool $readOnlyRoot = true,
         public bool $acceptsStdin = false,
 
@@ -173,7 +188,7 @@ final readonly class RunSpecification
             'volume' => $this->volume,
             'workdir' => $this->workdir,
             'timeout_seconds' => $this->timeoutSeconds,
-            'network_enabled' => $this->networkEnabled,
+            'egress' => $this->egress->value,
             'read_only_root' => $this->readOnlyRoot,
             'accepts_stdin' => $this->acceptsStdin,
             'export_path' => $this->exportPath,
@@ -192,6 +207,8 @@ final readonly class RunSpecification
      */
     public static function fromArray(array $data): self
     {
+        self::assertNoUnknownFields($data);
+
         $command = [];
 
         foreach (is_array($data['command'] ?? null) ? $data['command'] : [] as $argument) {
@@ -209,12 +226,66 @@ final readonly class RunSpecification
             volume: self::text($data, 'volume'),
             workdir: self::text($data, 'workdir'),
             timeoutSeconds: is_int($data['timeout_seconds'] ?? null) ? $data['timeout_seconds'] : 0,
-            networkEnabled: ($data['network_enabled'] ?? false) === true,
+            egress: EgressMode::fromConfig($data['egress'] ?? null),
             readOnlyRoot: ($data['read_only_root'] ?? true) !== false,
             acceptsStdin: ($data['accepts_stdin'] ?? false) === true,
             exportPath: is_string($data['export_path'] ?? null) ? $data['export_path'] : null,
             releaseWorkspace: ($data['release_workspace'] ?? false) === true,
         );
+    }
+
+    /**
+     * 🛑 A spool document may carry nothing this class does not declare.
+     *
+     * §8.5.13: "it MUST accept only a typed run specification rendered
+     * through a fixed argv template. 🛑 There MUST be no code path from a
+     * webhook, a YAML value or an HTTP request to an arbitrary runtime
+     * call."
+     *
+     * Until Phase 07 an unrecognised key was simply **ignored**, and that
+     * was the wrong shape for this boundary. Ignoring is safe only while
+     * the renderer stays exactly as narrow as it is today: the moment
+     * anybody adds a `mounts` or a `devices` field to the template, every
+     * spool document that has been quietly carrying one starts being
+     * honoured, and nothing in between would have failed. Refusing means a
+     * document the constructor does not understand never runs at all.
+     *
+     * The named keys are not an exhaustive list of dangerous requests —
+     * that list cannot exist — they are there so the refusal says
+     * `runtime_socket_requested` rather than `unknown field`, which is the
+     * difference between an operator seeing an attack and seeing a typo.
+     *
+     * @param  array<array-key, mixed>  $data
+     *
+     * @throws RunSpecificationRefused
+     */
+    private static function assertNoUnknownFields(array $data): void
+    {
+        $known = [
+            'build_id', 'stage', 'image_key', 'command', 'environment', 'volume',
+            'workdir', 'timeout_seconds', 'egress', 'read_only_root',
+            'accepts_stdin', 'export_path', 'release_workspace',
+        ];
+
+        $privilegeSeeking = [
+            'mounts', 'mount', 'volumes', 'binds', 'devices', 'privileged',
+            'cap_add', 'capabilities', 'security_opt', 'network', 'runtime',
+            'user', 'pid_mode', 'ipc_mode', 'userns_mode',
+        ];
+
+        foreach (array_keys($data) as $key) {
+            $key = (string) $key;
+
+            if (in_array($key, $known, true)) {
+                continue;
+            }
+
+            if (in_array($key, $privilegeSeeking, true)) {
+                throw RunSpecificationRefused::privilegeSought($key);
+            }
+
+            throw RunSpecificationRefused::unknownField($key);
+        }
     }
 
     /**

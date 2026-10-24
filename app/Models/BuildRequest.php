@@ -55,6 +55,15 @@ final class BuildRequest extends Model
     protected $attributes = [
         'state' => 'queued',
         'payload_truncated' => false,
+
+        /*
+         * 🛑 §8.5.10's default, declared on the model as well as in the
+         * schema. A request built in memory and never saved - which is how
+         * most of the pipeline's tests construct one - would otherwise read
+         * `null` here, and `null !== true` is the right answer by accident
+         * rather than by statement.
+         */
+        'from_fork' => false,
     ];
 
     /** @return array<string, string> */
@@ -62,6 +71,7 @@ final class BuildRequest extends Model
     {
         return [
             'payload_truncated' => 'boolean',
+            'from_fork' => 'boolean',
             'created_at' => 'datetime:Y-m-d H:i:s.v',
             'updated_at' => 'datetime:Y-m-d H:i:s.v',
         ];

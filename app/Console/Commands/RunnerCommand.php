@@ -7,6 +7,8 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Builds\Runner\CgroupSampler;
+use App\Builds\Runner\IsolationSelfTest;
 use App\Builds\Runner\RunnerDriver;
 use App\Builds\Runner\RunOutcome;
 use App\Builds\Runner\Spool;
@@ -41,7 +43,7 @@ final class RunnerCommand extends Command
 
     protected $description = 'Run build containers from the spool (SPEC 8.5.13). Holds the runtime socket; holds no credentials.';
 
-    public function handle(RunnerDriver $driver, Spool $spool): int
+    public function handle(RunnerDriver $driver, Spool $spool, IsolationSelfTest $selfTest): int
     {
         $spool->ensure();
 
@@ -51,6 +53,59 @@ final class RunnerCommand extends Command
             $this->warn("removed {$swept} container(s) left by a previous runner");
         }
 
+        /*
+         * 🛑 §8.5.12: "Network isolation MUST be verified at boot by
+         * launching a throwaway container … **Startup MUST fail** if the
+         * self-test fails."
+         *
+         * It runs HERE, in the runner, because the runner is the only
+         * process that holds the container-runtime socket (§8.5.13) and so
+         * the only one that *can* launch the throwaway container. A
+         * non-zero exit is how "startup fails" is expressed to an init
+         * system: compose reports the service as failed rather than
+         * starting a runner that would accept builds into a sandbox nobody
+         * has checked.
+         *
+         * The verdict is also written to the spool, because the worker and
+         * the dashboard need to say "builds are unavailable" and cannot ask
+         * this process anything — it has no database.
+         */
+        /*
+         * 🛑 Said out loud, because the alternative is losing a control in
+         * silence. Without the cgroup hierarchy mounted (§8.5.15), the OOM
+         * and PID counters read zero rather than failing — so a fork bomb
+         * looks like a clean build and an OOM-killed subprocess looks like
+         * nothing at all. Found when CI's sandbox job reported the
+         * fork-bomb exit criterion as `succeeded`.
+         */
+        if (! CgroupSampler::hierarchyIsVisible()) {
+            $this->warn(
+                '§8.5.15: the cgroup hierarchy is not visible at '
+                .(string) config('builds.sandbox.cgroup_root')
+                .', so OOM kills and PID-ceiling hits cannot be read authoritatively. '
+                .'Builds will still run; a fork bomb will not be detected. Mount '
+                .'/sys/fs/cgroup read-only, as compose.yaml does.',
+            );
+        }
+
+        $result = $selfTest->run();
+        $spool->writeSelfTest($result->passed, $result->summary);
+
+        if (! $result->passed) {
+            $this->error('§8.5.12 sandbox isolation self-test FAILED — refusing to start.');
+            $this->line($result->summary);
+
+            if (! $result->available) {
+                $this->line('');
+                $this->line('The sandbox is not configured on this host. The runner needs the');
+                $this->line('egress proxy and the sandboxes network from compose.yaml; without');
+                $this->line('them a build would run with an isolation nobody has verified.');
+            }
+
+            return self::FAILURE;
+        }
+
+        $this->info('§8.5.12 sandbox isolation self-test passed — '.$result->summary);
         $this->info('runner ready — spool '.$spool->root());
 
         $interval = max(50, (int) config('builds.poll_interval_ms')) * 1000;

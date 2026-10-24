@@ -39,6 +39,7 @@ services:
       # runs wherever a build is driven from - a dashboard request, an API
       # call, or the test suite - and all three live here.
       - spool:/var/lib/docup/spool
+    networks: [app, data]
     environment:
       APP_ENV: ${APP_ENV:-production}
       APP_KEY: ${APP_KEY}
@@ -63,9 +64,19 @@ services:
       # a file the edge cannot see.
       DOCUP_ARTIFACT_ROOT: /var/lib/docup/artifacts
       DOCUP_EDGE_DRIVER: ${DOCUP_EDGE_DRIVER:-caddy-intercept}
+      # 🛑 SPEC 8.5.11's declaration. Read here as well as in the runner
+      # because BuildServiceProvider refuses a production boot without it,
+      # and an installation whose dashboard boots while its runner refuses
+      # is one where the operator sees a working site and a silent queue.
+      DOCUP_BUILD_ISOLATION: ${DOCUP_BUILD_ISOLATION:-}
+      DOCUP_SANDBOX_EGRESS: ${DOCUP_SANDBOX_EGRESS:-allowlist}
+      DOCUP_BUILDS_ENABLED: ${DOCUP_BUILDS_ENABLED:-true}
       DOCUP_SEARCH_DRIVER: ${DOCUP_SEARCH_DRIVER:-mysql_fulltext}
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost/up"]
+      # §8.1.10's liveness endpoint. It was `/up` until Phase 07, which
+      # 404s: `withRouting(health:)` is ignored when `using:` is given,
+      # so this container had reported unhealthy since Phase 01.
+      test: ["CMD", "curl", "-fsS", "http://localhost/_/health"]
       interval: 10s
       timeout: 3s
       retries: 10
@@ -75,6 +86,11 @@ services:
   db:
     image: mysql:8.4
     restart: unless-stopped
+    # 🛑 SPEC 11.2: the `data` zone, and nothing else. `internal: true` on
+    # that network is what makes "MUST NEVER be routable from the build
+    # network" a property of the deployment rather than a promise - and
+    # SPEC 8.5.12's boot self-test is what proves it on every start.
+    networks: [data]
     command:
       - --innodb-buffer-pool-size=512M
       # SPEC 8.16.2 / ADR 0004: the three-character minimum token is the default
@@ -110,6 +126,7 @@ services:
   cache:
     image: valkey/valkey:8-alpine
     restart: unless-stopped
+    networks: [data]
     command: ["valkey-server", "--save", "60", "1", "--appendonly", "no"]
     volumes:
       - cache:/data
@@ -135,6 +152,8 @@ services:
       context: .
       dockerfile: deploy/Dockerfile
     restart: unless-stopped
+    # The app zone: it holds the credentials, so it sits where they belong.
+    networks: [app, data]
     depends_on:
       db: { condition: service_healthy }
       cache: { condition: service_started }
@@ -176,6 +195,9 @@ services:
       DOCUP_APP_HOST: ${DOCUP_APP_HOST}
       DOCUP_DOCS_APEX: ${DOCUP_DOCS_APEX}
       DOCUP_RUNNER_SPOOL: /var/lib/docup/spool
+      DOCUP_BUILD_ISOLATION: ${DOCUP_BUILD_ISOLATION:-}
+      DOCUP_SANDBOX_EGRESS: ${DOCUP_SANDBOX_EGRESS:-allowlist}
+      DOCUP_BUILDS_ENABLED: ${DOCUP_BUILDS_ENABLED:-true}
 
   # --- the build runner (SPEC 8.5.13, SPEC 11.2 'runner' zone) ---
   #
@@ -224,7 +246,42 @@ services:
 
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - spool:/var/lib/docup/spool
+
+      # 🛑 SPEC 8.5.15 requires OOM to be read "authoritatively from cgroup
+      # `memory.events:oom_kill`" rather than inferred from an exit code.
+      # Read-only, and the whole hierarchy rather than one path, because
+      # the layout differs between cgroup v1 and v2 and between the systemd
+      # and cgroupfs drivers - `CgroupSampler` probes all four.
+      #
+      # Measured in Phase 07: a container's cgroup is REMOVED when it
+      # exits, so this is sampled while the build runs. Without this mount
+      # the runner falls back to the daemon's own OOM flag and says so;
+      # what is lost is the kill COUNT and `pids.events:max`, which has no
+      # daemon equivalent at all and is the only evidence a fork bomb
+      # leaves behind.
+      - /sys/fs/cgroup:/hostcg:ro
+
+      # 🛑 The build workspaces, bind-mounted AT THE SAME PATH the host
+      # knows them by. That is not a coincidence of naming: the runner is
+      # itself a container, so a path it hands to `docker run -v` is
+      # resolved by the daemon against the HOST - and binding the identical
+      # path here is what makes one directory both "the workspace the build
+      # writes to" and "a directory this process can measure".
+      #
+      # SPEC 8.5.18 requires an enforced disk limit and the kernel has no
+      # portable way to give one here (ADR 0011 and `Workspace` record the
+      # two that were measured and refused), so the runner polls the tree
+      # while the build runs and kills a container that passes the cap.
+      - ${DOCUP_WORKSPACE_ROOT:-/var/lib/docup/workspaces}:/var/lib/docup/workspaces
     working_dir: /app
+
+    # 🛑 SPEC 11.2's `runner` zone, and the absence is the point: this
+    # service is on NEITHER `data` NOR `app`. It cannot reach MySQL, it
+    # cannot reach Valkey, and it cannot reach the application. What it can
+    # do is talk to the container runtime over the socket above and read
+    # the spool. The build containers it starts go on `sandboxes`, which it
+    # is not on either.
+    networks: [runner]
 
     # Proves it can reach the runtime, which is the only thing it does.
     # `queue:monitor` would need the database it deliberately cannot see.
@@ -242,6 +299,104 @@ services:
       # separation at boot. Hostnames, not credentials.
       DOCUP_APP_HOST: ${DOCUP_APP_HOST}
       DOCUP_DOCS_APEX: ${DOCUP_DOCS_APEX}
+
+  # --- the egress proxy (SPEC 8.5.9, SPEC 11.2 'egress' zone) -------------
+  #
+  # 🛑 "Egress MUST default to an allowlisted CONNECT proxy (PyPI, npm,
+  # crates.io, `proxy.golang.org`, rubygems.org, configured git hosts,
+  # operator additions) plus an nftables backstop inside the build network
+  # namespace so proxy bypass still fails at layer 3. TLS MUST NOT be
+  # intercepted."
+  #
+  # It is the ONLY service on both `sandboxes` and `egress`, and that is the
+  # whole topology: `sandboxes` is `internal: true`, so a build container has
+  # no route off this host except through this one address - and the warden's
+  # nftables ruleset narrows that to this address at this port, which also
+  # closes the route to a SIBLING build that `internal` leaves open.
+  #
+  # The allowlist is a file, deliberately (ADR 0011): the proxy renders its
+  # configuration from it at start-up and the application reads the same file
+  # for `docup:doctor` and the user-facing refusal message, so the list an
+  # author is told about is the list actually enforced.
+  proxy:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.proxy
+    restart: unless-stopped
+
+    # 🛑 How the runner finds it. A label rather than a container name,
+    # because the name depends on the compose project name and a renamed
+    # project would leave every build with no egress at all - failing closed,
+    # but silently and for the wrong reason.
+    labels:
+      docup.role: egress-proxy
+
+    networks: [sandboxes, egress]
+
+    # Holds no credentials, mounts no volume, publishes no port. An operator
+    # editing the allowlist edits the file and restarts this service.
+    volumes:
+      - ./deploy/egress-allowlist.conf:/etc/docup/egress-allowlist.conf:ro
+
+    # 🛑 The proxy is reachable by code the installation did not write, so it
+    # gets the same hardening as a build container. It needs no capabilities
+    # at all: it binds 3128 as an unprivileged port, as an unprivileged user.
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    # 🛑 uid 31 is the `squid` user in the image, read from the image rather
+    # than guessed - a tmpfs mounted with the wrong owner is a container that
+    # restart-loops on "Permission denied" from a path the Dockerfile chowned
+    # correctly, which reads like anything but a mount option.
+    #
+    # The generated configuration lands in `/var/run/squid` rather than in
+    # `/etc/squid`: a tmpfs over the package's own directory hides `mime.conf`
+    # and squid exits citing a missing MIME table, which reads like a broken
+    # image rather than a mount option. This way the root filesystem stays
+    # read-only AND the rendered policy exists only in memory, so an operator
+    # cannot edit it in place and have the edit survive - the allowlist file
+    # is the only way in, which is the property ADR 0011 wanted.
+    tmpfs:
+      - /var/run/squid:rw,noexec,nosuid,nodev,uid=31,gid=31,mode=0700
+      - /var/log/squid:rw,noexec,nosuid,nodev,uid=31,gid=31,mode=0700
+      - /var/cache/squid:rw,noexec,nosuid,nodev,uid=31,gid=31,mode=0700
+
+    healthcheck:
+      # A CONNECT to a host that is NOT on the allowlist must be refused.
+      # Checking that the port answers would pass on a proxy that had lost
+      # its policy entirely, which is the failure worth detecting. The check
+      # is a script in the image rather than a one-liner here, because the
+      # request needs CRLF and YAML reads those escapes as its own - the
+      # first version of this line sent a malformed request and reported a
+      # working proxy permanently unhealthy.
+      test: ["CMD", "docup-proxy-healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+networks:
+  # 🛑 SPEC 11.2's five trust zones, "enforced by compose networks, not
+  # convention". The two `internal: true` declarations are the enforcement:
+  # Docker gives an internal network no gateway and no NAT, so nothing on it
+  # has a route off this host.
+  app:
+  runner:
+  egress:
+
+  data:
+    internal: true
+
+  sandboxes:
+    internal: true
+
+    # Named explicitly because the runner has to pass this name to
+    # `docker run --network` for every build container it starts, and
+    # compose's default name is <project>_<network> - which changes when an
+    # operator renames their project. `config/builds.php` carries the same
+    # default and `docup:doctor` reports a mismatch.
+    name: docup_sandboxes
 
 volumes:
   db:

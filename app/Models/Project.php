@@ -87,6 +87,9 @@ final class Project extends Model
     protected $attributes = [
         'visibility' => 'restricted',
         'inherit_organisation_roles' => true,
+
+        // 🛑 §8.5.10: "Fork-PR builds MUST be off by default."
+        'fork_builds_enabled' => false,
     ];
 
     /**
@@ -97,6 +100,7 @@ final class Project extends Model
         return [
             'visibility' => AccessLevel::class,
             'inherit_organisation_roles' => 'boolean',
+            'fork_builds_enabled' => 'boolean',
             'created_at' => 'datetime:Y-m-d H:i:s.v',
             'updated_at' => 'datetime:Y-m-d H:i:s.v',
             'deleted_at' => 'datetime:Y-m-d H:i:s.v',
