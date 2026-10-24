@@ -40,6 +40,13 @@ services:
   mailpit:
     image: axllent/mailpit:latest
     restart: unless-stopped
+
+    # 🛑 The `app` zone, because that is who sends mail. Once compose.yaml
+    # declared SPEC 11.2's five networks, a service with no `networks:` key
+    # lands on `default` and is unreachable from `app` and `worker` - so
+    # `docup:doctor`'s mail check would have failed in development with a
+    # connection error and nothing to explain it.
+    networks: [app]
     ports:
       - "127.0.0.1:1025:1025"   # SMTP
       - "127.0.0.1:8025:8025"   # web UI
@@ -56,6 +63,13 @@ services:
     restart: unless-stopped
     depends_on:
       db: { condition: service_healthy }
+
+    # 🛑 The `data` zone - the only thing in either file besides the database
+    # itself that is on it, and only in development. SPEC 11.2 says the data
+    # zone must never be routable from the BUILD network; a browser bound to
+    # 127.0.0.1 in a developer's own stack is a different question, and this
+    # service does not exist at all in compose.yaml.
+    networks: [data]
     ports:
       - "127.0.0.1:8081:80"
     environment:
