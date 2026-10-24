@@ -121,6 +121,26 @@ services:
       timeout: 5s
       retries: 20
 
+      # 🛑 A start period, because FIRST initialisation here is not a plain
+      # MySQL start. The image brings up a temporary server on a socket with
+      # no TCP port, runs everything in `/docker-entrypoint-initdb.d` against
+      # it - which for us is SPEC 8.22.1's append-only triggers and the
+      # maintenance principal - then shuts it down and restarts properly.
+      #
+      # `mysqladmin ping -h 127.0.0.1` cannot succeed during that window, and
+      # without a start period those failures count against `retries` from
+      # the first second. On a loaded runner the shutdown-and-restart lands
+      # inside the budget and the container is declared unhealthy while it is
+      # still doing exactly what it is supposed to - which is how CI lost the
+      # edge-driver job once, having passed on the same tree half an hour
+      # earlier.
+      #
+      # 30s is generous against a measured ~15s first run. Health checks
+      # during the period still count: the container goes healthy the moment
+      # one succeeds, so this costs nothing on the restart path, where the
+      # data directory already exists and MySQL is up in about two seconds.
+      start_period: 30s
+
   # --- Valkey (SPEC 11.1: mandatory, and Valkey rather than Redis on the
   #     governance grounds recorded in that section) ---
   cache:
