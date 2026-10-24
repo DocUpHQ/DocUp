@@ -56,7 +56,7 @@ final readonly class Spool
     /** Create the four directories, idempotently. */
     public function ensure(): void
     {
-        foreach (['tmp', 'inbox', 'claimed', 'outbox', 'cred'] as $directory) {
+        foreach (['tmp', 'inbox', 'claimed', 'outbox', 'cred', 'live', 'cancel'] as $directory) {
             $path = $this->root.'/'.$directory;
 
             if (! is_dir($path)) {
@@ -90,6 +90,54 @@ final readonly class Spool
     public function output(string $jobId): string
     {
         return $this->root.'/outbox/'.$jobId.'.tar';
+    }
+
+    /**
+     * Where the runner streams a stage's output WHILE it runs (§8.5.21).
+     *
+     * 🛑 The whole point of Phase 08. Until now a stage's log crossed in
+     * the result document, which meant a nine-minute build produced
+     * nothing to read for nine minutes and then produced all of it — and
+     * §8.5.23's queue position and §8.5.22's offset contract both exist to
+     * be watched, not to be delivered at the end.
+     *
+     * The runner writes here; the worker tails it, redacts and persists.
+     * The file holds whatever the container printed, so it is the one
+     * place in the pipeline where an unredacted secret could appear — the
+     * runner scrubs the single credential it holds before writing, and the
+     * directory is inside the spool, which only the worker and the runner
+     * mount.
+     */
+    public function liveLog(string $jobId): string
+    {
+        return $this->root.'/live/'.$jobId.'.ndjson';
+    }
+
+    /**
+     * §8.5.23's cancellation, as a file the runner can see.
+     *
+     * 🛑 A file rather than a signal or a queue message, for the reason the
+     * whole spool exists: the runner has no database and no listening
+     * port. The worker writes this when a cancel is requested and the
+     * runner's output loop checks for it on every pass, so "within 5
+     * seconds" is bounded by the loop's 200 ms tick rather than by a poll
+     * interval somebody tuned.
+     */
+    public function cancelMarker(string $jobId): string
+    {
+        return $this->root.'/cancel/'.$jobId;
+    }
+
+    public function requestCancel(string $jobId): void
+    {
+        $this->ensure();
+
+        @touch($this->cancelMarker($jobId));
+    }
+
+    public function cancelRequested(string $jobId): bool
+    {
+        return is_file($this->cancelMarker($jobId));
     }
 
     /** The rendezvous node for {@see CredentialChannel}; never a file of bytes. */
@@ -292,6 +340,8 @@ final readonly class Spool
             $this->result($jobId),
             $this->output($jobId),
             $this->credentialPath($jobId),
+            $this->liveLog($jobId),
+            $this->cancelMarker($jobId),
         ] as $path) {
             @unlink($path);
         }

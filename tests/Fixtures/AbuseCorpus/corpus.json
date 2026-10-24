@@ -871,6 +871,70 @@
       "input": "a sandbox from which the database is reachable",
       "expect": "the runner refuses to start",
       "note": "§8.5.12 says 'Startup MUST fail', and a non-zero exit from the runner is how that reaches an init system. Demonstrated by attaching the database to the sandbox network and watching the self-test refuse."
+    },
+    {
+      "id": "buildlog-001",
+      "category": "buildlog",
+      "defends": "8.5.21",
+      "input": "a token printed by a build, with a read boundary falling inside it",
+      "expect": "[redacted], and never two fragments",
+      "note": "🛑 The reader buffers to the newline before anything sees a line, so a secret cannot straddle two records. Asserted by printing it two hundred times across half a megabyte - one split would show up as a missing occurrence and a usable fragment."
+    },
+    {
+      "id": "buildlog-002",
+      "category": "buildlog",
+      "defends": "8.5.21",
+      "input": "a deploy key echoed as base64 by a failing fetch",
+      "expect": "[redacted]",
+      "note": "Base64 is how a key or a .netrc reaches a log and it has no shape a pattern could recognise - which is why SPEC 8.5.21 names the ENCODINGS and why SecretRegistry pre-computes them for values rather than matching on form."
+    },
+    {
+      "id": "buildlog-003",
+      "category": "buildlog",
+      "defends": "8.5.21",
+      "input": "a build printing a NUL byte and a 64 KiB line",
+      "expect": "the NUL stripped, the line truncated at 8 KiB with a marker",
+      "note": "🛑 A consequence worth knowing: a secret beyond 8 KiB of ONE line is discarded entirely rather than redacted, because truncation happens first. Safer, and the first version of the boundary test was wrong because it assumed otherwise."
+    },
+    {
+      "id": "buildlog-004",
+      "category": "buildlog",
+      "defends": "8.5.22",
+      "input": "an anonymous reader requesting the build log of a members-only project with anonymous_build_logs=true",
+      "expect": "404",
+      "note": "🛑 The setting WIDENS access to a project people can already read; it does not grant access to one they cannot. Both conditions, in that order."
+    },
+    {
+      "id": "buildlog-005",
+      "category": "buildlog",
+      "defends": "8.5.22",
+      "input": "a revoked bearer token on the optionally-authenticated log endpoint",
+      "expect": "401, never the anonymous view",
+      "note": "🛑 `optional` means no credential is acceptable, never that a wrong one is ignored. Falling through would silently downgrade a caller who believes they are authenticated - and the public view of a project is not the view they asked for."
+    },
+    {
+      "id": "buildlog-006",
+      "category": "buildlog",
+      "defends": "8.5.21",
+      "input": "a build emitting more than 10 MiB of output",
+      "expect": "head 2 MiB + marker + tail 8 MiB",
+      "note": "🛑 The middle is the right half to lose: the first lines say what the build was asked to do and the last say what went wrong. A naive stop-at-10-MiB - which Phase 06 shipped - loses the error on exactly the builds that need reading."
+    },
+    {
+      "id": "buildlog-007",
+      "category": "buildlog",
+      "defends": "8.5.22",
+      "input": "a client whose cursor sits inside the gap the cap left",
+      "expect": "omitted > 0 in the response",
+      "note": "The surviving sequence numbers are perfectly consistent on either side of the hole, so a client that is not told cannot tell. Measured against the first line actually RETURNED, not the first line in the file."
+    },
+    {
+      "id": "buildlog-008",
+      "category": "buildlog",
+      "defends": "8.5.17",
+      "input": "fifty consecutive infrastructure failures of a project's default version",
+      "expect": "nothing disabled, and the counter unchanged",
+      "note": "🛑 They neither increment NOR reset. Resetting is the intuitive implementation and it is wrong: our own outage would launder somebody's twenty-five consecutive broken configurations back to zero."
     }
   ]
 }

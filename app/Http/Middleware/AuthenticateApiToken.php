@@ -40,12 +40,32 @@ final class AuthenticateApiToken
         private readonly OrganisationContext $context,
     ) {}
 
-    public function handle(Request $request, \Closure $next): Response
+    /**
+     * @param  string  $mode  `required` (the default) or `optional`
+     */
+    public function handle(Request $request, \Closure $next, string $mode = 'required'): Response
     {
+        $optional = $mode === 'optional';
         $plaintext = $this->bearer($request);
 
+        /*
+         * 🛑 `optional` is for ONE endpoint and it is not a convenience.
+         *
+         * §8.5.22 requires build-log access to be "authorised by the same
+         * policy as the project", and a public project may expose its
+         * logs to anonymous readers when its owner turns that on — so the
+         * log endpoint has to be reachable without a credential in order
+         * to then refuse most callers. Everything else keeps the default.
+         *
+         * 🛑 **A bad token is still 401, even here.** Optional means "no
+         * credential is acceptable", never "a wrong credential is
+         * ignored": falling through to the anonymous path on a revoked
+         * token would silently downgrade a caller who believes they are
+         * authenticated, and the public view of a project is not the view
+         * they asked for.
+         */
         if ($plaintext === null) {
-            return $this->unauthorised();
+            return $optional ? $next($request) : $this->unauthorised();
         }
 
         $token = $this->tokens->find($plaintext);

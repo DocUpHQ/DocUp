@@ -117,5 +117,8 @@
         }
     },
     "minimum-stability": "stable",
-    "prefer-stable": true
+    "prefer-stable": true,
+    "suggest": {
+        "laravel/reverb": "SPEC 8.5.22's optional WebSocket profile for build-log streaming. Not required: the core profile reads logs by offset polling, and an installation that never enables the profile should not carry a WebSocket server in its image or its SBOM."
+    }
 }

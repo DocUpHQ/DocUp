@@ -44,7 +44,28 @@ final class DockerRunnerDriver implements RunnerDriver
         private readonly ArgvTemplate $template = new ArgvTemplate,
         private readonly Docker $cli = new Docker,
         private readonly Warden $warden = new Warden,
+
+        /*
+         * 🛑 Phase 08: the driver writes a stage's output into the spool
+         * as it reads it, and reads the cancel marker from there. Both are
+         * the runner's side of a channel the worker owns the other end of,
+         * so the path has to come from the same place the job did.
+         */
+        private readonly Spool $spool = new Spool(''),
     ) {}
+
+    /**
+     * The spool, resolved from configuration when none was injected.
+     *
+     * Not a constructor default, because `Spool::fromConfig()` reads
+     * `config()` and a default parameter is evaluated at class-load time —
+     * before the application has booted, in a worker that loads this file
+     * from the autoloader.
+     */
+    private function spool(): Spool
+    {
+        return $this->spool->root() === '' ? Spool::fromConfig() : $this->spool;
+    }
 
     public function createWorkspace(string $buildId): string
     {
@@ -179,7 +200,7 @@ final class DockerRunnerDriver implements RunnerDriver
             @unlink($envFile);
         }
 
-        [$log, $timedOut, $stalled, $sample] = $result;
+        [$log, $timedOut, $stalled, $sample, $cancelled] = $result;
 
         // 🛑 Inspected before removal. See the `--rm` note in `ArgvTemplate`:
         // the exit code and the OOM flag are only authoritative while the
@@ -208,7 +229,7 @@ final class DockerRunnerDriver implements RunnerDriver
         $oom = ($state['oom_killed'] ?? false) || $sample->oomKills > 0;
 
         [$class, $reason] = $this->classify(
-            $exitCode, $sample, $oom, $timedOut, $stalled, $diskExhausted, $denial, $blocked, $spec,
+            $exitCode, $sample, $oom, $timedOut, $stalled, $diskExhausted, $denial, $blocked, $cancelled, $spec,
         );
 
         return new RunOutcome(
@@ -434,7 +455,7 @@ final class DockerRunnerDriver implements RunnerDriver
      * @param  string  $containerName  so the cgroup sampler can find the
      *                                 container WHILE it runs, which is the
      *                                 only time its counters exist
-     * @return array{0: list<string>, 1: bool, 2: bool, 3: CgroupSample}
+     * @return array{0: list<string>, 1: bool, 2: bool, 3: CgroupSample, 4: bool}
      */
     private function execute(array $argv, RunSpecification $spec, ?string $credential, string $containerName): array
     {
@@ -447,7 +468,7 @@ final class DockerRunnerDriver implements RunnerDriver
         $process = proc_open($argv, $descriptors, $pipes);
 
         if (! is_resource($process)) {
-            return [['the container runtime could not be started'], false, false, new CgroupSample];
+            return [['the container runtime could not be started'], false, false, new CgroupSample, false];
         }
 
         /*
@@ -477,7 +498,22 @@ final class DockerRunnerDriver implements RunnerDriver
         $sampler = null;
         $sample = new CgroupSample;
         $overQuota = false;
+        $cancelled = false;
         $lastDiskCheck = microtime(true);
+        $lastCancelCheck = microtime(true);
+
+        /*
+         * 🛑 §8.5.21's "stream build logs line by line", as a file the
+         * worker can tail. Until Phase 08 a stage's output crossed in the
+         * result document, so a nine-minute build produced nothing to read
+         * for nine minutes — which makes §8.5.22's offset contract and
+         * §8.5.23's queue position decorations rather than features.
+         *
+         * Opened lazily: a stage that prints nothing leaves no file, and
+         * the worker treats an absent file as an empty one.
+         */
+        $spool = $this->spool();
+        $live = new LiveLogWriter($spool->liveLog($spool->jobId($spec)), $credential);
 
         $deadline = microtime(true) + $spec->timeoutSeconds;
         $lastOutput = microtime(true);
@@ -517,6 +553,7 @@ final class DockerRunnerDriver implements RunnerDriver
 
                     if (! $capped) {
                         $line = $this->sanitiseLine($line);
+                        $live->write($line, $slot === 0 ? 'out' : 'err');
                         $bytes += strlen($line) + 1;
 
                         if ($bytes > self::MAX_LOG_BYTES) {
@@ -553,6 +590,23 @@ final class DockerRunnerDriver implements RunnerDriver
              * overshoot is bounded by what one tick can write, which is the
              * honest cost of having no filesystem quota to hand the kernel.
              */
+            /*
+             * 🛑 §8.5.23: "support cancelling a running build with effect
+             * within 5 seconds". Checked every half second against a file
+             * the worker writes, so the bound is this interval plus the
+             * time `docker kill` takes — not a queue's visibility timeout
+             * and not a poll somebody tuned for a different purpose.
+             */
+            if (microtime(true) - $lastCancelCheck > 0.5) {
+                $lastCancelCheck = microtime(true);
+
+                if ($spool->cancelRequested($spool->jobId($spec))) {
+                    $cancelled = true;
+
+                    break;
+                }
+            }
+
             if (microtime(true) - $lastDiskCheck > 2.0) {
                 $lastDiskCheck = microtime(true);
 
@@ -602,7 +656,7 @@ final class DockerRunnerDriver implements RunnerDriver
             }
         }
 
-        if ($timedOut || $stalled || $overQuota) {
+        if ($timedOut || $stalled || $overQuota || $cancelled) {
             $this->cli->capture(['kill', $this->template->containerName($spec)]);
         }
 
@@ -614,11 +668,15 @@ final class DockerRunnerDriver implements RunnerDriver
 
         proc_close($process);
 
-        foreach ($buffer as $remainder) {
+        foreach ($buffer as $slot => $remainder) {
             if ($remainder !== '' && ! $capped) {
-                $log[] = $this->sanitiseLine($remainder);
+                $sanitised = $this->sanitiseLine($remainder);
+                $live->write($sanitised, $slot === 0 ? 'out' : 'err');
+                $log[] = $sanitised;
             }
         }
+
+        $live->close();
 
         /*
          * One last reading before the corpse is cold. A container that ran
@@ -628,7 +686,7 @@ final class DockerRunnerDriver implements RunnerDriver
         $sampler ??= $this->resolveSampler($containerName);
         $sample = $sampler === null ? $sample : $sample->merge($sampler->sample());
 
-        return [$log, $timedOut, $stalled, $sample];
+        return [$log, $timedOut, $stalled, $sample, $cancelled];
     }
 
     /**
@@ -704,8 +762,22 @@ final class DockerRunnerDriver implements RunnerDriver
         bool $diskExhausted,
         ?string $deniedHost,
         int $blockedPackets,
+        bool $cancelled,
         RunSpecification $spec,
     ): array {
+        /*
+         * 🛑 §8.5.23's cancellation, checked FIRST and before every
+         * resource signal. A container killed on request exits 137 and
+         * may well have been near its memory ceiling when it died —
+         * reading the OOM flag first would tell an author their build ran
+         * out of memory when in fact somebody pressed cancel, which is
+         * both wrong and the kind of wrong that sends them optimising
+         * something that was never the problem.
+         */
+        if ($cancelled) {
+            return [FailureClass::Cancelled->value, 'cancelled_by_request'];
+        }
+
         /*
          * 🛑 OOM is checked **before** the exit code, because the kernel
          * leaves exit code 137 behind and 137 is also what a plain SIGKILL

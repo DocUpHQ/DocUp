@@ -17,6 +17,7 @@ use App\Concerns\HasUuidKey;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -46,6 +47,11 @@ use Illuminate\Support\Facades\DB;
  * @property string|null $description
  * @property AccessLevel $visibility
  * @property bool $inherit_organisation_roles
+ * @property bool $anonymous_build_logs
+ * @property int $consecutive_build_failures
+ * @property Carbon|null $webhook_triggering_disabled_at
+ * @property bool $fork_builds_enabled
+ * @property string|null $default_version_id
  */
 #[Tenancy(TenancyPosture::OrganisationScoped)]
 #[Fillable(['slug', 'name', 'description', 'visibility'])]
@@ -90,6 +96,17 @@ final class Project extends Model
 
         // 🛑 §8.5.10: "Fork-PR builds MUST be off by default."
         'fork_builds_enabled' => false,
+
+        /*
+         * 🛑 §8.5.22: "build-log visibility for anonymous readers of
+         * public projects MUST be a per-project setting defaulting to
+         * **off** (build logs leak paths, dependency versions and
+         * sometimes content)."
+         */
+        'anonymous_build_logs' => false,
+
+        // §8.5.17's governor starts at zero and has disabled nothing.
+        'consecutive_build_failures' => 0,
     ];
 
     /**
@@ -101,6 +118,9 @@ final class Project extends Model
             'visibility' => AccessLevel::class,
             'inherit_organisation_roles' => 'boolean',
             'fork_builds_enabled' => 'boolean',
+            'anonymous_build_logs' => 'boolean',
+            'consecutive_build_failures' => 'integer',
+            'webhook_triggering_disabled_at' => 'datetime:Y-m-d H:i:s.v',
             'created_at' => 'datetime:Y-m-d H:i:s.v',
             'updated_at' => 'datetime:Y-m-d H:i:s.v',
             'deleted_at' => 'datetime:Y-m-d H:i:s.v',

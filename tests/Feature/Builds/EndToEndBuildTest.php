@@ -10,6 +10,7 @@ namespace Tests\Feature\Builds;
 use App\Auth\OrganisationContext;
 use App\Builds\BuildPipeline;
 use App\Builds\BuildTrigger;
+use App\Builds\Log\BuildLogArchive;
 use App\Builds\Stage;
 use App\Models\Build;
 use App\Models\BuildRequest;
@@ -254,6 +255,31 @@ final class EndToEndBuildTest extends TestCase
         $this->assertSame('skipped.toolchain_prebaked', $reasons[Stage::Environment->value] ?? null);
         $this->assertSame('skipped', $steps[Stage::Compose->value] ?? null);
         $this->assertSame('skipped', $steps[Stage::Index->value] ?? null);
+
+        /*
+         * ------------------------------------- §8.5.21's log, end to end
+         *
+         * 🛑 Both halves in one assertion block, because the failure mode
+         * is having one: a log of nothing but stage narration means the
+         * runner's output never crossed the spool, and a log of nothing
+         * but container output means the pipeline stopped narrating. Each
+         * on its own looks like a working log.
+         */
+        $this->assertGreaterThan(10, (int) $build->log_lines, 'the build produced no log');
+        $this->assertGreaterThan(0, (int) $build->log_bytes);
+        $this->assertFalse((bool) $build->log_capped);
+
+        $archived = app(BuildLogArchive::class)->read($build, 1, 10000);
+        $streams = array_map(static fn ($line): string => $line->stream, $archived->lines);
+        $texts = implode("\n", array_map(static fn ($line): string => $line->text, $archived->lines));
+
+        $this->assertContains('docup', $streams, 'the pipeline narrated nothing');
+        $this->assertTrue(
+            in_array('out', $streams, true) || in_array('err', $streams, true),
+            "the container's own output never reached the log",
+        );
+        $this->assertStringContainsString('Cloning into', $texts);
+        $this->assertStringContainsString('publish: ok', $texts);
 
         // ----------------------------------------- §8.5.1's pin, and ADR 0010
         $source = $build->sources()->first();
