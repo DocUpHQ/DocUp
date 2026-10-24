@@ -514,6 +514,13 @@ jobs:
       DOCUP_SANDBOX_NETWORK: docup_sandboxes
       DOCUP_BUILD_ISOLATION: runc
       DOCUP_SANDBOX_EGRESS: allowlist
+      # 🛑 §8.5.15's cgroup reading, at the path it has HERE. The compose
+      # runner mounts the hierarchy at /hostcg because it is a container;
+      # this job's PHP is the host process, so the real path is the one to
+      # use. Without it the sampler finds nothing, `pids.events:max` is
+      # never read, and a fork bomb reports success — which is exactly how
+      # this job first went red.
+      DOCUP_CGROUP_ROOT: /sys/fs/cgroup
 
     steps:
       - uses: actions/checkout@v5

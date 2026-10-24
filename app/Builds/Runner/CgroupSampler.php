@@ -54,6 +54,14 @@ final class CgroupSampler
      * and claiming an authoritative reading we did not take would be worse
      * than saying so.
      */
+    /** True when the hierarchy is visible at all, whatever the container. */
+    public static function hierarchyIsVisible(): bool
+    {
+        $root = BuildConfig::string('sandbox.cgroup_root', '');
+
+        return $root !== '' && is_dir($root);
+    }
+
     public static function forContainer(string $containerId): ?self
     {
         $root = BuildConfig::string('sandbox.cgroup_root', '');
@@ -109,6 +117,7 @@ final class CgroupSampler
         return new CgroupSample(
             oomKills: $this->counter($this->memoryFiles, 'oom_kill'),
             pidLimitHits: $this->pidsFile === null ? 0 : $this->counter([$this->pidsFile], 'max'),
+            sampled: true,
         );
     }
 

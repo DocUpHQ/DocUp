@@ -161,6 +161,15 @@ final class SandboxRefusalsTest extends TestCase
      */
     public function test_a_spool_document_requesting_the_runtime_socket_is_refused(): void
     {
+        /*
+         * Its own directory, because this case needs no sandbox at all and
+         * therefore runs wherever the suite runs — including a host where
+         * the configured spool is root-owned and `ensure()` cannot create
+         * it. The subject is the typed specification refusing a document,
+         * which has nothing to do with where the document was found.
+         */
+        config()->set('builds.spool', sys_get_temp_dir().'/docup-refusal-'.bin2hex(random_bytes(6)));
+
         $spool = Spool::fromConfig();
         $spool->ensure();
 

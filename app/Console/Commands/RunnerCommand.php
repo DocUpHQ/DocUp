@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Builds\Runner\CgroupSampler;
 use App\Builds\Runner\IsolationSelfTest;
 use App\Builds\Runner\RunnerDriver;
 use App\Builds\Runner\RunOutcome;
@@ -69,6 +70,24 @@ final class RunnerCommand extends Command
          * the dashboard need to say "builds are unavailable" and cannot ask
          * this process anything — it has no database.
          */
+        /*
+         * 🛑 Said out loud, because the alternative is losing a control in
+         * silence. Without the cgroup hierarchy mounted (§8.5.15), the OOM
+         * and PID counters read zero rather than failing — so a fork bomb
+         * looks like a clean build and an OOM-killed subprocess looks like
+         * nothing at all. Found when CI's sandbox job reported the
+         * fork-bomb exit criterion as `succeeded`.
+         */
+        if (! CgroupSampler::hierarchyIsVisible()) {
+            $this->warn(
+                '§8.5.15: the cgroup hierarchy is not visible at '
+                .(string) config('builds.sandbox.cgroup_root')
+                .', so OOM kills and PID-ceiling hits cannot be read authoritatively. '
+                .'Builds will still run; a fork bomb will not be detected. Mount '
+                .'/sys/fs/cgroup read-only, as compose.yaml does.',
+            );
+        }
+
         $result = $selfTest->run();
         $spool->writeSelfTest($result->passed, $result->summary);
 

@@ -22,6 +22,18 @@ final readonly class CgroupSample
 
         /** `pids.events:max` — forks the kernel refused at the PID ceiling. */
         public int $pidLimitHits = 0,
+
+        /**
+         * 🛑 Whether the counters were readable at all.
+         *
+         * Zero and "not measured" are different facts and must not look
+         * alike in a build record. Without the cgroup hierarchy mounted,
+         * `oom_kills` and `pidLimitHits` are both 0 — and so a fork bomb
+         * reports a clean build. That is how this field came to exist:
+         * CI had no `/hostcg`, the sampler silently found nothing, and the
+         * fork-bomb exit criterion passed as `succeeded`.
+         */
+        public bool $sampled = false,
     ) {}
 
     /**
@@ -37,6 +49,7 @@ final readonly class CgroupSample
         return new self(
             oomKills: max($this->oomKills, $other->oomKills),
             pidLimitHits: max($this->pidLimitHits, $other->pidLimitHits),
+            sampled: $this->sampled || $other->sampled,
         );
     }
 
@@ -48,6 +61,10 @@ final readonly class CgroupSample
     /** @return array<string, int> for the build record and `provenance.json`. */
     public function toArray(): array
     {
-        return ['oom_kills' => $this->oomKills, 'pid_limit_hits' => $this->pidLimitHits];
+        return [
+            'oom_kills' => $this->oomKills,
+            'pid_limit_hits' => $this->pidLimitHits,
+            'sampled' => $this->sampled ? 1 : 0,
+        ];
     }
 }

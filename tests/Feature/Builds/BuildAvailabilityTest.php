@@ -11,6 +11,7 @@ use App\Auth\OrganisationContext;
 use App\Builds\BuildPipeline;
 use App\Builds\BuildTrigger;
 use App\Builds\FailureCatalogue;
+use App\Builds\Runner\Spool;
 use App\Models\BuildRequest;
 use App\Models\Component;
 use App\Models\ComponentMount;
@@ -58,6 +59,21 @@ final class BuildAvailabilityTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        /*
+         * 🛑 This file's subject is the two POLICY refusals, so it supplies
+         * its own §8.5.12 verdict rather than depending on a runner having
+         * written one. Without this the pipeline refuses every build with
+         * `infra.sandbox_self_test_failed` before reaching the gate under
+         * test — correct behaviour, and a precondition rather than a
+         * result. The test that IS about the missing verdict overrides the
+         * spool again, below.
+         */
+        config()->set('builds.spool', sys_get_temp_dir().'/docup-avail-'.bin2hex(random_bytes(6)));
+        $spool = Spool::fromConfig();
+        $spool->ensure();
+        $spool->writeSelfTest(true, 'supplied by '.self::class);
+        $this->app->instance(Spool::class, $spool);
 
         $context = app(OrganisationContext::class);
         $context->spanAllOrganisations();
@@ -190,6 +206,7 @@ final class BuildAvailabilityTest extends TestCase
     {
         config()->set('builds.enabled', true);
         config()->set('builds.spool', sys_get_temp_dir().'/docup-no-selftest-'.bin2hex(random_bytes(6)));
+        $this->app->instance(Spool::class, Spool::fromConfig());
 
         $request = $this->trigger();
         app(BuildPipeline::class)->run($request);
