@@ -7,11 +7,16 @@ declare(strict_types=1);
 
 namespace App\Builds;
 
+use App\Artifacts\ArtifactStore;
 use App\Artifacts\Publisher;
 use App\Artifacts\PublishOutcome;
 use App\Audit\ActorType;
 use App\Audit\Audit;
 use App\Builds\Admission\Dispatcher;
+use App\Builds\Log\BuildLog;
+use App\Builds\Log\BuildLogAppended;
+use App\Builds\Log\BuildLogArchive;
+use App\Builds\Log\LogLine;
 use App\Builds\Runner\RunOutcome;
 use App\Builds\Runner\Spool;
 use App\Builds\Sandbox\SandboxPolicy;
@@ -27,6 +32,7 @@ use App\Models\ProjectVersion;
 use App\Models\Repository;
 use App\Support\Uuid;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\DB;
 
 /**
  * §8.5.6's twelve stages, driven from the worker.
@@ -57,13 +63,40 @@ final class BuildPipeline
         private readonly SecretRedactor $redactor,
         ?SandboxPolicy $policy = null,
         ?Dispatcher $dispatcher = null,
+        ?BuildLogArchive $archive = null,
+        private readonly BuildGovernor $governor = new BuildGovernor,
     ) {
         $this->policy = $policy ?? SandboxPolicy::fromConfig();
         $this->dispatcher = $dispatcher ?? Dispatcher::fromConfig();
+
+        /*
+         * Resolved from the container, not constructed: §11.4's
+         * `ArtifactStore` seam is how an installation chooses local or S3,
+         * and a log archive that picked one itself would put a build's log
+         * somewhere its artifacts are not.
+         */
+        $this->archive = $archive ?? new BuildLogArchive(app(ArtifactStore::class));
     }
+
+    /** §10.3's `logs/<project>/<build>/log.ndjson.gz`, once the build ends. */
+    private readonly BuildLogArchive $archive;
 
     /** §8.5.5's admission control, resolved once for the same reason. */
     private readonly Dispatcher $dispatcher;
+
+    /**
+     * The build's log, while one is running.
+     *
+     * 🛑 Held on the pipeline rather than passed through fifteen call
+     * sites, because §8.5.21's redaction and §8.5.22's sequence numbering
+     * are both properties of ONE writer. Two writers on the same build
+     * would hand two different lines the same address, which is precisely
+     * what every client cursor assumes cannot happen.
+     */
+    private ?BuildLog $log = null;
+
+    /** The build being run, so the cancel check knows which row to read. */
+    private ?Build $running = null;
 
     /**
      * 🛑 Resolved once per pipeline rather than read per stage.
@@ -224,6 +257,16 @@ final class BuildPipeline
         // runner cannot disagree about a job's name.
         $buildHex = bin2hex($build->id);
 
+        /*
+         * 🛑 Opened before the first stage, so a build that fails in
+         * `admit` still has a log saying so. A log that only exists once a
+         * container has started is a log that is absent for exactly the
+         * failures an author cannot otherwise explain.
+         */
+        $this->log = BuildLog::open($buildHex, $this->redactor);
+        $this->running = $build;
+        $this->narrate('build '.$buildHex.' accepted');
+
         try {
             $this->stage($recorder, $steps, Stage::Admit, function () use ($build): void {
                 $this->admit($build);
@@ -293,7 +336,16 @@ final class BuildPipeline
                 fn () => $this->publish($build, $version, $archive, $request, $plan),
             );
 
+            /*
+             * Narrated by hand, because this step is marked succeeded
+             * directly rather than through `stage()` — the work happened
+             * inside `store`, which owns the compare-and-swap. Without
+             * this line the log skips straight from `store` to
+             * `finalise` and an author reading it cannot tell whether a
+             * publish was attempted.
+             */
             $recorder->succeed($steps[Stage::Publish->value]);
+            $this->narrate('publish: ok');
 
             // §8.16's index arrives in Phase 29.
             $recorder->skip($steps[Stage::Index->value], 'skipped.search_index_phase_29');
@@ -312,6 +364,10 @@ final class BuildPipeline
                 ])->save();
             });
 
+            $this->narrate($outcome->published
+                ? 'published — the version now serves this build'
+                : 'succeeded, but another build won the pointer (§8.8.4)');
+
             $request->forceFill(['state' => 'completed', 'build_id' => $build->id])->save();
 
             return $build->refresh();
@@ -320,9 +376,63 @@ final class BuildPipeline
 
             return $build->refresh();
         } finally {
+            /*
+             * 🛑 The log is sealed in the `finally`, so it happens on every
+             * path — success, failure, and the `BuildFailure` that is
+             * rethrown above. A log archived only on success is a log
+             * missing from every build anybody wants to read.
+             */
+            $this->sealLog($build);
+
+            /*
+             * 🛑 §8.5.17's governor sees EVERY terminal build, including
+             * the ones that failed, which is the whole point: it counts
+             * consecutive failures. In the `finally` so that a build which
+             * threw on its way out is still counted — a governor that only
+             * saw the builds that reached the end of `run()` would be
+             * blind to exactly the failures it exists to notice.
+             */
+            $this->governor->record($build->refresh());
+
             $this->spool->discard($buildHex.'-fetch');
             $this->spool->discard($buildHex.'-build');
         }
+    }
+
+    /**
+     * Record the log's shape on the build row and archive it (§10.3).
+     *
+     * 🛑 The metadata is written BEFORE the archive, because the archive
+     * can fail — an S3 outage, a write-once refusal on a re-run — and a
+     * build whose log exists but whose row says it has none is unreadable
+     * through the API. The row describing a log that could not be stored
+     * is merely wrong about where it is, which `BuildLogArchive` reports.
+     */
+    private function sealLog(Build $build): void
+    {
+        $log = $this->log;
+        $this->log = null;
+        $this->running = null;
+
+        if (! $log instanceof BuildLog) {
+            return;
+        }
+
+        $build->forceFill([
+            'log_lines' => $log->lineCount(),
+            'log_bytes' => $log->byteCount(),
+            'log_capped' => $log->wasCapped(),
+        ])->save();
+
+        /*
+         * The last event a listener receives, and the one that tells it to
+         * stop. Sent before the archive, because archiving can fail and a
+         * client left polling a finished build for ever is a worse outcome
+         * than a log that is briefly only in its live file.
+         */
+        BuildLogAppended::dispatch(bin2hex($build->id), $log->lineCount() + 1, true);
+
+        $this->archive->archive($build, $log);
     }
 
     /**
@@ -711,6 +821,7 @@ final class BuildPipeline
         try {
             $jobId = $this->spool->submit($spec);
             $deadline = microtime(true) + ($waitSeconds ?? ($spec->timeoutSeconds + 120));
+            $ingested = 0;
 
             while (microtime(true) < $deadline) {
                 /*
@@ -722,9 +833,23 @@ final class BuildPipeline
                  */
                 $channel?->serveOnce();
 
+                /*
+                 * 🛑 §8.5.21's "stream build logs line by line", from this
+                 * side. The runner appends to a file in the spool as it
+                 * reads the container; this pulls whatever is new, redacts
+                 * it against the FULL secret list — which only this side
+                 * has — and appends it to the log an API will serve. Five
+                 * times a second, in the loop that was already waiting.
+                 */
+                $ingested = $this->ingestLiveLog($jobId, $ingested);
+
+                $this->relayCancellation($jobId);
+
                 $result = $this->spool->readResult($jobId);
 
                 if ($result !== null) {
+                    $this->ingestLiveLog($jobId, $ingested);
+
                     return $result;
                 }
 
@@ -735,6 +860,94 @@ final class BuildPipeline
         }
 
         throw BuildFailure::of(FailureClass::Infra, 'runner_did_not_answer', $spec->stage);
+    }
+
+    /**
+     * Pull new lines out of the runner's live file into the build log.
+     *
+     * 🛑 **Redaction happens on this side of the spool**, because this is
+     * the side that knows every secret (§8.5.21: "before persistence or
+     * broadcast"). The runner scrubs the one credential it was handed;
+     * everything else — a component's environment secret, a token the
+     * vault opened for another stage — is known only here.
+     *
+     * Returns how many of the runner's lines have been consumed, so the
+     * next pass starts where this one stopped. Counting the runner's own
+     * sequence rather than a byte offset means a partially written final
+     * line is simply skipped and picked up whole next time.
+     */
+    private function ingestLiveLog(string $jobId, int $consumed): int
+    {
+        if (! $this->log instanceof BuildLog) {
+            return $consumed;
+        }
+
+        $handle = @fopen($this->spool->liveLog($jobId), 'rb');
+
+        if ($handle === false) {
+            return $consumed;
+        }
+
+        $appended = false;
+
+        try {
+            while (($raw = fgets($handle)) !== false) {
+                $line = LogLine::decode($raw);
+
+                if ($line === null || $line->seq <= $consumed) {
+                    continue;
+                }
+
+                $this->log->append($line->text, $line->stream);
+                $consumed = $line->seq;
+                $appended = true;
+            }
+        } finally {
+            fclose($handle);
+        }
+
+        /*
+         * 🛑 §8.5.22's optional WebSocket profile, broadcast ONCE PER
+         * TICK rather than once per line. A chatty build produces tens of
+         * thousands of lines and a listener needs to know that there is
+         * more, not how much — and an event per line would make the
+         * optional profile the most expensive thing in the pipeline.
+         *
+         * Under the default `null` connection this is a no-op, which is
+         * what keeps the profile optional (§19/22).
+         */
+        if ($appended && $this->running instanceof Build) {
+            BuildLogAppended::dispatch(
+                bin2hex($this->running->id),
+                $this->log->lineCount() + 1,
+                false,
+            );
+        }
+
+        return $consumed;
+    }
+
+    /**
+     * §8.5.23: carry a cancellation request across to the runner.
+     *
+     * 🛑 The worker is the only process that can see both halves — the
+     * `builds` row a dashboard wrote to and the spool the runner reads —
+     * so the relay belongs here. It is one indexed read per 200 ms tick
+     * against a row already in memory's reach, which is the price of
+     * "within 5 seconds" without giving the runner a database.
+     */
+    private function relayCancellation(string $jobId): void
+    {
+        if (! $this->running instanceof Build || $this->spool->cancelRequested($jobId)) {
+            return;
+        }
+
+        $requested = DB::table('builds')->where('id', $this->running->id)->value('cancel_requested_at');
+
+        if ($requested !== null) {
+            $this->spool->requestCancel($jobId);
+            $this->narrate('cancellation requested — stopping the container');
+        }
     }
 
     /**
@@ -870,10 +1083,13 @@ final class BuildPipeline
             throw BuildFailure::of(FailureClass::Conflict, 'step_claimed_elsewhere', $stage);
         }
 
+        $this->narrate($stage->value.': started');
+
         try {
             $result = $work();
         } catch (BuildFailure $failure) {
             $recorder->fail($step, $failure);
+            $this->narrate($stage->value.': '.$failure->identifier().' — '.$failure->userMessage());
 
             throw $failure;
         } catch (\Throwable $unexpected) {
@@ -890,8 +1106,23 @@ final class BuildPipeline
         }
 
         $recorder->succeed($step);
+        $this->narrate($stage->value.': ok');
 
         return $result;
+    }
+
+    /**
+     * The pipeline speaking for itself, on the `docup` stream.
+     *
+     * 🛑 Stage boundaries belong in the log an author reads, not only in
+     * the step rows. A build that failed at `collect` reads very
+     * differently from one that failed at `build`, and a reader scrolling
+     * ten thousand lines of generator output has no other way to tell
+     * where one ended and the next began.
+     */
+    private function narrate(string $text): void
+    {
+        $this->log?->append($text, 'docup');
     }
 
     /** @param  array<string, BuildStep>  $steps */

@@ -41,6 +41,55 @@ return [
      * renewals per lease, so two consecutive missed renewals are needed before
      * work is reclaimed.
      */
+    /*
+     *--------------------------------------------------------------------
+     * SPEC 8.5.21-8.5.23: the log a build can be watched through
+     *--------------------------------------------------------------------
+     */
+
+    /*
+     * Where a RUNNING build's log is appended, line by line.
+     *
+     * 🛑 Not the artifact store, and that is a consequence of what each
+     * one is for. SPEC 8.8.1 makes the artifact store WRITE-ONCE, because
+     * a published artifact that can be replaced is not an artifact; a log
+     * is appended to thousands of times and deleted at 90 days (SPEC
+     * 20.3). Forcing one into the other would mean either weakening
+     * write-once or re-uploading a growing object on every line.
+     *
+     * Under `storage/`, which the application and the worker already
+     * share in every deployment profile - the runner does not mount it,
+     * and does not need to: it writes raw lines into the spool and this
+     * side redacts them before they land here.
+     *
+     * The FINISHED log is a different thing and does go to the artifact
+     * store, gzipped, at SPEC 10.3's
+     * `logs/<project_uuid>/<build_uuid>/log.ndjson.gz`.
+     */
+    'log_spool' => env('DOCUP_BUILD_LOG_SPOOL', storage_path('docup/build-logs')),
+
+    /*
+     * How many lines one page of SPEC 8.5.22's offset contract carries.
+     *
+     * Large enough that a browser catching up on a finished build does so
+     * in a handful of requests, small enough that one response is not a
+     * megabyte. A client never needs to know this number: the response
+     * carries `next` and `more`.
+     */
+    'log_page_lines' => 2000,
+
+    /*
+     * SPEC 8.5.17's governor: consecutive user-caused failures of a
+     * project's DEFAULT VERSION before webhook triggering is disabled.
+     *
+     * 🛑 The specification says 25 and the exit criterion says the 26th
+     * failure trips it, so this is the number of failures TOLERATED.
+     * Configurable because an installation building a thousand projects
+     * has a different tolerance from one building three - but never zero,
+     * which `BuildGovernor` floors.
+     */
+    'governor_threshold' => (int) env('DOCUP_GOVERNOR_THRESHOLD', 25),
+
     'poll_interval_ms' => 250,
     'lease_seconds' => 60,
     'lease_renew_seconds' => 20,

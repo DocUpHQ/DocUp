@@ -54,6 +54,12 @@ use Illuminate\Support\Carbon;
  * @property array<string, mixed>|null $chrome_coverage
  * @property Carbon|null $started_at
  * @property Carbon|null $finished_at
+ * @property Carbon|null $queued_at
+ * @property int $log_lines
+ * @property int $log_bytes
+ * @property bool $log_capped
+ * @property Carbon|null $cancel_requested_at
+ * @property string|null $cancel_requested_by
  */
 #[Tenancy(TenancyPosture::OrganisationScoped)]
 final class Build extends Model
@@ -87,10 +93,15 @@ final class Build extends Model
             'file_count' => 'integer',
             'total_bytes' => 'integer',
             'exit_code' => 'integer',
+            'log_lines' => 'integer',
+            'log_bytes' => 'integer',
+            'log_capped' => 'boolean',
+            'cancel_requested_at' => 'datetime:Y-m-d H:i:s.v',
             'injector_version' => 'integer',
             'chrome_documents' => 'integer',
             'chrome_injected' => 'integer',
             'chrome_coverage' => 'array',
+            'queued_at' => 'datetime:Y-m-d H:i:s.v',
             'started_at' => 'datetime:Y-m-d H:i:s.v',
             'finished_at' => 'datetime:Y-m-d H:i:s.v',
             'created_at' => 'datetime:Y-m-d H:i:s.v',

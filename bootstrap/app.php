@@ -49,6 +49,17 @@ return Application::configure(basePath: dirname(__DIR__))
             require __DIR__.'/../routes/api.php';
         },
         commands: __DIR__.'/../routes/console.php',
+
+        /*
+         * 🛑 §8.5.22's optional WebSocket profile needs its channel
+         * authorisation registered whether or not a broadcaster is
+         * configured — a private channel whose callback is missing is a
+         * channel Laravel refuses, which looks identical to a channel
+         * nobody secured until the day somebody enables the profile and
+         * it does not work. Registering it costs one closure and keeps
+         * the boundary in the repository rather than in the overlay.
+         */
+        channels: __DIR__.'/../routes/channels.php',
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {

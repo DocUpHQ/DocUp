@@ -5,6 +5,9 @@
 
 declare(strict_types=1);
 
+use App\Http\Controllers\Api\BuildCancelController;
+use App\Http\Controllers\Api\BuildController;
+use App\Http\Controllers\Api\BuildLogController;
 use App\Http\Controllers\Api\VersionPinController;
 use App\Http\Controllers\Api\VersionRollbackController;
 use App\Http\Controllers\Api\VersionUploadController;
@@ -59,4 +62,36 @@ Route::prefix('api/v3')
                 ->middleware('token.can:project.version.rollback')
                 ->name('api.v3.versions.unpin');
         });
+
+        /*
+         * §8.5.23's cancellation. Inside the credentialed group, because
+         * stopping somebody's build is a mutation and the anonymous
+         * reader of §8.5.22 has no business doing it — the controller
+         * asserts the credential again rather than relying on this
+         * grouping alone.
+         */
+        Route::post('builds/{build}/cancel', BuildCancelController::class)
+            ->middleware('token.can:project.version.publish')
+            ->name('api.v3.builds.cancel');
+    });
+
+/*
+|------------------------------------------------------------------------------
+| §8.5.22's build-log contract
+|------------------------------------------------------------------------------
+| 🛑 OUTSIDE the credentialed group, and deliberately so. §8.5.22 makes
+| build-log visibility for anonymous readers of public projects a per-project
+| setting — so the endpoint has to be reachable without a credential in order
+| to then refuse almost everybody. `api.token:optional` accepts no credential
+| and still rejects a WRONG one, and `BuildAccess` applies the two policies.
+|
+| The build state endpoint shares the same rule: a reader allowed to see a
+| log should be able to tell whether the build that produced it finished, and
+| splitting them would mean polling a 404 to find out.
+*/
+Route::prefix('api/v3')
+    ->middleware(['api.token:optional', 'throttle:api'])
+    ->group(function (): void {
+        Route::get('builds/{build}', BuildController::class)->name('api.v3.builds.show');
+        Route::get('builds/{build}/log', BuildLogController::class)->name('api.v3.builds.log');
     });

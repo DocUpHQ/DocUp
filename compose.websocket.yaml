@@ -1,0 +1,98 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# §8.5.22's OPTIONAL WebSocket profile.
+#
+#   docker compose -f compose.yaml -f compose.websocket.yaml up
+#
+# 🛑 "Polling MUST be the default and the only thing in the core compose file;
+# WebSocket streaming MUST be an optional profile."
+#
+# This file is the whole of the profile, and `compose.yaml` mentions none of
+# it — no service, no port, no environment variable. `ComposeFilesTest`
+# asserts that, because an "optional" profile that is present-but-disabled in
+# the core file is a profile an operator enables by accident, and §19/22's
+# reasoning for keeping it out is specific: a long-running process, a second
+# exposed port, a Redis-only scaling dependency and a 1,024-FD ceiling, for
+# builds measured in minutes.
+#
+# 🛑 The profile is a SECOND TRANSPORT, never a second contract. The socket
+# carries a cursor (`BuildLogAppended`), and a client fetches the page from
+# the same `GET /api/v3/builds/{id}/log?from=<seq>` under the same
+# authorisation. Nothing is readable over the socket that was not already
+# readable over the poll.
+#
+# Before using it:
+#
+#   composer require laravel/reverb
+#   php artisan reverb:install
+#
+# Reverb is deliberately NOT a dependency of the core application: an
+# installation that never enables this profile should not carry a WebSocket
+# server in its image or its SBOM.
+
+name: docup
+
+services:
+
+  app:
+    environment:
+      # Switches `BuildLogAppended` from a no-op to a broadcast. Everything
+      # else about the log — the file, the cap, the redaction, the offset
+      # contract — is unchanged.
+      BROADCAST_CONNECTION: reverb
+      REVERB_APP_ID: ${REVERB_APP_ID}
+      REVERB_APP_KEY: ${REVERB_APP_KEY}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET}
+      REVERB_HOST: ${REVERB_HOST:-websocket}
+      REVERB_PORT: ${REVERB_PORT:-8080}
+      REVERB_SCHEME: ${REVERB_SCHEME:-http}
+
+  worker:
+    environment:
+      BROADCAST_CONNECTION: reverb
+      REVERB_APP_ID: ${REVERB_APP_ID}
+      REVERB_APP_KEY: ${REVERB_APP_KEY}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET}
+      REVERB_HOST: ${REVERB_HOST:-websocket}
+      REVERB_PORT: ${REVERB_PORT:-8080}
+      REVERB_SCHEME: ${REVERB_SCHEME:-http}
+
+  # --- the WebSocket server (SPEC 8.5.22, optional) ------------------------
+  #
+  # 🛑 In the `app` zone and nowhere else. It broadcasts build-log cursors to
+  # authenticated dashboard users; it has no business on the data network, and
+  # §11.2's sandbox and runner zones must never be able to reach it.
+  websocket:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    command: ["php", "artisan", "reverb:start", "--host=0.0.0.0", "--port=8080"]
+    networks: [app, data]
+    volumes:
+      - .:/app
+    working_dir: /app
+
+    # 🛑 Bound to loopback. A WebSocket carrying build logs carries paths,
+    # dependency versions and sometimes content (§8.5.22's own words), so the
+    # port is published for a reverse proxy to terminate TLS in front of —
+    # never directly to the internet.
+    ports:
+      - "127.0.0.1:${REVERB_PORT:-8080}:8080"
+
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      APP_KEY: ${APP_KEY}
+      DB_CONNECTION: mysql
+      DB_HOST: db
+      DB_DATABASE: ${DB_DATABASE:-docup}
+      DB_USERNAME: ${DB_USERNAME:-docup}
+      DB_PASSWORD: ${DB_PASSWORD:-docup}
+      REDIS_HOST: cache
+      BROADCAST_CONNECTION: reverb
+      REVERB_APP_ID: ${REVERB_APP_ID}
+      REVERB_APP_KEY: ${REVERB_APP_KEY}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET}
+      DOCUP_APP_HOST: ${DOCUP_APP_HOST}
+      DOCUP_DOCS_APEX: ${DOCUP_DOCS_APEX}

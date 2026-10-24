@@ -379,7 +379,23 @@ final class ArchitectureTest extends TestCase
                 }
             }
 
-            if ($namesAStore) {
+            /*
+             * 🛑 ONE exemption, and it is not an artifact.
+             *
+             * SPEC 8.8.2's rule is about the artifact TREE: one ingestor,
+             * one set of validations, one write path, because a second way
+             * to put a documentation byte into the store is a second way to
+             * get the key grammar wrong. A build log is a different object
+             * with a different lifecycle - SPEC 10.3 gives it its own
+             * prefix and SPEC 20.3 deletes it at 90 days, where a published
+             * artifact is write-once and kept.
+             *
+             * Exempted by exact path rather than by namespace, and paired
+             * with `test_only_the_log_archive_writes_the_logs_prefix`
+             * below, so the exemption buys exactly one file the ability to
+             * write exactly one prefix.
+             */
+            if ($namesAStore && $relative !== 'app/Builds/Log/BuildLogArchive.php') {
                 foreach (['->put(', '->deletePrefix('] as $call) {
                     if (str_contains($source, $call)) {
                         $offenders[] = $relative.' names a store and calls '.$call;
@@ -403,6 +419,45 @@ final class ArchitectureTest extends TestCase
             [],
             $offenders,
             'only App\Artifacts may reach the artifact store (SPEC 8.8.2): '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 10.3's `logs/` prefix has one construction site.
+     *
+     * The companion to the exemption above. `ArtifactStore::prefixFor()`
+     * exists so that `builds/` is assembled in one place; this asserts the
+     * same of `logs/`, because the failure mode is identical — a second
+     * place that builds the path grows a convenience, and the convenience
+     * is a project slug in a storage key (SPEC 8.8.1).
+     */
+    public function test_only_the_log_archive_writes_the_logs_prefix(): void
+    {
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            /*
+             * Application code only. `config/logging.php` names
+             * `storage_path('logs/laravel.log')`, which is Monolog's
+             * directory and has nothing to do with SPEC 10.3's storage
+             * key — a rule that flagged it would be removed within a
+             * phase, which is worse than not having it.
+             */
+            if (! str_starts_with($relative, 'app/') || $relative === 'app/Builds/Log/BuildLogArchive.php') {
+                continue;
+            }
+
+            if (str_contains($this->code($file), "'logs/")) {
+                $offenders[] = $relative;
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'only BuildLogArchive may build the SPEC 10.3 logs/ key: '.implode(', ', $offenders),
         );
     }
 

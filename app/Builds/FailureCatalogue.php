@@ -39,6 +39,7 @@ final class FailureCatalogue
 
         // ------------------------------------------------- refused outright
         'rejected.builds_disabled' => 'This installation does not build documentation: it runs in hosting-only mode (§8.1.7), where documentation is uploaded through the API rather than built from a repository. Ask your administrator, or publish with the direct-upload endpoint.',
+        'rejected.webhook_triggering_disabled' => 'Automatic builds are paused for this project: its default version failed too many times in a row for reasons a change to the project can fix (§8.5.17). You can still build manually, and a successful manual build is what clears it. Builds that failed for reasons on our side are never counted.',
         'rejected.fork_builds_disabled' => 'This build came from a fork, and builds from forks are off by default (§8.5.10). A fork build would run code from outside your organisation; enable it per project only if you have read the threat statement, and note that it receives no secrets either way.',
         'rejected.runtime_socket_requested' => 'The build asked for access to the container runtime, which no build may have (§8.5.13). The runner is the only process that may start containers, and it accepts a fixed specification that has no field for a mount, a capability or a runtime. If this was not something you configured, tell your administrator: a build does not ask for this by accident.',
         'rejected.run_specification_refused' => 'The runner refused the instructions for this build as malformed (§8.5.13). This is a fault on our side rather than yours; the build can be triggered again.',
@@ -75,6 +76,7 @@ final class FailureCatalogue
 
         // ------------------------------------------------- asked for
         'cancelled.voluntary_cancel' => 'The build cancelled itself.',
+        'cancelled.cancelled_by_request' => 'This build was cancelled. Nothing was published, and the version still serves whatever it served before.',
     ];
 
     /**
