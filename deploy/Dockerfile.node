@@ -1,0 +1,69 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The Node toolchain image (SPEC 8.5.14): Docusaurus, VitePress, Starlight
+# and Antora.
+#
+# 🛑 **Four presets, one image, and only Antora is pre-baked.** The other
+# three are ESM, and ESM resolution does not consult NODE_PATH - so a
+# globally installed Docusaurus cannot load a theme or a plugin out of a
+# repository's own node_modules, and every real Docusaurus site has both.
+# Their dependencies therefore install in the SPEC 8.5.6 `environment` stage,
+# from the repository's own lockfile, through the SPEC 8.5.9 CONNECT proxy
+# with the nftables backstop behind it. That is precisely the arrangement
+# Phase 07 built and precisely why `registry.npmjs.org` is on the allowlist.
+#
+# Antora is different and so is pre-baked: it is a CommonJS program invoked as
+# a binary, it resolves nothing out of the site's tree, and its playbook names
+# content rather than code.
+
+FROM node:22-alpine
+
+# Pinned exactly, for the SPEC 8.5.2 `env_digest` reason in Dockerfile.sphinx.
+ARG ANTORA_VERSION=3.1.10
+
+RUN npm install -g --no-audit --no-fund \
+        "@antora/cli@${ANTORA_VERSION}" \
+        "@antora/site-generator@${ANTORA_VERSION}" \
+ && npm cache clean --force
+
+# 🛑 git, for the Antora preset and nothing else.
+#
+# Antora reads content from a git repository rather than from a
+# directory, and SPEC 8.5.7 removes `.git` before the build stage mounts
+# the workspace. The preset answers that by creating a FRESH repository
+# with no remote inside the sandbox - see resources/toolchains/antora.yaml
+# - which needs the binary to be here. It carries no configuration and no
+# credential helper: GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM are pointed
+# at /dev/null by that preset, for the reason App\Source\GitSafety gives.
+RUN apk add --no-cache git
+
+# 🛑 bash, for SPEC 8.4.10's `set -euo pipefail`.
+#
+# Alpine's /bin/sh is busybox ash, whose `pipefail` support is a build-time
+# option rather than a guarantee, and `pipefail` is the flag that catches the
+# failures this requirement is about: `sphinx-build … | tee log` exits 0 on a
+# shell without it however badly sphinx failed. A deliberate incompatibility
+# with Read the Docs is only worth having if it is reliably in force, so the
+# interpreter is installed rather than assumed.
+RUN apk add --no-cache bash \
+ && bash -c 'set -euo pipefail'
+
+# 🛑 Never root, and never writable. node:22-alpine already ships a `node`
+# user at uid 1000; DocUp runs every build container as 10001 (SPEC 8.5.8) and
+# the workspace is owned by that uid, so the image gets its own.
+RUN addgroup -g 10001 docup && adduser -D -u 10001 -G docup docup
+USER 10001:10001
+
+# npm needs somewhere to write. HOME is a `noexec` tmpfs (SPEC 8.5.8) which is
+# fine for a config file and a logs directory; the package cache goes in the
+# workspace instead, because it is large and because the workspace is what
+# SPEC 8.5.18's disk limit actually measures - a cache on the tmpfs would be
+# charged to memory and would hit a 512 MB ceiling with no useful message.
+ENV HOME=/tmp \
+    NPM_CONFIG_CACHE=/workspace/work/.npm \
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_AUDIT=false
+
+# No ENTRYPOINT: see Dockerfile.sphinx.

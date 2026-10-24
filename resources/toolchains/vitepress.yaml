@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+
+key: vitepress
+name: VitePress
+image: node
+
+detect:
+  - .vitepress/config.ts
+  - .vitepress/config.js
+  - .vitepress/config.mjs
+  - docs/.vitepress/config.ts
+  - docs/.vitepress/config.js
+  - docs/.vitepress/config.mjs
+
+# Required, and that is not boilerplate: the commands below derive the site
+# root from the configuration file's own directory, so a build that could not
+# find one would have nothing to derive it from.
+configuration:
+  key: vitepress
+  required: true
+  candidates:
+    - .vitepress/config.ts
+    - .vitepress/config.js
+    - .vitepress/config.mjs
+    - docs/.vitepress/config.ts
+    - docs/.vitepress/config.js
+    - docs/.vitepress/config.mjs
+
+environment:
+  NPM_CONFIG_FUND: "false"
+  NPM_CONFIG_AUDIT: "false"
+  NPM_CONFIG_UPDATE_NOTIFIER: "false"
+  CI: "true"
+
+steps:
+  install:
+    # `npm ci` needs a lockfile and is the right command when there is one:
+    # it installs exactly what was committed, which is what SPEC 18.13's
+    # fragment-cache determinism depends on. A repository without one still
+    # builds, from a resolution made at build time - noted as the case that
+    # misses the cache rather than refused.
+    - |
+      if [ -f package-lock.json ]; then
+        npm ci --no-audit --no-fund --loglevel=error
+      else
+        npm install --no-audit --no-fund --no-package-lock --loglevel=error
+      fi
+
+formats:
+  # VitePress builds into `<root>/.vitepress/dist`, and its `--outDir` flag has
+  # moved between majors, so the output is COPIED rather than redirected. One
+  # extra `cp` is cheaper than a preset that silently produces an empty site on
+  # whichever version an operator happens to have pinned.
+  #
+  # The commands of one step share a shell (SPEC 8.4.10 runs them as a single
+  # `set -euo pipefail` script), so the variable set on the first line is still
+  # there on the fourth.
+  html:
+    - VITEPRESS_ROOT="$(dirname "$DOCUP_CONFIGURATION_DIR")"
+    - npx --no-install vitepress build "$VITEPRESS_ROOT"
+    - mkdir -p "$DOCUP_OUTPUT/html"
+    - cp -R "$VITEPRESS_ROOT/.vitepress/dist/." "$DOCUP_OUTPUT/html/"
+
+determinism: >-
+  Deterministic for a committed lockfile. Vite content-hashes its assets, so
+  the caveat is the same as Docusaurus': the hashes are stable only while the
+  resolved dependency tree is.

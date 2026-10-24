@@ -230,6 +230,28 @@ final readonly class EnvelopeCipher
         ]);
     }
 
+    /**
+     * The AAD for a §8.5.25 component build variable.
+     *
+     * A separate domain string from {@see aad()}'s, not a reuse of it: the
+     * two record types are sealed by the same cipher under the same KEK, and
+     * a shared prefix would mean a ciphertext lifted from one table opening
+     * in the other. The component id and the variable name are both
+     * immutable for the life of the row — a rename is a delete and an insert,
+     * because a renamed variable whose ciphertext no longer opens is worse
+     * than one that cannot be renamed.
+     */
+    public static function variableAad(string $variableId, string $organisationId, string $componentId, string $name): string
+    {
+        return implode('|', [
+            'docup.component_variable.v'.self::VERSION,
+            bin2hex($organisationId),
+            bin2hex($componentId),
+            bin2hex($variableId),
+            $name,
+        ]);
+    }
+
     /** @return list<string> the current KEK first, then each previous one */
     private function candidateKeks(): array
     {

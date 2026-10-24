@@ -1,0 +1,262 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docup.dev/schema/docup-yaml/v1.json",
+  "title": "DocUp repository configuration (.docup.yaml)",
+
+  "description": "SPEC 8.4. One of the three independently versioned public contracts of SPEC 8.1.11, and a key- and value-compatible superset of .readthedocs.yaml v2 (SPEC 8.4.2): every key and every accepted value of that file is accepted here unchanged. THIS FILE IS THE CONTRACT. The application validates against this exact document rather than against a PHP reimplementation of it, so that the schema an editor offers completion from and the schema a build is refused by cannot drift apart. SPEC 8.4.8 is the invariant that shapes it: no key names a project, a mount path, a domain, an authentication policy, a visibility level, a version channel or a retention policy, and additionalProperties is false everywhere, so a key that would introduce one cannot be added by accident.",
+
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+
+  "properties": {
+
+    "version": {
+      "description": "The configuration format version. Read the Docs v2 requires this and so do we; SPEC 8.1.11 requires this contract to carry its own version field with a two-minor deprecation policy, and a file that does not say which contract it speaks cannot be deprecated against.",
+      "const": 2
+    },
+
+    "toolchain": {
+      "description": "DocUp addition: name the generator outright. Read the Docs infers it from the presence of a `sphinx` or `mkdocs` key, which works for exactly two generators; SPEC 11.4 makes the toolchain a declarative data file, and this is the key that names one. Omit it and the generator is inferred the Read the Docs way (`sphinx` key, `mkdocs` key, else `build.commands`).",
+      "type": "string",
+      "enum": ["sphinx", "mkdocs", "docusaurus", "antora", "mdbook", "vitepress", "starlight"]
+    },
+
+    "formats": {
+      "description": "Offline formats to emit alongside HTML. SPEC 8.4.2 preserves the literal `all`.",
+      "oneOf": [
+        { "const": "all" },
+        {
+          "type": "array",
+          "items": { "enum": ["pdf", "epub", "htmlzip"] },
+          "uniqueItems": true
+        }
+      ]
+    },
+
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+
+      "description": "The image, the language tools, the system packages and the pipeline.",
+
+      "properties": {
+
+        "os": {
+          "description": "SPEC 8.5.14's allowlisted enum. The values churn upstream, which is why SPEC 8.4.2 puts them here rather than in the specification. ubuntu-20.04 is retained beyond its upstream removal because a migrating repository must not be rejected for a value its previous host accepted.",
+          "enum": [
+            "ubuntu-20.04",
+            "ubuntu-22.04",
+            "ubuntu-24.04",
+            "ubuntu-26.04",
+            "ubuntu-lts-latest"
+          ]
+        },
+
+        "tools": {
+          "description": "Language runtimes. Every tool accepts the literal `latest` (SPEC 8.4.2). The value is a string even when it looks like a number, because YAML would read 3.10 as the float 3.1 and silently select the wrong Python.",
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "python": { "type": "string", "maxLength": 64 },
+            "nodejs": { "type": "string", "maxLength": 64 },
+            "ruby": { "type": "string", "maxLength": 64 },
+            "rust": { "type": "string", "maxLength": 64 },
+            "golang": { "type": "string", "maxLength": 64 }
+          }
+        },
+
+        "apt_packages": {
+          "description": "System packages. SPEC 8.4.4 forbids combining this with build.commands, which the `not` below enforces.",
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9+._-]*$" }
+        },
+
+        "jobs": {
+          "description": "SPEC 8.4.3: the Read the Docs hook names, unchanged. `pre_` and `post_` append to the predefined step; a bare name replaces it.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "post_checkout": { "$ref": "#/$defs/commandList" },
+            "pre_system_dependencies": { "$ref": "#/$defs/commandList" },
+            "post_system_dependencies": { "$ref": "#/$defs/commandList" },
+            "pre_create_environment": { "$ref": "#/$defs/commandList" },
+            "create_environment": { "$ref": "#/$defs/commandList" },
+            "post_create_environment": { "$ref": "#/$defs/commandList" },
+            "pre_install": { "$ref": "#/$defs/commandList" },
+            "install": { "$ref": "#/$defs/commandList" },
+            "post_install": { "$ref": "#/$defs/commandList" },
+            "pre_build": { "$ref": "#/$defs/commandList" },
+            "build": {
+              "description": "Per-format, because `build` produces four different things and replacing all of them together is almost never what the author means.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "html": { "$ref": "#/$defs/commandList" },
+                "pdf": { "$ref": "#/$defs/commandList" },
+                "epub": { "$ref": "#/$defs/commandList" },
+                "htmlzip": { "$ref": "#/$defs/commandList" }
+              }
+            },
+            "post_build": { "$ref": "#/$defs/commandList" }
+          }
+        },
+
+        "commands": {
+          "description": "SPEC 8.4.4: discards the predefined pipeline entirely. The author owns every step, including writing $DOCUP_OUTPUT/html.",
+          "$ref": "#/$defs/commandList"
+        }
+      },
+
+      "not": {
+        "description": "SPEC 8.4.4: build.commands MUST NOT be combinable with build.apt_packages. Expressed in the schema rather than in code so the refusal is part of the published contract an editor can show before a build is ever triggered.",
+        "required": ["commands", "apt_packages"]
+      }
+    },
+
+    "python": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "install": {
+          "description": "SPEC 8.4.2 preserves both forms: a requirements file, or a package at a path.",
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["requirements"],
+                "properties": {
+                  "requirements": { "$ref": "#/$defs/repositoryPath" }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path"],
+                "properties": {
+                  "path": { "$ref": "#/$defs/repositoryPath" },
+                  "method": { "enum": ["pip", "setuptools", "uv"] },
+                  "extra_requirements": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": { "type": "string", "maxLength": 128 }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+
+    "conda": {
+      "description": "SPEC 8.4.14: accepted by the schema for configuration compatibility and NOT RUNNABLE in v1. A file using it is refused by ConfigRejection::CONDA_UNSUPPORTED, which names the limitation and the two alternatives. It is accepted here rather than rejected as an unknown key so that the refusal can say what is actually wrong instead of `unknown key: conda`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["environment"],
+      "properties": {
+        "environment": { "$ref": "#/$defs/repositoryPath" }
+      }
+    },
+
+    "sphinx": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "builder": {
+          "description": "SPEC 8.4.2 preserves html, dirhtml and singlehtml. `htmldir` is Read the Docs' retired spelling of dirhtml and is accepted for the same reason ubuntu-20.04 is.",
+          "enum": ["html", "dirhtml", "singlehtml", "htmldir"],
+          "default": "html"
+        },
+        "configuration": { "$ref": "#/$defs/repositoryPath" },
+        "fail_on_warning": { "type": "boolean", "default": false }
+      }
+    },
+
+    "mkdocs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "configuration": { "$ref": "#/$defs/repositoryPath" },
+        "fail_on_warning": { "type": "boolean", "default": false }
+      }
+    },
+
+    "submodules": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "include": {
+          "oneOf": [
+            { "const": "all" },
+            { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/repositoryPath" } }
+          ]
+        },
+        "exclude": {
+          "oneOf": [
+            { "const": "all" },
+            { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/repositoryPath" } }
+          ]
+        },
+        "recursive": { "type": "boolean", "default": false }
+      }
+    },
+
+    "search": {
+      "description": "Consumed by SPEC 8.16.3's indexer, not by the build.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ranking": {
+          "description": "A per-page rank from -10 to +10, keyed by a path glob.",
+          "type": "object",
+          "maxProperties": 128,
+          "additionalProperties": { "type": "integer", "minimum": -10, "maximum": 10 }
+        },
+        "ignore": {
+          "type": "array",
+          "maxItems": 128,
+          "items": { "type": "string", "maxLength": 512 }
+        }
+      }
+    },
+
+    "sparse": {
+      "description": "SPEC 8.4.11: monorepo checkout narrowing, declarative. The fetcher applies these as git sparse-checkout patterns in cone mode and MUST fail loudly rather than silently falling back to a full clone.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/repositoryPath" }
+    },
+
+    "suggested_mount_path": {
+      "description": "SPEC 8.4.8's one exception, and it is advisory: consumed ONCE at attach time and never read again. It is not where this component is mounted — a repository does not get to decide that, because the same repository is mounted at different paths by different projects, which is the entire reason the component model exists.",
+      "type": "string",
+      "maxLength": 255,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9/_-]*$"
+    }
+  },
+
+  "$defs": {
+
+    "commandList": {
+      "description": "A list of shell commands. SPEC 8.4.10 runs each under `set -euo pipefail`, which is a deliberate incompatibility with Read the Docs' unflagged /bin/sh -c.",
+      "type": "array",
+      "maxItems": 64,
+      "items": { "type": "string", "minLength": 1, "maxLength": 4096 }
+    },
+
+    "repositoryPath": {
+      "description": "A path inside the checkout. Relative, no traversal, no leading slash, and NO CONTROL CHARACTER — several of these values are exported into the build's environment, where a newline would end one variable and begin another in the env-file the runner writes. The build sandbox would contain an escape anyway (SPEC 8.5.8), but a path refused by the schema is refused before a container starts and names the offending key, which an author can act on.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\x00-\\x1f\\x7f]+$"
+    }
+  }
+}

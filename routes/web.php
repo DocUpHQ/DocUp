@@ -11,6 +11,7 @@ use App\Http\Controllers\Health\ReadyController;
 use App\Http\Controllers\Health\SelfTestController;
 use App\Http\Controllers\ProjectController;
 use App\Http\Controllers\ProjectVisibilityController;
+use App\Http\Controllers\SchemaController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -35,6 +36,19 @@ Route::prefix('_/health')->name('health.')->group(function (): void {
     Route::get('ready', ReadyController::class)->name('ready');
     Route::get('self-test', SelfTestController::class)->name('self-test');
 });
+
+/*
+| §8.1.11's `.docup.yaml` schema, published. Outside every middleware group
+| for the same reason the health endpoints are: an author's editor fetches
+| this to offer completion while they write the file, and a contract that
+| needed a session would not be one.
+|
+| 🛑 The version is in the PATH, not in a header or a query parameter. §8.1.11
+| gives each contract "a two-minor deprecation policy", which only means
+| anything if v1 keeps saying what it said — so a v2 is a second URL rather
+| than a change to this one.
+*/
+Route::get('_/schema/docup-yaml/v1.json', [SchemaController::class, 'show'])->name('schema.docup-yaml.v1');
 
 Route::get('/', fn () => redirect()->route('login'));
 

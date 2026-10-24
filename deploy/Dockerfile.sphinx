@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The Sphinx build image (SPEC 8.5.14).
+#
+# 🛑 **Pre-baked is the security property, not the speed one.** A build that
+# installs its toolchain at run time needs network access to a package index
+# while running repository code, which is the combination SPEC 8.5.9 spends an
+# allowlisted proxy and an nftables backstop to contain. Sphinx and the two
+# themes nearly every migrating repository uses are here, so the common case
+# needs no `python.install` and therefore no egress at all.
+#
+# A repository that needs more adds `python.install` and the SPEC 8.5.6
+# `environment` stage installs it through the proxy - which is what that
+# stage, and PyPI's place on the allowlist, exist for.
+
+FROM python:3.13-alpine
+
+# Pinned exactly. A floating version would make `env_digest` (SPEC 8.5.2) lie:
+# the digest would be unchanged while the toolchain that produced the output
+# had moved, and the SPEC 8.5.19 fragment cache would serve output built by a
+# generator that is no longer installed.
+ARG SPHINX_VERSION=8.1.3
+ARG RTD_THEME_VERSION=3.0.2
+ARG FURO_VERSION=2024.8.6
+ARG MYST_VERSION=4.0.0
+
+RUN pip install --no-cache-dir \
+        "sphinx==${SPHINX_VERSION}" \
+        "sphinx-rtd-theme==${RTD_THEME_VERSION}" \
+        "furo==${FURO_VERSION}" \
+        "myst-parser==${MYST_VERSION}" \
+ && find /usr/local -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+
+# 🛑 bash, for SPEC 8.4.10's `set -euo pipefail`.
+#
+# Alpine's /bin/sh is busybox ash, whose `pipefail` support is a build-time
+# option rather than a guarantee, and `pipefail` is the flag that catches the
+# failures this requirement is about: `sphinx-build … | tee log` exits 0 on a
+# shell without it however badly sphinx failed. A deliberate incompatibility
+# with Read the Docs is only worth having if it is reliably in force, so the
+# interpreter is installed rather than assumed.
+RUN apk add --no-cache bash \
+ && bash -c 'set -euo pipefail'
+
+# 🛑 Never root, and never writable. The container also runs `--read-only`
+# with a `noexec` tmpfs at /tmp (SPEC 8.5.8), so a generator that downloads a
+# binary and tries to run it fails at the exec rather than succeeding quietly.
+RUN addgroup -g 10001 docup && adduser -D -u 10001 -G docup docup
+USER 10001:10001
+
+# pip has nowhere to write a cache or a user site under `--read-only`, and its
+# own error about that is three screens of traceback.
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HOME=/tmp
+
+# No ENTRYPOINT. The runner passes a complete argv from the fixed template
+# (SPEC 8.5.13) - for this image, the two fixed elements `/bin/sh` and the
+# path of the script it wrote into the workspace (SPEC 8.4.10).

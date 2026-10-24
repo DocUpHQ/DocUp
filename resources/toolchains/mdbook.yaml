@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+
+key: mdbook
+name: mdBook
+image: mdbook
+
+detect:
+  - book.toml
+
+configuration:
+  key: mdbook
+  required: true
+  candidates:
+    - book.toml
+
+environment:
+  # mdBook renders a "last build" string into some themes from the system
+  # clock. SOURCE_DATE_EPOCH is honoured by the Rust toolchain's date
+  # handling and by the default theme.
+  SOURCE_DATE_EPOCH: "315532800"
+
+steps:
+  create_environment: []
+  install: []
+
+formats:
+  # mdBook takes the book's root directory, not its `book.toml`, and resolves
+  # a relative `--dest-dir` against that root - so the absolute $DOCUP_OUTPUT
+  # is what keeps the output where SPEC 8.4.5 says it must be rather than
+  # inside the checkout.
+  html:
+    - mdbook build --dest-dir "$DOCUP_OUTPUT/html" "$DOCUP_CONFIGURATION_DIR"
+
+determinism: >-
+  Deterministic. mdBook's default theme emits no timestamp and no
+  content-hashed asset names, which makes it the most cache-friendly of the
+  shipped presets. Preprocessors that shell out (mdbook-linkcheck against a
+  network, mdbook-cmdrun) are the exception and are a repository's own choice.

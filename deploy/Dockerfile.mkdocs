@@ -33,6 +33,17 @@ RUN pip install --no-cache-dir \
         "mkdocs-material==${MKDOCS_MATERIAL_VERSION}" \
  && find /usr/local -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
+# 🛑 bash, for SPEC 8.4.10's `set -euo pipefail`.
+#
+# Alpine's /bin/sh is busybox ash, whose `pipefail` support is a build-time
+# option rather than a guarantee, and `pipefail` is the flag that catches the
+# failures this requirement is about: `sphinx-build … | tee log` exits 0 on a
+# shell without it however badly sphinx failed. A deliberate incompatibility
+# with Read the Docs is only worth having if it is reliably in force, so the
+# interpreter is installed rather than assumed.
+RUN apk add --no-cache bash \
+ && bash -c 'set -euo pipefail'
+
 # 🛑 Never root, and never writable. The container also runs `--read-only`
 # with a `noexec` tmpfs at /tmp (SPEC 8.5.8), so a generator that downloads a
 # binary and tries to run it fails at the exec rather than succeeding quietly.

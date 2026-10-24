@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The mdBook build image (SPEC 8.5.14).
+#
+# 🛑 **The binary is downloaded at IMAGE BUILD time, never at build time.**
+# An image build runs on the operator's machine or in CI, with the operator's
+# network and no repository code anywhere near it; a `cargo install` inside a
+# build container would need crates.io, a Rust toolchain and three minutes,
+# every build. mdBook is a single statically linked musl executable, which
+# makes it the easiest of the shipped generators to pre-bake properly.
+
+FROM alpine:3.21 AS fetch
+
+ARG MDBOOK_VERSION=0.4.43
+
+# 🛑 Verified by digest, not by trusting the transport. A release tarball
+# fetched over TLS is still whatever that host served; the SHA-256 is checked
+# against the value recorded here, so a swapped artefact fails the image build
+# rather than shipping to every tenant.
+ARG MDBOOK_SHA256=3058914071a6f22dbd1b8ea734a96d8e86489743ae0bc8d6bbd9e923f191b038
+
+RUN apk add --no-cache curl tar \
+ && curl -fsSL -o /tmp/mdbook.tar.gz \
+      "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+ && printf '%s  /tmp/mdbook.tar.gz\n' "${MDBOOK_SHA256}" | sha256sum -c - \
+ && tar -xzf /tmp/mdbook.tar.gz -C /usr/local/bin mdbook \
+ && chmod 0755 /usr/local/bin/mdbook
+
+FROM alpine:3.21
+
+COPY --from=fetch /usr/local/bin/mdbook /usr/local/bin/mdbook
+
+# 🛑 bash, for SPEC 8.4.10's `set -euo pipefail`.
+#
+# Alpine's /bin/sh is busybox ash, whose `pipefail` support is a build-time
+# option rather than a guarantee, and `pipefail` is the flag that catches the
+# failures this requirement is about: `sphinx-build … | tee log` exits 0 on a
+# shell without it however badly sphinx failed. A deliberate incompatibility
+# with Read the Docs is only worth having if it is reliably in force, so the
+# interpreter is installed rather than assumed.
+RUN apk add --no-cache bash \
+ && bash -c 'set -euo pipefail'
+
+# 🛑 Never root, and never writable (SPEC 8.5.8).
+RUN addgroup -g 10001 docup && adduser -D -u 10001 -G docup docup
+USER 10001:10001
+
+ENV HOME=/tmp
+
+# No ENTRYPOINT: see Dockerfile.sphinx.

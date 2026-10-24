@@ -491,7 +491,11 @@ jobs:
   sandbox:
     name: build sandbox and its exit criteria
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 🛑 Raised from 30 in Phase 09. Four of the seven toolchain presets
+    # install their dependencies from the §8.5.9 allowlist while the build
+    # runs — that is what the npm entry on the allowlist is for — and an
+    # `npm install` of a real Docusaurus tree is a minute on its own.
+    timeout-minutes: 45
 
     services:
       mysql:
@@ -555,6 +559,16 @@ jobs:
           docker build -q -t docup/build-mkdocs:1 -f deploy/Dockerfile.mkdocs .
           docker build -q -t docup/warden:1       -f deploy/Dockerfile.warden .
           docker build -q -t docup/egress-proxy:1 -f deploy/Dockerfile.proxy  .
+
+          # Phase 09's three toolchain images. 🛑 Four images for seven
+          # presets: the division that matters is the language runtime, not
+          # the generator (see config/builds.php). Together they are what
+          # makes §17's "each of six generators builds from ≤12 lines of
+          # configuration" a thing this job demonstrates rather than claims.
+          docker build -q -t docup/build-sphinx:1 -f deploy/Dockerfile.sphinx .
+          docker build -q -t docup/build-node:1   -f deploy/Dockerfile.node   .
+          docker build -q -t docup/build-mdbook:1 -f deploy/Dockerfile.mdbook .
+
           docker pull -q busybox:stable
 
       # 🛑 The §11.2 topology, by hand rather than by compose: this job runs
@@ -625,7 +639,7 @@ jobs:
       # 🛑 DOCUP_E2E=1 turns a skip into a failure. Without it this job
       # could report green having exercised nothing at all, which is the
       # exact state Phase 06 shipped in and recorded as owed.
-      - name: Phase 07 exit criteria and the end-to-end build
+      - name: Phase 07 and Phase 09 exit criteria, and the end-to-end build
         env:
           DOCUP_E2E: '1'
           NO_COLOR: '1'

@@ -1,0 +1,88 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+
+key: antora
+name: Antora
+image: node
+
+detect:
+  - antora-playbook.yml
+  - antora-playbook.yaml
+  - site.yml
+
+configuration:
+  key: antora
+  required: true
+  candidates:
+    - antora-playbook.yml
+    - antora-playbook.yaml
+    - site.yml
+
+environment:
+  NPM_CONFIG_FUND: "false"
+  NPM_CONFIG_AUDIT: "false"
+  NPM_CONFIG_UPDATE_NOTIFIER: "false"
+  CI: "true"
+
+  # Used by the throwaway repository below. 1980-01-01, the same fixed epoch
+  # the Sphinx and mdBook presets use.
+  SOURCE_DATE_EPOCH: "315532800"
+
+  # 🛑 No global or system git configuration, for the reason
+  # `App\Source\GitSafety` states: a `url.<base>.insteadOf` rule rewrites a
+  # remote after it has been validated. This repository has no remote at all,
+  # and this is what keeps it that way.
+  GIT_CONFIG_GLOBAL: /dev/null
+  GIT_CONFIG_SYSTEM: /dev/null
+  GIT_TERMINAL_PROMPT: "0"
+
+steps:
+  # 🛑 Antora reads content from a GIT REPOSITORY, not from a directory, and
+  # SPEC 8.5.7 removes `.git` before the build stage ever mounts the
+  # workspace - "a credential cache waiting to be written to, a remote URL to
+  # exfiltrate to". Measured in Phase 09: without this step Antora fails with
+  # "Local content source must be a git repository".
+  #
+  # So the preset makes one. It is a FRESH repository with no remote, no
+  # credential helper and one commit, created inside the sandbox from the
+  # worktree that is already there - which gives Antora what it needs and
+  # gives the build nothing it did not already have. SPEC 18.12's consequence
+  # column asks for exactly this shape: "ship those as documented
+  # preset-specific defaults rather than loosening the global policy".
+  #
+  # The dates come from SOURCE_DATE_EPOCH so the commit - and therefore
+  # Antora's output - is the same on every build of the same source
+  # (SPEC 18.13).
+  create_environment:
+    - |
+      if [ ! -d .git ]; then
+        export GIT_AUTHOR_DATE="@${SOURCE_DATE_EPOCH} +0000"
+        export GIT_COMMITTER_DATE="@${SOURCE_DATE_EPOCH} +0000"
+        git init --quiet --initial-branch=main .
+        git -c user.email=build@docup.invalid -c user.name=DocUp add --all
+        git -c user.email=build@docup.invalid -c user.name=DocUp \
+            commit --quiet --no-gpg-sign -m "DocUp build snapshot"
+      fi
+
+  # Antora's CLI is pre-baked globally in the node image, because unlike the
+  # ESM toolchains it is a CommonJS program invoked as a binary and does not
+  # need to resolve anything out of the repository's own node_modules. A
+  # repository that ships its own Antora still wins: `npx --no-install` below
+  # prefers node_modules/.bin when it exists.
+  install: []
+
+formats:
+  # 🛑 `--fetch` is NOT passed. An Antora playbook names content repositories
+  # by URL, and fetching them would turn a build into an unaudited fan-out to
+  # whatever hosts a playbook lists - SPEC 8.5.1 requires every contributing
+  # ref to be pinned "before any repository code executes", which a playbook
+  # fetch bypasses entirely. Multi-source assembly is SPEC 8.7's, with its own
+  # resolved plan; a playbook here must point at the local worktree.
+  html:
+    - antora --to-dir "$DOCUP_OUTPUT/html" --stacktrace "$DOCUP_CONFIGURATION"
+
+determinism: >-
+  Deterministic for a playbook whose content sources are local. Antora writes
+  no timestamp into its default UI bundle. A playbook with remote `url:`
+  entries is non-deterministic by construction and is refused a fetch here
+  anyway, so it fails rather than varying.

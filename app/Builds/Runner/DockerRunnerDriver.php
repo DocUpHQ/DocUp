@@ -120,6 +120,45 @@ final class DockerRunnerDriver implements RunnerDriver
         return $volume;
     }
 
+    /**
+     * §8.4.10's script, into the workspace the container already mounts.
+     *
+     * 🛑 **Written here rather than passed as an argument**, which is the
+     * whole reason {@see RunSpecification::$script} is a field of its own:
+     * the container's argv becomes the completely fixed `[shell, path]` with
+     * no repository-supplied string in it, which is as close as §8.5.13's
+     * "fixed argv template" can be taken.
+     *
+     * 🛑 **Mode 0400, owned by the build's user.** Read-only to the thing
+     * that runs it, so a first command that rewrote the script under itself
+     * would fail rather than change what the rest of the build does — the
+     * log would then describe a script nobody ran. Not executable, because
+     * it is handed to an interpreter by path and `/workspace` is not
+     * guaranteed to be mounted `exec`.
+     */
+    private function writeScript(RunSpecification $spec): bool
+    {
+        $directory = Workspace::pathFor($spec->volume).'/.docup';
+
+        if (! is_dir($directory) && ! @mkdir($directory, 0o750, true) && ! is_dir($directory)) {
+            return false;
+        }
+
+        $path = $directory.'/build.sh';
+
+        if (@file_put_contents($path, $spec->script) === false) {
+            return false;
+        }
+
+        @chmod($path, 0o400);
+        @chown($directory, 10001);
+        @chgrp($directory, 10001);
+        @chown($path, 10001);
+        @chgrp($path, 10001);
+
+        return true;
+    }
+
     public function destroyWorkspace(string $volume): void
     {
         Workspace::remove(Workspace::pathFor($volume));
@@ -184,6 +223,10 @@ final class DockerRunnerDriver implements RunnerDriver
             }
         } catch (\RuntimeException $refused) {
             return RunOutcome::rejected('the build sandbox could not be prepared: '.$refused->getMessage());
+        }
+
+        if ($spec->script !== null && ! $this->writeScript($spec)) {
+            return RunOutcome::rejected('the build script could not be written into the workspace');
         }
 
         $envFile = $this->writeEnvFile($spec, $this->proxyEnvironment($spec, $proxyAddress));

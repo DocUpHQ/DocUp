@@ -250,9 +250,19 @@ final class EndToEndBuildTest extends TestCase
             $this->assertSame('succeeded', $steps[$stage->value] ?? null, $stage->value.' did not succeed');
         }
 
-        // The three Phase 06 skips, each with a reason rather than a silent pass.
+        // The three skips, each with a reason rather than a silent pass.
+        //
+        // 🛑 `nothing_to_install` replaced Phase 06's `toolchain_prebaked`
+        // in Phase 09, and the change of wording is a change of claim. The
+        // old reason said "images are pre-baked, so there is never anything
+        // to do"; the new one says "this configuration asked for nothing",
+        // which is a fact about this build. §8.4.2's `python.install` and
+        // the four Node presets give the stage real work whenever a
+        // repository declares any, and a reason that still said
+        // `toolchain_prebaked` would be describing a pipeline that no
+        // longer exists.
         $this->assertSame('skipped', $steps[Stage::Environment->value] ?? null);
-        $this->assertSame('skipped.toolchain_prebaked', $reasons[Stage::Environment->value] ?? null);
+        $this->assertSame('skipped.nothing_to_install', $reasons[Stage::Environment->value] ?? null);
         $this->assertSame('skipped', $steps[Stage::Compose->value] ?? null);
         $this->assertSame('skipped', $steps[Stage::Index->value] ?? null);
 

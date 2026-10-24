@@ -47,8 +47,32 @@ final class FailureCatalogue
         'rejected.no_repository_attached' => 'No repository is attached to this project, so there is nothing to fetch. Connect one first.',
         'rejected.version_missing' => 'The version this build was triggered for no longer exists.',
 
+        // ------------------------------------------------- §8.4 the config file
+        //
+        // 🛑 Every one of these names the key, not the value. The message is
+        // written into the build log, and §8.5.21's redaction has not seen
+        // this file yet — echoing a line back would be the one way to put an
+        // un-redactable secret into a log. `ConfigRefused::userMessage()`
+        // appends the offending key to these sentences.
+        'config.too_large' => 'The configuration file is larger than 256 KiB and was not read (§8.4.9). A `.docup.yaml` describes how to build documentation; nothing legitimate reaches that size, so this is almost always a file that was generated or concatenated by mistake.',
+        'config.aliases_forbidden' => 'The configuration file uses a YAML anchor or alias (`&name` or `*name`), which DocUp does not accept (§8.4.9). Aliases let a small file expand into an enormous one while it is being parsed, so the document is refused rather than expanded. Write the repeated section out in full.',
+        'config.too_deep' => 'The configuration file nests more than 32 levels deep (§8.4.9). Nothing in the schema is more than four levels deep, so this is either a generated file or a mistake in the indentation.',
+        'config.multiple_documents' => 'The configuration file contains more than one YAML document (§8.4.9). A `---` separator after the first document starts a second one; DocUp reads a single document, so remove the separator or split the file.',
+        'config.unparseable' => 'The configuration file is not valid YAML, or is not a mapping of keys to values. The line number is in the detail; an unclosed quote or a tab used for indentation are the two usual causes — YAML forbids tabs.',
+        'config.unknown_key' => 'The configuration file contains a key the schema does not define (§8.4.8). The schema is published and complete: every accepted key is in it, and anything else is refused rather than ignored, so that a typo is an error instead of a setting that silently did nothing.',
+        'config.project_scoped_key' => '🛑 The configuration file names something a repository does not get to decide (§8.4.8). A project, a mount path, a domain, a visibility level, a version channel and a retention policy are all properties of the *project that mounts this component*, not of the repository — the same repository is mounted by different projects at different paths with different audiences, which is the whole reason components exist. Configure these in the dashboard. The one advisory exception is `suggested_mount_path`, which is read once when the component is attached and never again.',
+        'config.missing_key' => 'A section of the configuration file is missing a key it cannot work without. The detail names it. A misspelling is the usual cause — the schema rejects the misspelled key and reports the correct one as absent, which are two views of the same mistake.',
+        'config.invalid_value' => 'A value in the configuration file is not one the schema allows. The path to it is in the detail; the published schema lists the accepted values for every key, and an editor pointed at it will complete them for you.',
+        'config.commands_with_apt_packages' => '`build.commands` cannot be combined with `build.apt_packages` (§8.4.4). `build.commands` discards the predefined pipeline entirely, and installing system packages is part of that pipeline — so the two together describe a build that does and does not have a predefined pipeline. Remove one.',
+        'config.conda_unsupported' => '`conda.environment` is accepted by the schema and is not runnable in this version (§8.4.14). The egress allowlist carries no conda channel and the pre-baked build images carry no conda distribution, so a conda build would fail at dependency-install time with something far less clear than this. Use `python.install` with a requirements file, or `build.commands` to drive your own tooling.',
+        'config.no_toolchain' => 'The configuration file does not say which documentation generator to use. Add a `toolchain:` key naming one — the detail says which generators the checkout looks like — or a `sphinx:` or `mkdocs:` section, or `build.commands` to run the build yourself.',
+        'config.unknown_toolchain' => 'The `toolchain:` key names a generator this installation does not ship. The detail lists the ones it does; a generator is a data file rather than code, so adding one is a change an operator can make.',
+        'config.missing_generator_configuration' => 'The generator needs its own configuration file and none was found. The detail lists the names that were looked for, relative to this component\'s source path; name the file explicitly if it is somewhere else.',
+        'config.sparse_checkout_failed' => '🛑 A `sparse` checkout was requested and narrowed nothing (§8.4.11). The build is stopped rather than continued with a full checkout, because a sparse checkout that silently did not apply is a build that reads files it was told to exclude. Check that the paths exist at this commit and are directories.',
+
         // ------------------------------------------------- the author's code
         'user.build_command_failed' => 'The documentation generator exited with an error. The build log holds its output; the last few lines are usually the cause.',
+        'user.dependency_install_failed' => 'Installing the build\'s dependencies failed (§8.4.2). The build log holds the package manager\'s output. A host that is not on this installation\'s egress allowlist and a lockfile that disagrees with `package.json` are the two usual causes.',
 
         // ------------------------------------------------- §8.5.9 egress
         'user.egress_host_not_allowlisted' => 'The build tried to reach a host that is not on this installation\'s egress allowlist, and the proxy refused it (§8.5.9). Builds may reach the package indexes and git hosts your administrator has listed, and nothing else. Vendor the dependency, or ask for the host to be added.',

@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# SPEC 11.4's DocToolAdapter, as data. See app/Builds/Toolchain/ToolchainPreset.php
+# for the contract; the variables below are exported by the pipeline and are
+# the ONLY way a repository-supplied value reaches a command.
+
+key: sphinx
+name: Sphinx
+image: sphinx
+
+detect:
+  - conf.py
+  - docs/conf.py
+  - source/conf.py
+
+configuration:
+  key: sphinx
+  required: true
+  candidates:
+    - conf.py
+    - docs/conf.py
+    - source/conf.py
+
+# SPEC 8.4.2's `sphinx.fail_on_warning`. `--keep-going` is paired with it
+# deliberately: without it Sphinx stops at the first warning, so an author
+# fixing a hundred of them fixes them one build at a time.
+strict_flag: "-W --keep-going"
+
+environment:
+  LANG: C.UTF-8
+  PYTHONDONTWRITEBYTECODE: "1"
+
+  # SPEC 18.13: the fragment cache only pays if two identical builds produce
+  # identical output. Sphinx stamps `html_last_updated_fmt` into every page
+  # footer from the file mtime unless this is set, and a shallow clone gives
+  # every file the clone's own timestamp - so without this, two builds of the
+  # same commit minutes apart differ on every page.
+  SOURCE_DATE_EPOCH: "315532800"
+
+steps:
+  create_environment: []
+  install: []
+
+formats:
+  html:
+    - >-
+      sphinx-build -b "$DOCUP_BUILDER" $DOCUP_STRICT
+      -d "$DOCUP_WORK_DIR/doctrees"
+      "$DOCUP_CONFIGURATION_DIR" "$DOCUP_OUTPUT/html"
+
+determinism: >-
+  Deterministic with SOURCE_DATE_EPOCH set, which this preset sets. Without it
+  Sphinx writes a per-file "last updated" stamp taken from the working tree's
+  mtimes, which a fresh clone regenerates on every build. `searchindex.js` is
+  stable for a stable input set. Extensions that read the clock or the
+  environment (sphinxcontrib-versioning, some changelog plugins) defeat the
+  cache and must be listed per repository rather than worked around here.
