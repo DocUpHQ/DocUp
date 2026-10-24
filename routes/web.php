@@ -6,6 +6,7 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\Api\ProjectController as ApiProjectController;
+use App\Http\Controllers\Api\ProjectVersionController as ApiProjectVersionController;
 use App\Http\Controllers\Health\LiveController;
 use App\Http\Controllers\Health\ReadyController;
 use App\Http\Controllers\Health\SelfTestController;
@@ -102,4 +103,13 @@ Route::middleware(['auth', 'tenant'])
     ->group(function (): void {
         Route::get('projects', [ApiProjectController::class, 'index'])->name('projects.index');
         Route::get('projects/{project}', [ApiProjectController::class, 'show'])->name('projects.show');
+
+        /*
+         * §8.6's version list. 🛑 `listed` is what decides membership —
+         * §8.6.2's "a hidden version serves by direct URL but is absent
+         * from the flyout, sitemap, `llms.txt` and search", of which this
+         * is the first surface to exist.
+         */
+        Route::get('projects/{project}/versions', [ApiProjectVersionController::class, 'index'])
+            ->name('projects.versions.index');
     });

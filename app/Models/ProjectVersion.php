@@ -55,6 +55,12 @@ use Illuminate\Support\Str;
  * @property string|null $pinned_reason
  * @property Carbon|null $pinned_at
  * @property string|null $pinned_by
+ * @property string|null $ref_name
+ * @property string|null $ref_kind
+ * @property string|null $ref_commit_sha
+ * @property Carbon|null $ref_seen_at
+ * @property Carbon|null $ref_disappeared_at
+ * @property Carbon|null $wiped_at
  */
 #[Tenancy(TenancyPosture::OrganisationScoped)]
 #[Fillable(['slug', 'kind', 'language', 'active', 'listed', 'visibility', 'publish_mode'])]
@@ -101,6 +107,9 @@ final class ProjectVersion extends Model
             'pinned' => 'boolean',
             'visibility' => AccessLevel::class,
             'soft_landing_until' => 'datetime:Y-m-d H:i:s.v',
+            'ref_seen_at' => 'datetime:Y-m-d H:i:s.v',
+            'ref_disappeared_at' => 'datetime:Y-m-d H:i:s.v',
+            'wiped_at' => 'datetime:Y-m-d H:i:s.v',
             'pinned_at' => 'datetime:Y-m-d H:i:s.v',
             'created_at' => 'datetime:Y-m-d H:i:s.v',
             'updated_at' => 'datetime:Y-m-d H:i:s.v',

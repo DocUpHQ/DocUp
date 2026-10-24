@@ -258,6 +258,28 @@ final class RoutingSnapshotLoader
             ->get()
             ->all();
 
+        /*
+         * §8.6.6's 301 table, loaded with the versions rather than looked
+         * up on a miss. §8.9.1 requires resolution with no queries, and a
+         * history lookup only on a 404 would put a query behind every probe
+         * for a path that does not exist — which §8.11.8 says attackers send
+         * in volume.
+         *
+         * @var array<string, array<string, string>> $formerSlugs
+         */
+        $formerSlugs = [];
+
+        foreach (
+            DB::table('project_version_slug_history')
+                ->select(['project_id', 'language', 'slug', 'project_version_id'])
+                ->whereIn('project_id', $projectIds)
+                ->get() as $historyRow
+        ) {
+            $formerSlugs[(string) $historyRow->project_id][
+                (string) $historyRow->language.':'.(string) $historyRow->slug
+            ] = (string) $historyRow->project_version_id;
+        }
+
         foreach ($versionRows as $row) {
             $versions[(string) $row->project_id][] = new SnapshotVersion(
                 id: (string) $row->id,
@@ -310,6 +332,7 @@ final class RoutingSnapshotLoader
                         ? null
                         : (string) $project->default_version_id,
                     versions: $versions[$projectId] ?? [],
+                    formerSlugs: $formerSlugs[$projectId] ?? [],
                 ),
                 versioningSchemeOverride: $row->versioning_scheme_override === null
                     ? null

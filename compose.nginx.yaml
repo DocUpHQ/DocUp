@@ -87,6 +87,15 @@ services:
       timeout: 5s
       retries: 20
 
+      # 🛑 The same start period `compose.yaml` carries, and for the same
+      # reason — see the long note there. This leg mounts no init scripts so
+      # its first run is shorter, but the temporary-server-then-restart
+      # sequence is the MySQL image's own and happens either way. Keeping the
+      # two files in step matters more than the few seconds: an edge-driver
+      # matrix whose legs have different startup tolerances fails on
+      # whichever one the runner was slower for.
+      start_period: 30s
+
   cache:
     image: valkey/valkey:8-alpine
 

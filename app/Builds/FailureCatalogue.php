@@ -70,6 +70,16 @@ final class FailureCatalogue
         'config.missing_generator_configuration' => 'The generator needs its own configuration file and none was found. The detail lists the names that were looked for, relative to this component\'s source path; name the file explicitly if it is somewhere else.',
         'config.sparse_checkout_failed' => '🛑 A `sparse` checkout was requested and narrowed nothing (§8.4.11). The build is stopped rather than continued with a full checkout, because a sparse checkout that silently did not apply is a build that reads files it was told to exclude. Check that the paths exist at this commit and are directories.',
 
+        // ------------------------------------------------- §8.6 versions
+        //
+        // Operator-facing rather than author-facing: these are refusals of
+        // something somebody typed into the dashboard, so each names the
+        // input and what to do about it.
+        'version.slug_not_normalised' => 'That version slug is not in the permitted form (§8.6.6). A slug is lowercase, and anything outside letters, digits, `.`, `_` and `-` becomes a hyphen — it is a URL segment, so the restriction is the URL\'s rather than ours. The suggested spelling is in the detail.',
+        'version.slug_reserved' => 'That version slug is reserved (§8.6.6). `_` is where this installation\'s own endpoints live, and anything shaped like a language code (`en`, `fr`, `pt-br`) is refused because a project using the language-and-version URL scheme puts a language in the same position — a version slugged `fr` becomes unreachable the day somebody adds a French translation.',
+        'version.duplicate_language_in_group' => 'Two of those versions are in the same language, so they cannot be translations of each other (§8.6.12). A translation group holds one version per language — that is what makes a language switcher unambiguous.',
+        'version.slug_taken' => 'Another version of this project already uses that slug in this language. Slugs are unique per project and language, which is what makes `/en/v2/` and `/ja/v2/` two different pages rather than a collision.',
+
         // ------------------------------------------------- the author's code
         'user.build_command_failed' => 'The documentation generator exited with an error. The build log holds its output; the last few lines are usually the cause.',
         'user.dependency_install_failed' => 'Installing the build\'s dependencies failed (§8.4.2). The build log holds the package manager\'s output. A host that is not on this installation\'s egress allowlist and a lockfile that disagrees with `package.json` are the two usual causes.',

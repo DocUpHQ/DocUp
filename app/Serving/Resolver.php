@@ -54,6 +54,16 @@ final class Resolver
     private const RESERVED_SEGMENTS = ['_', '.well-known'];
 
     /**
+     * §8.6.10's version-agnostic prefix.
+     *
+     * 🛑 The same literal `App\Versions\VersionSlug::RESERVED` refuses as a
+     * version slug, and `VersionSlugTest` asserts the two agree — a version
+     * slugged `page` would otherwise shadow this, or be shadowed by it,
+     * depending on the order of two lines in `resolveVersion()`.
+     */
+    public const PAGE_SEGMENT = 'page';
+
+    /**
      * Walk the grammar from the host down to the version.
      *
      * The path must already have passed {@see CanonicalPath::reject()}. That
@@ -322,6 +332,45 @@ final class Resolver
 
         $segments = explode('/', $remainder);
 
+        /*
+         * 🛑 §8.6.10's version-agnostic deep link: "`/page/<filename>`,
+         * resolving to the same page in the default version. External links
+         * and search engines depend on them."
+         *
+         * Checked BEFORE the version segment is read, because `page` sits
+         * where a version slug would — which is also why
+         * `VersionSlug::RESERVED` refuses it as a slug. A project with a
+         * version called `page` would otherwise make one of the two
+         * unreachable, and which one would depend on the order of these
+         * lines.
+         *
+         * A redirect rather than a direct serve, and that is the point of
+         * the feature: the reader ends up on the canonical URL of the page
+         * in the default version, so what they bookmark and what they share
+         * is a real address rather than an alias that moves under them.
+         */
+        if ($segments[0] === self::PAGE_SEGMENT) {
+            $version = $project->defaultVersion();
+
+            if ($version === null) {
+                return RouteOutcome::rejected('page.no_default', RejectionReason::VersionNotFound);
+            }
+
+            $file = implode('/', array_slice($segments, 1));
+
+            if ($file === '') {
+                // `/page/` alone names no page. A redirect to the version
+                // root would be a guess, and §8.9.6's whole argument is that
+                // one document has one URL.
+                return RouteOutcome::rejected('page.no_filename', RejectionReason::FileNotFound);
+            }
+
+            return RouteOutcome::redirect(
+                'page.version_agnostic',
+                $this->versionPath($mount, $scheme, $version).$file,
+            );
+        }
+
         if ($scheme === 'lang_and_version') {
             if (count($segments) < 2) {
                 /*
@@ -358,6 +407,32 @@ final class Resolver
             : $this->versionBySlug($project, $versionSlug);
 
         if ($version === null) {
+            /*
+             * 🛑 §8.6.6: "a renamed slug MUST leave a working 301 behind
+             * it." Checked HERE — after the slug missed and before the 404 —
+             * because that is the only position where it is both free and
+             * correct: free, because the lookup is a map read on a snapshot
+             * already in memory, and correct because a former slug must
+             * never shadow a live one. A version that reclaims a slug it
+             * once had is reached directly, not through its own redirect.
+             */
+            $renamed = $scheme === 'lang_and_version'
+                ? $project->versionByFormerSlug($language, $versionSlug)
+                : $this->versionByFormerSlugAnyLanguage($project, $versionSlug);
+
+            if ($renamed !== null) {
+                $target = $this->versionPath($mount, $scheme, $renamed);
+
+                // The rest of the path rides along, so a deep link to a
+                // renamed version lands on the same page rather than on the
+                // version root. That is the difference between a redirect
+                // that preserves a bookmark and one that merely avoids a 404.
+                return RouteOutcome::redirect(
+                    'version.renamed_redirect',
+                    $rest === '' ? $target : $target.$rest,
+                );
+            }
+
             return RouteOutcome::rejected('version.no_match', RejectionReason::VersionNotFound);
         }
 
@@ -397,6 +472,47 @@ final class Resolver
         ], static fn (string $part): bool => $part !== '');
 
         return '/'.($parts === [] ? '' : implode('/', $parts).'/');
+    }
+
+    /**
+     * A former slug under `multi_version`, where the path carries no
+     * language.
+     *
+     * Mirrors {@see versionBySlug()}'s ambiguity and resolves it the same
+     * way: the default version's language first, then the lowest code, so
+     * the answer is deterministic rather than whichever row was loaded
+     * first.
+     */
+    private function versionByFormerSlugAnyLanguage(SnapshotProject $project, string $slug): ?SnapshotVersion
+    {
+        $preferred = $project->defaultVersion()?->language;
+
+        if ($preferred !== null) {
+            $match = $project->versionByFormerSlug($preferred, $slug);
+
+            if ($match !== null) {
+                return $match;
+            }
+        }
+
+        $languages = [];
+
+        foreach ($project->versions as $version) {
+            $languages[$version->language] = true;
+        }
+
+        $codes = array_keys($languages);
+        sort($codes, SORT_STRING);
+
+        foreach ($codes as $language) {
+            $match = $project->versionByFormerSlug($language, $slug);
+
+            if ($match !== null) {
+                return $match;
+            }
+        }
+
+        return null;
     }
 
     /**
