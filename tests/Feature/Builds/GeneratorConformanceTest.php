@@ -144,38 +144,55 @@ final class GeneratorConformanceTest extends TestCase
         $volume = $driver->createWorkspace($buildId);
 
         try {
-            $spec = fn (string $mode, array $sparse): RunSpecification => new RunSpecification(
-                buildId: $buildId,
-                stage: Stage::Fetch,
-                imageKey: 'fetch',
-                command: [
-                    'https://github.com/mkdocs/mkdocs',
-                    'master',
-                    '/workspace/source',
-                    '.',
-                    $mode,
-                    ...$sparse,
-                ],
-                environment: [],
-                volume: $volume,
-                workdir: '/workspace',
-                timeoutSeconds: Stage::Fetch->timeoutSeconds(),
-                egress: SandboxPolicy::fromConfig()->egressFor(Stage::Fetch),
-                acceptsStdin: true,
-                pass: $mode,
-            );
-
-            $probe = $driver->run($spec('probe', []), credential: '');
+            $probe = $driver->run($this->fetchSpec($buildId, $volume, 'probe', []), credential: '');
 
             $this->assertTrue($probe->succeeded(), 'the probe pass failed: '.$this->tail($probe->log));
 
-            $refused = $driver->run($spec('checkout', ['no-such-directory-in-this-repository']), credential: '');
+            $refused = $driver->run(
+                $this->fetchSpec($buildId, $volume, 'checkout', ['no-such-directory-in-this-repository']),
+                credential: '',
+            );
 
             $this->assertFalse($refused->succeeded(), '🛑 §8.4.11: a sparse checkout that narrowed nothing must fail: '.$this->tail($refused->log));
             $this->assertSame(64, $refused->exitCode, 'the fetcher must say WHY, with its own exit code');
         } finally {
             $driver->destroyWorkspace($volume);
         }
+    }
+
+    /**
+     * One pass of the fetcher, built the way the pipeline builds it.
+     *
+     * A method rather than the closure this was: `[...$sparse]` inside an
+     * array literal is a `non-empty-array` to PHPStan and
+     * `RunSpecification` takes a `list<string>`, and a closure parameter
+     * cannot carry the `@param` that would say so. The pipeline's own call
+     * site spreads and passes for exactly that reason.
+     *
+     * @param  list<string>  $sparse
+     */
+    private function fetchSpec(string $buildId, string $volume, string $mode, array $sparse): RunSpecification
+    {
+        return new RunSpecification(
+            buildId: $buildId,
+            stage: Stage::Fetch,
+            imageKey: 'fetch',
+            command: [
+                'https://github.com/mkdocs/mkdocs',
+                'master',
+                '/workspace/source',
+                '.',
+                $mode,
+                ...$sparse,
+            ],
+            environment: [],
+            volume: $volume,
+            workdir: '/workspace',
+            timeoutSeconds: Stage::Fetch->timeoutSeconds(),
+            egress: SandboxPolicy::fromConfig()->egressFor(Stage::Fetch),
+            acceptsStdin: true,
+            pass: $mode,
+        );
     }
 
     private function assertGeneratorBuilds(string $toolchain): void
