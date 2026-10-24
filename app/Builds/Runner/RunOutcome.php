@@ -50,14 +50,22 @@ final readonly class RunOutcome
     }
 
     /** A spec the runner refused to run at all — it never reached a container. */
-    public static function rejected(string $reason): self
+    /**
+     * @param  string  $code  the second half of the §8.5.15 identifier. It
+     *                        defaults to the generic refusal, and a caller
+     *                        supplies a narrower one when it knows WHY —
+     *                        `runtime_socket_requested` reads very
+     *                        differently from `run_specification_refused`
+     *                        in an operator's alert.
+     */
+    public static function rejected(string $reason, string $code = 'run_specification_refused'): self
     {
         return new self(
             exitCode: -1,
             log: [],
             failureClass: FailureClass::Rejected->value,
             // Shape-checked by `BuildFailure`, so it is lower_snake here too.
-            failureReason: 'run_specification_refused',
+            failureReason: $code,
             facts: ['detail' => $reason],
         );
     }

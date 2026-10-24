@@ -123,6 +123,19 @@ arch()->preset()->strict()
          */
         'App\Builds\BuildPipeline',
         'App\Console\Commands\RunnerCommand',
+        /*
+         * 🛑 Phase 07, same rule and a different wait: the warden has to be
+         * observed to have installed its nftables ruleset before a build
+         * container joins its namespace (ADR 0011 records why assuming it
+         * is not good enough — the first warden enforced nothing and looked
+         * healthy). A container's start-up has no readiness signal either,
+         * so the observation is a poll with a deadline.
+         *
+         * Note the direction: this sleep exists so that a security control
+         * is verified rather than assumed. Removing it would mean trusting
+         * the control, which is the thing the phase found wrong.
+         */
+        'App\Builds\Runner\Warden',
         // The framework base controller is abstract and exists to be extended,
         // so the preset's final-class rule cannot apply to it.
         'App\Http\Controllers\Controller',

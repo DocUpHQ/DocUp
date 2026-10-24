@@ -110,6 +110,20 @@ final class Build extends Model
         return $this->belongsTo(Component::class);
     }
 
+    /**
+     * The trigger that produced this build (§8.5.3).
+     *
+     * Needed by §8.5.10: whether a build came from a fork is a property of
+     * the request, and the pipeline has to ask before it decides whether
+     * this build may be handed a credential.
+     *
+     * @return BelongsTo<BuildRequest, $this>
+     */
+    public function buildRequest(): BelongsTo
+    {
+        return $this->belongsTo(BuildRequest::class);
+    }
+
     /** @return HasMany<BuildOutput, $this> */
     public function outputs(): HasMany
     {

@@ -58,10 +58,16 @@ final readonly class ArgvTemplate
      * @param  string  $imageReference  resolved from the allowlist by the caller,
      *                                  never taken from the specification
      * @param  string  $envFilePath  a file the runner wrote, mode 0600
+     * @param  SandboxPlacement  $placement  the network namespace and runtime the
+     *                                       runner resolved; never repository input
      * @return list<string>
      */
-    public function render(RunSpecification $spec, string $imageReference, string $envFilePath): array
-    {
+    public function render(
+        RunSpecification $spec,
+        string $imageReference,
+        string $envFilePath,
+        SandboxPlacement $placement,
+    ): array {
 
         $argv = [
             'docker', 'run',
@@ -163,19 +169,46 @@ final readonly class ArgvTemplate
         }
 
         /*
-         * 🛑 Phase 06 gives the build stage no network at all, which is
-         * stricter than §8.5.9's allowlisted proxy and is the honest position
-         * until Phase 07 builds the proxy: an allowlist that does not exist
-         * yet must not be approximated by leaving the network open. `fetch`
-         * needs the network to reach the provider.
+         * §8.5.9, as one flag. Phase 06 could only choose between `none` and
+         * `bridge` because there was no proxy to point at; Phase 07's three
+         * modes are rendered by {@see SandboxPlacement}, and the one that
+         * matters - `container:<warden>` - puts this container inside a
+         * network namespace whose nftables ruleset was installed before it
+         * started and which it has no capability to change (ADR 0011).
          */
         $argv[] = '--network';
-        $argv[] = $spec->networkEnabled ? 'bridge' : 'none';
+        $argv[] = $placement->network;
 
-        // One volume per build (§8.5.20's reasoning, applied to working trees
-        // rather than caches): never shared, created and removed by the runner.
+        /*
+         * 🛑 §8.5.11's isolation declaration, reaching the runtime. Absent
+         * when the operator declared nothing, which only production boot
+         * refuses - a development machine with no gVisor installed is a
+         * supported configuration and must not be given a `--runtime` flag
+         * naming a binary that is not there.
+         *
+         * The value is a lookup in the §8.5.11 allowlist, never the
+         * operator's string: `--runtime` names an executable the daemon
+         * runs, and an unvalidated value here would be the one place in the
+         * pipeline where configuration becomes code.
+         */
+        if ($placement->runtime !== null) {
+            $argv[] = '--runtime';
+            $argv[] = $placement->runtime;
+        }
+
+        /*
+         * One workspace per build (§8.5.20's reasoning, applied to working
+         * trees rather than caches): never shared, created and removed by
+         * the runner.
+         *
+         * 🛑 A bind rather than a named volume, since Phase 07. The runner
+         * has to be able to measure this tree while the build runs to
+         * enforce §8.5.18's disk limit, and it can only do that for a path
+         * it can see — see {@see Workspace}, which records the two
+         * kernel-enforced alternatives that were measured and refused.
+         */
         $argv[] = '--mount';
-        $argv[] = 'type=volume,source='.$spec->volume.',target=/workspace';
+        $argv[] = 'type=bind,source='.Workspace::pathFor($spec->volume).',target=/workspace';
 
         $argv[] = '--workdir';
         $argv[] = $spec->workdir;
@@ -220,14 +253,36 @@ final readonly class ArgvTemplate
      * asserts it again rather than trusting a caller to have used the right
      * constructor, because the cost is one comparison and the failure is a
      * variable nobody declared.
+     *
+     * @param  array<string, string>  $extra  the runner's own variables — the
+     *                                        §8.5.9 proxy address and nothing
+     *                                        else today — appended last
      */
-    public function renderEnvFile(RunSpecification $spec): string
+    public function renderEnvFile(RunSpecification $spec, array $extra = []): string
     {
         $lines = [];
 
         foreach ($spec->environment as $name => $value) {
             if (str_contains($value, "\n") || str_contains($value, "\r")) {
                 throw new \InvalidArgumentException("environment value for {$name} spans lines");
+            }
+
+            $lines[] = $name.'='.$value;
+        }
+
+        /*
+         * 🛑 The runner's own variables are appended LAST, and the order is
+         * the control: Docker's env-file parser lets a later line replace an
+         * earlier one, so appending is what stops anything that crossed the
+         * spool from redirecting `https_proxy` at an address of its own
+         * choosing. §8.4.6's three scopes govern what a *build* may be told;
+         * the proxy address is none of them — it is resolved per run by the
+         * process holding the socket, and the specification never knew it.
+         */
+        foreach ($extra as $name => $value) {
+            if (preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $name) !== 1
+                || preg_match('/[\x00\n\r]/', $value) === 1) {
+                throw new \InvalidArgumentException('unusable runner environment variable: '.$name);
             }
 
             $lines[] = $name.'='.$value;

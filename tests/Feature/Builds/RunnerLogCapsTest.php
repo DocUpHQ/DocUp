@@ -10,6 +10,7 @@ namespace Tests\Feature\Builds;
 use App\Builds\Runner\DockerRunnerDriver;
 use App\Builds\Runner\RunOutcome;
 use App\Builds\RunSpecification;
+use App\Builds\Sandbox\EgressMode;
 use App\Builds\Stage;
 use Tests\Support\RequiresBuildImages;
 use Tests\TestCase;
@@ -110,6 +111,35 @@ final class RunnerLogCapsTest extends TestCase
         $this->assertNull($outcome->failureClass);
     }
 
+    /**
+     * 🛑 A container that writes a lot and exits at once keeps all of it.
+     *
+     * The regression this guards was found by the test above and is worth
+     * its own case, because the two fail in different ways. The read loop
+     * used to stop the instant `proc_get_status` reported the process
+     * gone, discarding whatever the kernel still held in the pipes — so a
+     * fast container lost everything after its first chunk. The visible
+     * symptom was §8.5.21's truncation appearing not to work; the actual
+     * fault was output never read.
+     *
+     * "Exits immediately" is the case that matters: a long-running build
+     * gives the loop many passes and hides this completely, which is why
+     * it survived a phase.
+     */
+    public function test_output_from_a_container_that_exits_immediately_is_not_lost(): void
+    {
+        $outcome = $this->runScript(
+            'python3 -c "print(chr(65) * 65536)"; echo FINAL-LINE'
+        );
+
+        $joined = implode('
+', $outcome->log);
+
+        $this->assertStringContainsString('FINAL-LINE', $joined, 'the tail of a fast container was dropped');
+        $this->assertStringContainsString('line truncated at 8 KiB', $joined);
+        $this->assertSame(0, $outcome->exitCode);
+    }
+
     /** Named `runScript` because `run()` is final on PHPUnit's TestCase. */
     private function runScript(string $script): RunOutcome
     {
@@ -133,7 +163,7 @@ final class RunnerLogCapsTest extends TestCase
             volume: (string) $this->volume,
             workdir: '/workspace',
             timeoutSeconds: 300,
-            networkEnabled: false,
+            egress: EgressMode::None,
         ));
     }
 }

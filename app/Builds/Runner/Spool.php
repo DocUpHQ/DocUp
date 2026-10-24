@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace App\Builds\Runner;
 
 use App\Builds\BuildConfig;
+use App\Builds\Exceptions\RunSpecificationRefused;
 use App\Builds\RunSpecification;
 
 /**
@@ -29,36 +30,14 @@ use App\Builds\RunSpecification;
  * which is the heartbeat lease, and the lease belongs on the step row where
  * an operator can see it.
  *
- * 🛑 **The credential channel, and the compromise in it, stated plainly.**
- *
- * §8.5.7 governs how a credential reaches *git*: "only through a git
- * credential helper reading a file descriptor — never argv, never the remote
- * URL, never the environment". That is satisfied in full — the runner pipes
- * the bytes into the fetch container's **stdin**, and the container's
- * entrypoint puts them on a tmpfs the helper reads.
- *
- * What §8.5.7 does not govern is the hop from the worker to the runner, and
- * here the implementation is weaker than it should be: a mode-0600 file in
- * the spool, written just before the job is visible and unlinked by the
- * runner the instant it has been read. §11.2 permits it — the runner zone's
- * declared contents are "runtime socket, **git credentials**" — but it is a
- * secret briefly at rest on a shared volume, which is the thing §9.1.7
- * spends an envelope avoiding everywhere else.
- *
- * A FIFO would carry it in kernel buffers with nothing at rest, and was
- * tried first. It does not work from PHP without a non-blocking `open`:
- * `fopen($fifo, 'w')` blocks until a reader arrives, `fopen($fifo, 'r+')`
- * returns immediately but discards the buffer when the last descriptor
- * closes, and there is no mode that gives both. Either shape deadlocks the
- * worker against a runner that has not claimed the job yet.
- *
- * Recorded as owed rather than papered over: the fix is a non-blocking open
- * through `ext-posix`, or an `SO_PASSCRED` unix socket, and it belongs with
- * Phase 07's trust-zone work where the runner's boundary is being built
- * anyway. The exposure today is bounded by a 0600 mode on a volume only the
- * worker and the runner mount, by a window of milliseconds, and by the fact
- * that a public repository — which is all Phase 06 can reach — sends nothing
- * at all.
+ * 🛑 **The credential never crosses this directory.** Phase 06 passed it as
+ * a mode-0600 file here and recorded the compromise as owed: a secret
+ * briefly at rest on a shared volume, which is what §9.1.7 spends an
+ * envelope avoiding everywhere else. Phase 07 pays it off —
+ * {@see CredentialChannel} is an `AF_UNIX` socket, and the only thing in
+ * this directory is the rendezvous node. §8.5.7's own requirement, that the
+ * credential reach *git* through a file descriptor and never argv, the URL
+ * or the environment, was satisfied from Phase 06 and is unchanged.
  */
 final readonly class Spool
 {
@@ -113,59 +92,79 @@ final readonly class Spool
         return $this->root.'/outbox/'.$jobId.'.tar';
     }
 
+    /** The rendezvous node for {@see CredentialChannel}; never a file of bytes. */
     public function credentialPath(string $jobId): string
     {
-        return $this->root.'/cred/'.$jobId;
+        return $this->root.'/cred/'.$jobId.'.sock';
     }
 
     /**
-     * Leave a credential for the runner.
+     * Open the credential channel for a job.
      *
-     * 🛑 Written to `tmp/` with mode 0600 **before** it is renamed into
-     * `cred/`, so the file is never visible at its final path while it is
-     * still being written and never visible at all with a permissive mode.
-     * `chmod` after `file_put_contents` would leave a window in which the
-     * file exists world-readable.
+     * 🛑 Opened **before** the job is submitted. A runner that claimed the
+     * job first would find no socket and fetch without a credential, which
+     * for a private repository is an authentication failure reported as a
+     * missing ref — the most misleading answer available.
      */
-    public function writeCredential(string $jobId, string $credential): void
+    public function openCredentialChannel(string $jobId, string $credential): CredentialChannel
     {
         $this->ensure();
 
-        $temporary = $this->root.'/tmp/'.$jobId.'.cred';
-
-        $handle = fopen($temporary, 'wb');
-
-        if ($handle === false) {
-            throw new \RuntimeException('could not stage a credential for the runner');
-        }
-
-        @chmod($temporary, 0o600);
-        fwrite($handle, $credential);
-        fclose($handle);
-
-        rename($temporary, $this->credentialPath($jobId));
+        return CredentialChannel::open($this->credentialPath($jobId), $credential);
     }
 
     /**
-     * Take the credential, removing it.
+     * The runner's side: take the credential off the channel.
      *
-     * Read-and-unlink in one call so there is no path on which a caller gets
-     * the bytes and forgets to remove the file. Returns null when there is
-     * none, which is the ordinary case: a public repository needs no
-     * credential and none is written.
+     * Null when there is none, which is the ordinary case — a public
+     * repository needs no credential and the worker opens no channel.
      */
     public function takeCredential(string $jobId): ?string
     {
-        $path = $this->credentialPath($jobId);
+        return CredentialChannel::receive($this->credentialPath($jobId));
+    }
 
-        if (! is_file($path)) {
+    /**
+     * §8.5.12's verdict, for the processes that cannot run it themselves.
+     *
+     * 🛑 The runner holds the socket and no database; the worker and the
+     * dashboard hold the database and no socket. So the self-test's result
+     * crosses the one channel the trust zones share, in the one direction
+     * that leaks nothing: a boolean and a sentence, written by the side
+     * that has no credentials to disclose.
+     */
+    public function writeSelfTest(bool $passed, string $summary): void
+    {
+        $this->ensure();
+
+        $temporary = $this->root.'/tmp/self-test.json';
+        $document = ['passed' => $passed, 'summary' => $summary, 'at' => time()];
+
+        file_put_contents($temporary, json_encode($document, JSON_THROW_ON_ERROR));
+        @rename($temporary, $this->root.'/self-test.json');
+    }
+
+    /** @return array{passed: bool, summary: string, at: int}|null */
+    public function readSelfTest(): ?array
+    {
+        $body = @file_get_contents($this->root.'/self-test.json');
+
+        if ($body === false) {
             return null;
         }
 
-        $credential = file_get_contents($path);
-        @unlink($path);
+        try {
+            /** @var array<string, mixed> $decoded */
+            $decoded = json_decode($body, true, 8, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return null;
+        }
 
-        return $credential === false ? null : $credential;
+        return [
+            'passed' => ($decoded['passed'] ?? false) === true,
+            'summary' => is_string($decoded['summary'] ?? null) ? $decoded['summary'] : '',
+            'at' => is_int($decoded['at'] ?? null) ? $decoded['at'] : 0,
+        ];
     }
 
     /**
@@ -231,7 +230,18 @@ final readonly class Spool
                 // its shape, never for its author.
                 return [$jobId, RunSpecification::fromArray($decoded)];
             } catch (\JsonException|\InvalidArgumentException $refused) {
-                $this->writeResult($jobId, RunOutcome::rejected($refused->getMessage())->toArray());
+                /*
+                 * 🛑 The refusal keeps its own identifier. A spool document
+                 * asking for a mount, a capability or the runtime socket is
+                 * `rejected.runtime_socket_requested`; a malformed one is
+                 * `rejected.run_specification_refused`. They are the same
+                 * code path and very different events.
+                 */
+                $code = $refused instanceof RunSpecificationRefused
+                    ? $refused->reason
+                    : 'run_specification_refused';
+
+                $this->writeResult($jobId, RunOutcome::rejected($refused->getMessage(), $code)->toArray());
 
                 continue;
             }

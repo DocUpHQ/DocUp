@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Builds\Runner\IsolationSelfTest;
 use App\Builds\Runner\RunnerDriver;
 use App\Builds\Runner\RunOutcome;
 use App\Builds\Runner\Spool;
@@ -41,7 +42,7 @@ final class RunnerCommand extends Command
 
     protected $description = 'Run build containers from the spool (SPEC 8.5.13). Holds the runtime socket; holds no credentials.';
 
-    public function handle(RunnerDriver $driver, Spool $spool): int
+    public function handle(RunnerDriver $driver, Spool $spool, IsolationSelfTest $selfTest): int
     {
         $spool->ensure();
 
@@ -51,6 +52,41 @@ final class RunnerCommand extends Command
             $this->warn("removed {$swept} container(s) left by a previous runner");
         }
 
+        /*
+         * 🛑 §8.5.12: "Network isolation MUST be verified at boot by
+         * launching a throwaway container … **Startup MUST fail** if the
+         * self-test fails."
+         *
+         * It runs HERE, in the runner, because the runner is the only
+         * process that holds the container-runtime socket (§8.5.13) and so
+         * the only one that *can* launch the throwaway container. A
+         * non-zero exit is how "startup fails" is expressed to an init
+         * system: compose reports the service as failed rather than
+         * starting a runner that would accept builds into a sandbox nobody
+         * has checked.
+         *
+         * The verdict is also written to the spool, because the worker and
+         * the dashboard need to say "builds are unavailable" and cannot ask
+         * this process anything — it has no database.
+         */
+        $result = $selfTest->run();
+        $spool->writeSelfTest($result->passed, $result->summary);
+
+        if (! $result->passed) {
+            $this->error('§8.5.12 sandbox isolation self-test FAILED — refusing to start.');
+            $this->line($result->summary);
+
+            if (! $result->available) {
+                $this->line('');
+                $this->line('The sandbox is not configured on this host. The runner needs the');
+                $this->line('egress proxy and the sandboxes network from compose.yaml; without');
+                $this->line('them a build would run with an isolation nobody has verified.');
+            }
+
+            return self::FAILURE;
+        }
+
+        $this->info('§8.5.12 sandbox isolation self-test passed — '.$result->summary);
         $this->info('runner ready — spool '.$spool->root());
 
         $interval = max(50, (int) config('builds.poll_interval_ms')) * 1000;

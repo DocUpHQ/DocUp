@@ -9,6 +9,7 @@ namespace Tests\Feature\Builds;
 
 use App\Builds\Runner\DockerRunnerDriver;
 use App\Builds\RunSpecification;
+use App\Builds\Sandbox\EgressMode;
 use App\Builds\Stage;
 use Tests\Support\RequiresBuildImages;
 use Tests\TestCase;
@@ -97,7 +98,7 @@ final class CredentialIsolationTest extends TestCase
                 volume: (string) $this->volume,
                 workdir: '/workspace',
                 timeoutSeconds: 300,
-                networkEnabled: true,
+                egress: EgressMode::Allowlist,
                 acceptsStdin: true,
             ),
             "username=x-access-token\npassword=".self::CREDENTIAL."\n",
@@ -140,7 +141,7 @@ final class CredentialIsolationTest extends TestCase
             volume: (string) $this->volume,
             workdir: '/workspace',
             timeoutSeconds: 120,
-            networkEnabled: false,
+            egress: EgressMode::None,
         ));
 
         $output = implode("\n", $build->log);

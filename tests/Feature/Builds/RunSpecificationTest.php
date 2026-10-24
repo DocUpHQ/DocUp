@@ -8,7 +8,9 @@ declare(strict_types=1);
 namespace Tests\Feature\Builds;
 
 use App\Builds\Runner\ArgvTemplate;
+use App\Builds\Runner\SandboxPlacement;
 use App\Builds\RunSpecification;
+use App\Builds\Sandbox\EgressMode;
 use App\Builds\Stage;
 use Tests\TestCase;
 
@@ -36,7 +38,7 @@ final class RunSpecificationTest extends TestCase
             volume: $overrides['volume'] ?? 'docup-build-test',
             workdir: $overrides['workdir'] ?? '/workspace/source',
             timeoutSeconds: $overrides['timeoutSeconds'] ?? 600,
-            networkEnabled: $overrides['networkEnabled'] ?? false,
+            egress: $overrides['egress'] ?? EgressMode::None,
             readOnlyRoot: $overrides['readOnlyRoot'] ?? true,
             acceptsStdin: $overrides['acceptsStdin'] ?? false,
         );
@@ -83,7 +85,7 @@ final class RunSpecificationTest extends TestCase
     public function test_a_flag_shaped_command_argument_lands_after_the_image(): void
     {
         $spec = $this->spec(['command' => ['--privileged', '-v', '/:/host']]);
-        $argv = (new ArgvTemplate)->render($spec, 'docup/build-mkdocs:1', '/tmp/env');
+        $argv = (new ArgvTemplate)->render($spec, 'docup/build-mkdocs:1', '/tmp/env', SandboxPlacement::isolated());
 
         $imagePosition = array_search('docup/build-mkdocs:1', $argv, true);
         $this->assertIsInt($imagePosition);
@@ -188,7 +190,7 @@ final class RunSpecificationTest extends TestCase
      */
     public function test_the_rendered_argv_carries_the_hardening_flags(): void
     {
-        $argv = (new ArgvTemplate)->render($this->spec(), 'docup/build-mkdocs:1', '/tmp/env');
+        $argv = (new ArgvTemplate)->render($this->spec(), 'docup/build-mkdocs:1', '/tmp/env', SandboxPlacement::isolated());
         $rendered = implode(' ', $argv);
 
         $this->assertStringContainsString('--cap-drop ALL', $rendered);
@@ -204,25 +206,66 @@ final class RunSpecificationTest extends TestCase
     }
 
     /**
-     * 🛑 The build stage gets **no network** in Phase 06.
+     * 🛑 §8.5.9's three placements, each rendering to a different namespace.
      *
-     * Stricter than §8.5.9's allowlisted proxy, and deliberately so: the
-     * proxy arrives in Phase 07, and an allowlist that does not exist must
-     * not be approximated by leaving the network open.
+     * The one that matters is the middle row: `container:<warden>` puts the
+     * build inside a namespace whose nftables ruleset was installed before
+     * it started and which it has no capability to change (ADR 0011).
+     * Phase 06 could only render `none` or `bridge`, because there was no
+     * proxy to point at.
      */
-    public function test_the_build_stage_has_no_network_and_fetch_does(): void
+    public function test_each_placement_renders_its_own_network_namespace(): void
     {
         $template = new ArgvTemplate;
+        $spec = $this->spec(['egress' => EgressMode::None]);
 
-        $build = $template->render($this->spec(['networkEnabled' => false]), 'img', '/tmp/env');
-        $this->assertSame('none', $build[array_search('--network', $build, true) + 1]);
+        $cases = [
+            'none' => SandboxPlacement::isolated(),
+            'container:docup-warden-1-build' => SandboxPlacement::inWarden('docup-warden-1-build'),
+            'bridge' => SandboxPlacement::unrestricted(),
+        ];
 
-        $fetch = $template->render(
-            $this->spec(['stage' => Stage::Fetch, 'imageKey' => 'fetch', 'networkEnabled' => true]),
-            'img',
-            '/tmp/env',
-        );
-        $this->assertSame('bridge', $fetch[array_search('--network', $fetch, true) + 1]);
+        foreach ($cases as $expected => $placement) {
+            $argv = $template->render($spec, 'img', '/tmp/env', $placement);
+
+            $this->assertSame($expected, $argv[array_search('--network', $argv, true) + 1]);
+        }
+    }
+
+    /**
+     * 🛑 §8.5.11's declaration reaches `--runtime`, and only from the
+     * allowlist.
+     *
+     * A placement with no runtime emits no flag at all rather than naming
+     * `runc` explicitly: a development host with no `runsc` registered is a
+     * supported configuration, and a flag naming a runtime that is not
+     * installed is a container that will not start.
+     */
+    public function test_the_runtime_flag_appears_only_when_one_is_declared(): void
+    {
+        $template = new ArgvTemplate;
+        $spec = $this->spec(['egress' => EgressMode::None]);
+
+        $undeclared = $template->render($spec, 'img', '/tmp/env', SandboxPlacement::isolated());
+        $this->assertNotContains('--runtime', $undeclared);
+
+        $declared = $template->render($spec, 'img', '/tmp/env', SandboxPlacement::isolated('runsc'));
+        $this->assertSame('runsc', $declared[array_search('--runtime', $declared, true) + 1]);
+    }
+
+    /**
+     * 🛑 A warden name is validated before it becomes `--network`.
+     *
+     * The name is the runner's own and never repository input, but
+     * `--network container:$x` is a flag value that joins a namespace, and
+     * the day it does come from somewhere else is the day nobody remembers
+     * it was unchecked.
+     */
+    public function test_a_malformed_warden_name_is_refused(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        SandboxPlacement::inWarden('--privileged');
     }
 
     /**
@@ -235,7 +278,7 @@ final class RunSpecificationTest extends TestCase
     public function test_the_environment_never_reaches_argv(): void
     {
         $spec = $this->spec(['environment' => ['DOCUP_OUTPUT' => '/workspace/output', 'DOCUP_COMPONENT' => 'guides']]);
-        $argv = (new ArgvTemplate)->render($spec, 'img', '/run/env');
+        $argv = (new ArgvTemplate)->render($spec, 'img', '/run/env', SandboxPlacement::isolated());
 
         $this->assertNotContains('-e', $argv);
         $this->assertNotContains('--env', $argv);

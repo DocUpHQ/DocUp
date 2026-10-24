@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The §11.2 `egress` zone: the pinned forward proxy.
+#
+#   | **egress** | pinned forward proxy | the allowlist policy | be bypassable
+#   | (nftables L3 backstop) |
+#
+# 🛑 Squid rather than a DocUp-authored proxy, deliberately. A CONNECT proxy
+# that enforces an allowlist is security-critical code on the path of every
+# dependency a build downloads; the version of it we would write would be
+# younger than this repository. What DocUp authors is the *policy* — see
+# `proxy-entrypoint.sh`, where every ACL is written out with its reason —
+# and squid supplies the parser, the tunnel and twenty years of hostile
+# input. The configuration is generated, so the policy is reviewable in one
+# file rather than assembled from an operator's edits.
+#
+# This image is in the egress zone and the sandbox zone, and in no other:
+# it is the only thing a build container may send a packet to (§8.5.9).
+
+FROM alpine:3.21
+
+# `squid` alone: no ssl helpers, no auth helpers, no cachemgr CGI. Each of
+# those is a listener or a credential path this proxy has no use for.
+RUN apk add --no-cache squid \
+    && rm -rf /etc/squid/squid.conf /var/cache/squid/*
+
+COPY deploy/proxy-entrypoint.sh /usr/local/bin/docup-proxy
+COPY deploy/proxy-healthcheck.sh /usr/local/bin/docup-proxy-healthcheck
+COPY deploy/egress-allowlist.conf /etc/docup/egress-allowlist.conf
+
+# The entrypoint renders the configuration at start-up, so the directory it
+# writes into has to belong to the unprivileged user the proxy runs as —
+# otherwise `USER squid` below turns into a start-up failure that reads like
+# a squid bug rather than a permission.
+RUN chmod 0755 /usr/local/bin/docup-proxy /usr/local/bin/docup-proxy-healthcheck \
+    && chown -R squid:squid /etc/squid /var/cache/squid /var/log/squid
+
+# Squid drops to this user itself; declaring it means the process is never
+# root even for the moment before it does.
+USER squid
+
+EXPOSE 3128
+
+ENTRYPOINT ["/usr/local/bin/docup-proxy"]

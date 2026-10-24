@@ -8,6 +8,9 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Audit\Audit;
+use App\Builds\Runner\Spool;
+use App\Builds\Sandbox\EgressAllowlist;
+use App\Builds\Sandbox\SandboxPolicy;
 use App\Support\Origins;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -47,6 +50,7 @@ final class DoctorCommand extends Command
         $this->checkAuditKey();
         $this->checkAuditPartitions();
         $this->checkAuditAppendOnly();
+        $this->checkBuildSandbox();
         $this->notePending();
 
         if ($this->option('json')) {
@@ -454,11 +458,113 @@ final class DoctorCommand extends Command
      * Reported rather than omitted: a doctor command that silently lacks half
      * its checks reads as a clean bill of health.
      */
+    /**
+     * §8.1.9's "an unsandboxed build runtime", plus everything else §8.5.9
+     * and §8.5.12 give an operator to get wrong.
+     *
+     * 🛑 **Four separate findings rather than one "sandbox ok".** Each has
+     * a different fix and a different severity, and collapsing them would
+     * mean an operator with a perfectly good proxy and no isolation
+     * declaration reading one red line that does not say which.
+     */
+    private function checkBuildSandbox(): void
+    {
+        $policy = SandboxPolicy::fromConfig();
+
+        if (! $policy->buildsEnabled) {
+            $this->recordPass(
+                'Build sandbox',
+                'hosting-only mode: no repository code runs on this installation',
+                'SPEC 8.1.7',
+            );
+
+            return;
+        }
+
+        /*
+         * A failure rather than a warning in production, because that is
+         * what §8.5.11 makes it: the application refuses to boot. Reporting
+         * it as a warning here would describe an installation that will not
+         * start as merely imperfect.
+         */
+        if ($policy->isolation === null) {
+            $this->recordFail(
+                'Build isolation declaration',
+                'DOCUP_BUILD_ISOLATION is unset. Production boot is refused without it, because '
+                .'builds execute code from the repositories you connect and the choice of what '
+                .'separates that code from this host is not one DocUp makes for you. Set gvisor '
+                .'(recommended) or runc.',
+                'SPEC 8.5.11',
+            );
+        } elseif ($policy->isolation === 'runc') {
+            $this->recordWarn(
+                'Build isolation declaration',
+                'hardened runc: builds share this host kernel. gVisor (runsc) is the documented '
+                .'production recommendation; runc is supported and is the default for '
+                .'compatibility reasons, not security ones.',
+                'SPEC 8.5.11',
+            );
+        } else {
+            $this->recordPass('Build isolation declaration', $policy->isolation, 'SPEC 8.5.11');
+        }
+
+        if ($policy->egress->isUnrestricted()) {
+            $this->recordWarn(
+                'Build egress',
+                'unrestricted: builds can reach any address this host can. The §8.5.9 allowlist '
+                .'and the nftables backstop are both off.',
+                'SPEC 8.5.9',
+            );
+        } else {
+            $allowlist = EgressAllowlist::load();
+
+            if ($allowlist->isEmpty()) {
+                $this->recordFail(
+                    'Build egress allowlist',
+                    'no hosts could be read from '.$allowlist->path.'. The proxy refuses to start on '
+                    .'an unreadable allowlist, so builds have no network at all - including the '
+                    .'fetcher, which cannot reach a git host.',
+                    'SPEC 8.5.9',
+                );
+            } else {
+                $this->recordPass(
+                    'Build egress allowlist',
+                    count($allowlist->hosts).' hosts',
+                    'SPEC 8.5.9',
+                );
+            }
+        }
+
+        /*
+         * 🛑 Read from the spool, because this process has no runtime
+         * socket and cannot run the self-test itself (§8.5.13). A missing
+         * verdict is reported as missing rather than as unknown: no runner
+         * has started since this spool existed, so nothing has checked.
+         */
+        $verdict = app(Spool::class)->readSelfTest();
+
+        if ($verdict === null) {
+            $this->recordFail(
+                'Build network isolation self-test',
+                'no verdict in the spool. The runner writes one at start-up (§8.5.12); if the '
+                .'runner is running and this is empty, it is not sharing this spool directory.',
+                'SPEC 8.5.12',
+            );
+        } elseif (! $verdict['passed']) {
+            $this->recordFail('Build network isolation self-test', $verdict['summary'], 'SPEC 8.5.12');
+        } else {
+            $this->recordPass(
+                'Build network isolation self-test',
+                'passed '.(int) ((time() - $verdict['at']) / 60).' minutes ago',
+                'SPEC 8.5.12',
+            );
+        }
+    }
+
     private function notePending(): void
     {
         $this->recordPending('DNS wildcard for the docs zone', 'arrives with custom domains', 'Phase 18');
         $this->recordPending('Private-asset containment probe', 'arrives with the authorisation kernel', 'Phase 22');
-        $this->recordPending('Build sandbox isolation', 'arrives with the runner', 'Phase 07');
         $this->recordPending('Search index size threshold', 'arrives with the search index', 'Phase 29');
     }
 

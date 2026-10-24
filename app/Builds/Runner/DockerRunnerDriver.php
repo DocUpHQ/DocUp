@@ -10,6 +10,8 @@ namespace App\Builds\Runner;
 use App\Builds\BuildConfig;
 use App\Builds\FailureClass;
 use App\Builds\RunSpecification;
+use App\Builds\Sandbox\EgressMode;
+use App\Builds\Sandbox\SandboxPolicy;
 
 /**
  * The `runc` case of §11.4's `RunnerDriver`, over the Docker CLI.
@@ -40,54 +42,58 @@ final class DockerRunnerDriver implements RunnerDriver
 
     public function __construct(
         private readonly ArgvTemplate $template = new ArgvTemplate,
-        private readonly string $docker = 'docker',
+        private readonly Docker $cli = new Docker,
+        private readonly Warden $warden = new Warden,
     ) {}
 
     public function createWorkspace(string $buildId): string
     {
         $volume = BuildConfig::string('volume_prefix', 'docup-build-').$buildId;
-
-        $this->capture([$this->docker, 'volume', 'create', $volume]);
-
-        /*
-         * 🛑 A fresh volume is owned by root, and every container in the
-         * pipeline runs as uid 10001 (§8.5.8 — nothing here is root). So one
-         * throwaway container prepares it before anything else mounts it.
-         *
-         * 🛑 **It creates the directories as well as chowning, and that is
-         * not tidiness — it is the fix.** Docker re-initialises an *empty*
-         * named volume's mount point from the image on **every** mount, so a
-         * volume that was chowned but left empty comes back root-owned to
-         * the next container. The symptom was a `Permission denied` from
-         * `mkdir` in a container whose own tooling reported the volume as
-         * 10001-owned a second earlier, which reads like anything but a
-         * mount-point reset. Putting directories in the volume makes it
-         * non-empty, and the ownership then survives.
-         *
-         * The alternative — running the fetch and build containers as root
-         * so they can write — trades one container start for the property
-         * the whole sandbox rests on.
-         */
-        [$status, $output] = $this->capture([
-            $this->docker, 'run', '--rm', '--network', 'none', '--user', '0:0',
-            '--mount', 'type=volume,source='.$volume.',target=/workspace',
-            '--label', ArgvTemplate::OWNER_LABEL,
-            'busybox:stable',
-            'sh', '-c', 'mkdir -p /workspace/source /workspace/output && chown -R 10001:10001 /workspace',
-        ]);
+        $path = Workspace::pathFor($volume);
 
         /*
-         * 🛑 Loud. A workspace that was not chowned fails every container
-         * that mounts it, with `Permission denied` from inside a container
-         * whose root filesystem is read-only — which reads like the
-         * `--read-only` flag and sends whoever is debugging it to the wrong
-         * place entirely. Swallowing the status here cost exactly that
-         * detour once already.
+         * 🛑 A directory on a bind-mounted root rather than a named volume,
+         * and the change is §8.5.18's. The runner must be able to MEASURE a
+         * build's disk use while the build runs — §8.5.18 rules out "Read
+         * the Docs' unenforced soft limits" — and the two portable ways to
+         * put a hard cap on a container's writes both failed when measured
+         * in Phase 07:
+         *
+         *  - `--storage-opt size=` is refused by the daemon on anything but
+         *    overlay-on-xfs with pquota;
+         *  - a `local` volume with `type=tmpfs` does carry a kernel-enforced
+         *    size, and is REMOUNTED EMPTY for every container — so the fetch
+         *    stage's checkout vanishes before the build stage starts. That
+         *    one cost a full end-to-end run to find, because every stage
+         *    succeeded and the generator simply had nothing to build.
+         *
+         * A bind mount at the same path inside the runner and on the host
+         * gives the runner a directory it can `stat` in microseconds, which
+         * is what makes `enforceDiskLimit()` continuous rather than a check
+         * after the fact.
          */
-        if ($status !== 0) {
-            throw new \RuntimeException(
-                'could not prepare the build workspace '.$volume.': '.trim($output),
-            );
+        foreach ([$path, $path.'/source', $path.'/output'] as $directory) {
+            if (! is_dir($directory) && ! @mkdir($directory, 0o750, true) && ! is_dir($directory)) {
+                throw new \RuntimeException('could not create the build workspace at '.$directory);
+            }
+        }
+
+        /*
+         * 🛑 Owned by the container's user, because every container in the
+         * pipeline runs as uid 10001 (§8.5.8 — nothing here is root) and a
+         * root-owned workspace fails every one of them with `Permission
+         * denied` from inside a container whose root filesystem is also
+         * read-only. That error reads like the `--read-only` flag and sends
+         * whoever is debugging it to the wrong place; Phase 06 lost an
+         * afternoon to the named-volume version of it.
+         *
+         * Done in-process. The runner is root in its own container, so this
+         * replaces the throwaway `busybox chown` container Phase 06 needed
+         * — one less container start on the critical path of every build.
+         */
+        foreach ([$path, $path.'/source', $path.'/output'] as $directory) {
+            @chown($directory, 10001);
+            @chgrp($directory, 10001);
         }
 
         return $volume;
@@ -95,7 +101,7 @@ final class DockerRunnerDriver implements RunnerDriver
 
     public function destroyWorkspace(string $volume): void
     {
-        $this->capture([$this->docker, 'volume', 'rm', '--force', $volume]);
+        Workspace::remove(Workspace::pathFor($volume));
     }
 
     public function sweep(): int
@@ -107,8 +113,8 @@ final class DockerRunnerDriver implements RunnerDriver
          * started. Only containers this runner's template created carry the
          * label, so only those can be swept.
          */
-        [$status, $output] = $this->capture([
-            $this->docker, 'ps', '--all', '--quiet', '--filter', 'label='.ArgvTemplate::OWNER_LABEL,
+        [$status, $output] = $this->cli->capture([
+            'ps', '--all', '--quiet', '--filter', 'label='.ArgvTemplate::OWNER_LABEL,
         ]);
 
         if ($status !== 0) {
@@ -118,7 +124,7 @@ final class DockerRunnerDriver implements RunnerDriver
         $ids = array_values(array_filter(array_map(trim(...), explode("\n", $output))));
 
         foreach ($ids as $id) {
-            $this->capture([$this->docker, 'rm', '--force', $id]);
+            $this->cli->capture(['rm', '--force', $id]);
         }
 
         return count($ids);
@@ -132,45 +138,216 @@ final class DockerRunnerDriver implements RunnerDriver
             return RunOutcome::rejected('image key not in the allowlist at run time: '.$spec->imageKey);
         }
 
-        $envFile = $this->writeEnvFile($spec);
+        $policy = SandboxPolicy::fromConfig();
         $name = $this->template->containerName($spec);
+        $wardenName = null;
+        $proxyAddress = null;
+        $started = microtime(true);
+
+        /*
+         * 🛑 §8.5.9's namespace is built BEFORE the container that lives in
+         * it, and a failure here is a refusal rather than a fallback. The
+         * alternative — "the warden would not start, so run on the bridge"
+         * — is the failure-open shape the whole arrangement exists to
+         * prevent, and it would be invisible in a green build.
+         */
+        try {
+            if ($spec->egress === EgressMode::Allowlist) {
+                $proxyAddress = $this->warden->proxyAddress();
+                $wardenName = $this->warden->start($spec->buildId, $spec->stage, $proxyAddress);
+                $placement = SandboxPlacement::inWarden($wardenName, $policy->runtime);
+            } elseif ($spec->egress === EgressMode::Open) {
+                $placement = SandboxPlacement::unrestricted($policy->runtime);
+            } else {
+                $placement = SandboxPlacement::isolated($policy->runtime);
+            }
+        } catch (\RuntimeException $refused) {
+            return RunOutcome::rejected('the build sandbox could not be prepared: '.$refused->getMessage());
+        }
+
+        $envFile = $this->writeEnvFile($spec, $this->proxyEnvironment($spec, $proxyAddress));
 
         // A name collision means this stage is already running for this build.
         // Removing it would be racing the other runner; refusing is correct.
-        $this->capture([$this->docker, 'rm', '--force', $name]);
+        $this->cli->capture(['rm', '--force', $name]);
 
-        $argv = $this->template->render($spec, $image, $envFile);
-        $started = microtime(true);
+        $argv = $this->template->render($spec, $image, $envFile, $placement);
 
         try {
-            $result = $this->execute($argv, $spec, $credential);
+            $result = $this->execute($argv, $spec, $credential, $name);
         } finally {
             @unlink($envFile);
         }
 
-        [$log, $timedOut, $stalled] = $result;
+        [$log, $timedOut, $stalled, $sample] = $result;
 
         // 🛑 Inspected before removal. See the `--rm` note in `ArgvTemplate`:
         // the exit code and the OOM flag are only authoritative while the
         // container still exists.
         $state = $this->inspectState($name);
-        $this->capture([$this->docker, 'rm', '--force', $name]);
+
+        /*
+         * The three forensic reads, and they are gated on the stage having
+         * gone wrong. Each costs a container start or a `docker exec`, and
+         * a successful build has nothing to explain - adding a second of
+         * post-mortem to every green stage would be paying for an answer
+         * nobody asked for.
+         */
+        $wentWrong = ($state['exit_code'] ?? -1) !== 0 || ! $sample->isClean() || $timedOut || $stalled;
+        $diskExhausted = $wentWrong && $this->workspaceIsOverQuota($spec);
+        $denial = $wentWrong ? $this->proxyDenial($wardenName, $started) : null;
+        $blocked = $wentWrong && $wardenName !== null ? $this->warden->blockedPackets($wardenName) : 0;
+
+        $this->cli->capture(['rm', '--force', $name]);
+
+        if ($wardenName !== null) {
+            $this->warden->stop($wardenName);
+        }
 
         $exitCode = $state['exit_code'] ?? -1;
-        $oom = $state['oom_killed'] ?? false;
+        $oom = ($state['oom_killed'] ?? false) || $sample->oomKills > 0;
 
-        [$class, $reason] = $this->classify($exitCode, $oom, $timedOut, $stalled);
+        [$class, $reason] = $this->classify(
+            $exitCode, $sample, $oom, $timedOut, $stalled, $diskExhausted, $denial, $blocked, $spec,
+        );
 
         return new RunOutcome(
             exitCode: $exitCode,
             log: $log,
-            facts: $this->readFacts($spec),
+            facts: [...$this->readFacts($spec), 'resources' => $sample->toArray()]
+                + ($denial === null ? [] : ['egress_denied_host' => $denial]),
             failureClass: $class,
             failureReason: $reason,
             seconds: round(microtime(true) - $started, 3),
             timedOut: $timedOut || $stalled,
             oomKilled: $oom,
         );
+    }
+
+    /**
+     * §8.5.9's proxy address, as the variables every package manager reads.
+     *
+     * 🛑 `no_proxy` carries the loopback forms and nothing else. A
+     * `no_proxy` listing a hostname would be an allowlist bypass written by
+     * us: anything matching it is contacted directly, and the nftables
+     * backstop would then drop it — so the build's error would be a
+     * connection timeout rather than the proxy's refusal, and the author
+     * would be told nothing useful.
+     *
+     * @return array<string, string>
+     */
+    private function proxyEnvironment(RunSpecification $spec, ?string $proxyAddress): array
+    {
+        if ($spec->egress !== EgressMode::Allowlist || $proxyAddress === null) {
+            return [];
+        }
+
+        $url = 'http://'.$proxyAddress.':'.BuildConfig::positiveInt('sandbox.proxy_port', 3128);
+
+        // Both cases: curl and git read the lowercase names, Python and most
+        // JVM tooling read the uppercase ones, and a build that picked the
+        // wrong one would be refused at layer 3 with no explanation.
+        return [
+            'http_proxy' => $url,
+            'https_proxy' => $url,
+            'HTTP_PROXY' => $url,
+            'HTTPS_PROXY' => $url,
+            'no_proxy' => 'localhost,127.0.0.1,::1',
+            'NO_PROXY' => 'localhost,127.0.0.1,::1',
+        ];
+    }
+
+    /**
+     * The host the §8.5.9 proxy refused for this build, if it refused one.
+     *
+     * 🛑 Attributed by the **warden's** address, which is the client address
+     * the proxy sees: the build container has no address of its own, it is
+     * inside the warden's namespace. That is what makes this attribution
+     * exact rather than a guess from a time window — two builds running at
+     * once have two wardens.
+     */
+    private function proxyDenial(?string $wardenName, float $since): ?string
+    {
+        if ($wardenName === null) {
+            return null;
+        }
+
+        [$status, $address] = $this->cli->capture([
+            'inspect', '--format',
+            '{{ with (index .NetworkSettings.Networks "'.BuildConfig::string('sandbox.network', 'docup_sandboxes').'") }}{{ .IPAddress }}{{ end }}',
+            $wardenName,
+        ]);
+
+        $address = trim($address);
+
+        if ($status !== 0 || $address === '') {
+            return null;
+        }
+
+        [$status, $label] = $this->cli->capture([
+            'ps', '--quiet', '--filter', 'label='.BuildConfig::string('sandbox.proxy_label', 'docup.role=egress-proxy'),
+        ]);
+
+        $proxyId = trim(explode("\n", trim($label))[0]);
+
+        if ($status !== 0 || $proxyId === '') {
+            return null;
+        }
+
+        [, $logs] = $this->cli->capture([
+            'logs', '--since', (string) (int) ($since - 1), $proxyId,
+        ]);
+
+        $denied = null;
+
+        foreach (explode("\n", $logs) as $line) {
+            if (! str_contains($line, ' '.$address.' ') || ! str_contains($line, 'TCP_DENIED')) {
+                continue;
+            }
+
+            /*
+             * `<ts> <client> TCP_DENIED/403 CONNECT host:443` for a tunnel,
+             * and `… GET http://host/path` for a plain request. Normalised
+             * to a bare host here so the classifier can compare one thing:
+             * the metadata endpoint arrives in both shapes depending on
+             * whether the build used https, and a classifier matching the
+             * raw field would catch one and miss the other.
+             */
+            $fields = preg_split('/\s+/', trim($line)) ?: [];
+            $target = $fields[4] ?? '';
+
+            if ($target === '') {
+                continue;
+            }
+
+            $target = preg_replace('#^[a-z]+://#i', '', $target) ?? $target;
+            // `strtok` returns false only when there is nothing to tokenise,
+            // which the empty-target check above has already excluded.
+            $host = strtok($target, '/:');
+
+            if (is_string($host)) {
+                $denied = $host;
+            }
+        }
+
+        return $denied;
+    }
+
+    /**
+     * Whether the workspace is over §8.5.18's disk limit.
+     *
+     * 🛑 Measured from the runner's own process, not sniffed from the
+     * build's output. A generator that runs out of space reports something
+     * else entirely — "cannot write file", "unexpected EOF", a tracebacked
+     * `IOError` — so a classifier that searched the log for "No space left
+     * on device" would miss every tool that phrases it differently, and
+     * would also catch builds that printed the phrase for another reason.
+     */
+    private function workspaceIsOverQuota(RunSpecification $spec): bool
+    {
+        $ceiling = BuildConfig::positiveInt('limits.disk_mb', 2048) * 1024 * 1024;
+
+        return Workspace::bytesUsed(Workspace::pathFor($spec->volume), $ceiling) > $ceiling;
     }
 
     public function exportDirectory(string $volume, string $containerPath, string $destinationTar): bool
@@ -187,9 +364,24 @@ final class DockerRunnerDriver implements RunnerDriver
          * depend on it still being in a state anyone trusts.
          */
         $argv = [
-            $this->docker, 'run', '--rm', '--network', 'none', '--cap-drop', 'ALL',
+            $this->cli->binary(), 'run', '--rm', '--network', 'none', '--cap-drop', 'ALL',
+
+            /*
+             * 🛑 As the workspace's own user, not as root.
+             *
+             * `--cap-drop ALL` removes CAP_DAC_OVERRIDE, so a root process
+             * in this container is subject to ordinary permission checks
+             * like anybody else — and the workspace is mode 0750 owned by
+             * uid 10001. The first version ran as root and failed with
+             * `tar: can't change directory to '/workspace/output':
+             * Permission denied`, which reads like a mount problem and is
+             * in fact root being correctly told no. Matching the owner is
+             * the right fix; widening the directory to 0755 would have been
+             * the easy one.
+             */
+            '--user', '10001:10001',
             '--security-opt', 'no-new-privileges', '--read-only',
-            '--mount', 'type=volume,source='.$volume.',target=/workspace,readonly',
+            '--mount', 'type=bind,source='.Workspace::pathFor($volume).',target=/workspace,readonly',
             '--label', ArgvTemplate::OWNER_LABEL,
             'busybox:stable',
             'tar', '-cf', '-', '-C', $containerPath, '.',
@@ -239,9 +431,12 @@ final class DockerRunnerDriver implements RunnerDriver
      * Run the container, streaming its output under §8.5.21's caps.
      *
      * @param  list<string>  $argv
-     * @return array{0: list<string>, 1: bool, 2: bool} log, timed out, stalled
+     * @param  string  $containerName  so the cgroup sampler can find the
+     *                                 container WHILE it runs, which is the
+     *                                 only time its counters exist
+     * @return array{0: list<string>, 1: bool, 2: bool, 3: CgroupSample}
      */
-    private function execute(array $argv, RunSpecification $spec, ?string $credential): array
+    private function execute(array $argv, RunSpecification $spec, ?string $credential, string $containerName): array
     {
         $descriptors = [
             0 => $spec->acceptsStdin ? ['pipe', 'r'] : ['file', '/dev/null', 'r'],
@@ -252,7 +447,7 @@ final class DockerRunnerDriver implements RunnerDriver
         $process = proc_open($argv, $descriptors, $pipes);
 
         if (! is_resource($process)) {
-            return [['the container runtime could not be started'], false, false];
+            return [['the container runtime could not be started'], false, false, new CgroupSample];
         }
 
         /*
@@ -279,11 +474,16 @@ final class DockerRunnerDriver implements RunnerDriver
         $bytes = 0;
         $buffer = ['', ''];
         $capped = false;
+        $sampler = null;
+        $sample = new CgroupSample;
+        $overQuota = false;
+        $lastDiskCheck = microtime(true);
 
         $deadline = microtime(true) + $spec->timeoutSeconds;
         $lastOutput = microtime(true);
         $timedOut = false;
         $stalled = false;
+        $exited = false;
 
         while (true) {
             $read = array_filter([$pipes[1], $pipes[2]], is_resource(...));
@@ -333,9 +533,60 @@ final class DockerRunnerDriver implements RunnerDriver
                 $lastOutput = microtime(true);
             }
 
-            $status = proc_get_status($process);
+            /*
+             * 🛑 §8.5.15's authoritative reading, taken HERE because the
+             * cgroup is deleted the moment the container exits (measured in
+             * Phase 07; see `CgroupSampler`). Sampling in this loop costs one
+             * `file_get_contents` per 200 ms select timeout and is the only
+             * point at which `oom_kill` and `pids.events:max` are readable
+             * at all.
+             */
+            $sampler ??= $this->resolveSampler($containerName);
+            $sample = $sampler === null ? $sample : $sample->merge($sampler->sample());
 
-            if (! $status['running']) {
+            /*
+             * 🛑 §8.5.18's disk limit, ENFORCED rather than noticed. Two
+             * seconds is the cadence: the measurement stops as soon as the
+             * ceiling is passed (see {@see Workspace::bytesUsed()}), so the
+             * case this is protecting against — a build writing as fast as
+             * the disk allows — is also the cheapest case to detect. The
+             * overshoot is bounded by what one tick can write, which is the
+             * honest cost of having no filesystem quota to hand the kernel.
+             */
+            if (microtime(true) - $lastDiskCheck > 2.0) {
+                $lastDiskCheck = microtime(true);
+
+                if ($this->workspaceIsOverQuota($spec)) {
+                    $overQuota = true;
+
+                    break;
+                }
+            }
+
+            /*
+             * 🛑 **Exiting is not the same as finished, and conflating the
+             * two silently truncates the log.**
+             *
+             * This used to `break` the moment `proc_get_status` reported
+             * the process gone — which discards whatever the kernel still
+             * holds in the pipes. A container that writes 64 KiB and exits
+             * immediately loses everything after the first chunk: the
+             * symptom found here was a 64 KiB line arriving as exactly
+             * 8192 bytes with no truncation marker and the next line
+             * missing entirely, which looks like a bug in §8.5.21's
+             * truncation rather than lost output.
+             *
+             * So the exit is recorded and the loop keeps draining until
+             * both pipes report EOF. The streams are non-blocking, so a
+             * read at EOF returns '' and sets `feof` — this adds one more
+             * pass, not a wait.
+             */
+            if (! $exited) {
+                $status = proc_get_status($process);
+                $exited = ! $status['running'];
+            }
+
+            if ($exited && feof($pipes[1]) && feof($pipes[2])) {
                 break;
             }
 
@@ -351,8 +602,8 @@ final class DockerRunnerDriver implements RunnerDriver
             }
         }
 
-        if ($timedOut || $stalled) {
-            $this->capture([$this->docker, 'kill', $this->template->containerName($spec)]);
+        if ($timedOut || $stalled || $overQuota) {
+            $this->cli->capture(['kill', $this->template->containerName($spec)]);
         }
 
         foreach ([$pipes[1], $pipes[2]] as $pipe) {
@@ -369,7 +620,28 @@ final class DockerRunnerDriver implements RunnerDriver
             }
         }
 
-        return [$log, $timedOut, $stalled];
+        /*
+         * One last reading before the corpse is cold. A container that ran
+         * for less than the first select timeout would otherwise never have
+         * been sampled at all.
+         */
+        $sampler ??= $this->resolveSampler($containerName);
+        $sample = $sampler === null ? $sample : $sample->merge($sampler->sample());
+
+        return [$log, $timedOut, $stalled, $sample];
+    }
+
+    /**
+     * The sampler for a running container, resolved once.
+     *
+     * Looked up by the container's full id rather than its name, because
+     * that is what the cgroup directory is named after.
+     */
+    private function resolveSampler(string $containerName): ?CgroupSampler
+    {
+        [$status, $id] = $this->cli->capture(['inspect', '--format', '{{.Id}}', $containerName]);
+
+        return $status === 0 ? CgroupSampler::forContainer(trim($id)) : null;
     }
 
     /** §8.5.21: strip NUL bytes, truncate lines over 8 KiB. */
@@ -392,8 +664,8 @@ final class DockerRunnerDriver implements RunnerDriver
      */
     private function inspectState(string $name): array
     {
-        [$status, $output] = $this->capture([
-            $this->docker, 'inspect', '--format', '{{.State.ExitCode}} {{.State.OOMKilled}}', $name,
+        [$status, $output] = $this->cli->capture([
+            'inspect', '--format', '{{.State.ExitCode}} {{.State.OOMKilled}}', $name,
         ]);
 
         if ($status !== 0) {
@@ -409,10 +681,31 @@ final class DockerRunnerDriver implements RunnerDriver
     }
 
     /**
-     * @return array{0: string|null, 1: string|null} §8.5.15 class and reason
+     * §8.5.15's class and identifier, most specific signal first.
+     *
+     * 🛑 **A kernel resource event always fails the stage, even on exit 0.**
+     * That is a decision rather than an obvious reading, so here is the
+     * reason: a generator whose subprocess was OOM-killed, or whose forks
+     * were refused at the PID ceiling, can still exit 0 having written a
+     * partially generated site — and §8.4.5's output contract checks that a
+     * site exists, not that it is complete. Publishing that silently is
+     * worse than a failure an author can act on. The counters only rise when
+     * the kernel really did kill or refuse something, so there is no benign
+     * reading to mistake for one.
+     *
+     * @return array{0: string|null, 1: string|null}
      */
-    private function classify(int $exitCode, bool $oom, bool $timedOut, bool $stalled): array
-    {
+    private function classify(
+        int $exitCode,
+        CgroupSample $sample,
+        bool $oom,
+        bool $timedOut,
+        bool $stalled,
+        bool $diskExhausted,
+        ?string $deniedHost,
+        int $blockedPackets,
+        RunSpecification $spec,
+    ): array {
         /*
          * 🛑 OOM is checked **before** the exit code, because the kernel
          * leaves exit code 137 behind and 137 is also what a plain SIGKILL
@@ -423,6 +716,20 @@ final class DockerRunnerDriver implements RunnerDriver
          */
         if ($oom) {
             return [FailureClass::Resource->value, 'oom_killed'];
+        }
+
+        /*
+         * `pids.events:max` has no equivalent anywhere in `docker inspect`,
+         * which is why a fork bomb was indistinguishable from a successful
+         * build before Phase 07: the container exits 0 and the kernel's
+         * refusals leave no other trace.
+         */
+        if ($sample->pidLimitHits > 0) {
+            return [FailureClass::Resource->value, 'pid_limit_exceeded'];
+        }
+
+        if ($diskExhausted) {
+            return [FailureClass::Resource->value, 'disk_quota_exceeded'];
         }
 
         if ($stalled) {
@@ -443,6 +750,47 @@ final class DockerRunnerDriver implements RunnerDriver
         }
 
         /*
+         * 🛑 §8.5.9's refusals, and they are **three** identifiers rather
+         * than one. Phase 07's exit criteria require a non-allowlisted
+         * package host, an outbound request to a blocked host and the cloud
+         * metadata endpoint to reach *distinct* terminal states — and they
+         * deserve to, because the three need different sentences in front of
+         * an author. A dependency that cannot be installed is a packaging
+         * problem; a build reaching 169.254.169.254 is a security incident.
+         *
+         * The host comes from the proxy's own access log, attributed by the
+         * warden's address, so the message can name it.
+         */
+        if ($deniedHost !== null) {
+            if ($deniedHost === '169.254.169.254') {
+                return [FailureClass::User->value, 'egress_metadata_endpoint_denied'];
+            }
+
+            if ($spec->stage->value === 'environment') {
+                return [FailureClass::User->value, 'package_host_not_allowlisted'];
+            }
+
+            return [FailureClass::User->value, 'egress_host_not_allowlisted'];
+        }
+
+        /*
+         * 🛑 Nothing in the proxy's log, but the nftables ruleset dropped
+         * packets: a build that opened a socket itself and went round the
+         * proxy entirely. Distinguishable from a proxy refusal precisely
+         * because the proxy never saw it, which is the whole point of the
+         * second layer.
+         *
+         * Read from a **named nft counter**, not inferred from the build's
+         * own words. "Connection timed out", "Network is unreachable" and a
+         * tracebacked `OSError` are the same event phrased three ways, and a
+         * classifier that sniffed for them would also catch every build
+         * whose dependency server was simply down.
+         */
+        if ($blockedPackets > 0) {
+            return [FailureClass::User->value, 'egress_blocked_at_layer3'];
+        }
+
+        /*
          * 125 is the Docker CLI's own "the daemon refused this", which is
          * ours and not the author's — classing it as `user` would count it
          * toward §8.5.17's governor and could disable a tenant's webhooks for
@@ -459,12 +807,16 @@ final class DockerRunnerDriver implements RunnerDriver
      * A stage may leave a small JSON document for the worker — the fetcher
      * reports ADR 0010's "filter honoured" flag this way.
      *
-     * 🛑 Read by `cat` in a throwaway container, not by exporting the volume
-     * and opening the tar. The first version used `PharData`, which requires
-     * the archive to carry a recognised extension and threw on a temporary
-     * path that had none — taking the whole runner process down with it,
-     * because one job's failure was not contained. Reading one file directly
-     * is simpler, faster, and has no archive parser in it at all.
+     * 🛑 Read straight off the workspace, which the runner can now see
+     * (Phase 07's bind mount). Phase 06 read it with `cat` in a throwaway
+     * container because the workspace was a named volume and there was no
+     * other way in; before that it used `PharData`, which threw on a
+     * temporary path with no recognised extension and took the whole runner
+     * process down with it. Three versions, each simpler than the last.
+     *
+     * The file is written by the fetch image, which runs repository-free
+     * code (§8.5.7) — but the decode is still bounded in depth and the
+     * result is still only used for facts nothing is authorised by.
      *
      * @return array<string, mixed>
      */
@@ -474,22 +826,21 @@ final class DockerRunnerDriver implements RunnerDriver
             return [];
         }
 
-        [$status, $output] = $this->capture([
-            $this->docker, 'run', '--rm', '--network', 'none', '--cap-drop', 'ALL',
-            '--security-opt', 'no-new-privileges', '--read-only',
-            '--mount', 'type=volume,source='.$spec->volume.',target=/workspace,readonly',
-            '--label', ArgvTemplate::OWNER_LABEL,
-            'busybox:stable',
-            'cat', '/workspace/fetch-result.json',
-        ]);
+        $path = Workspace::pathFor($spec->volume).'/fetch-result.json';
 
-        if ($status !== 0) {
+        if (! is_file($path) || filesize($path) > 65536) {
+            return [];
+        }
+
+        $body = @file_get_contents($path);
+
+        if ($body === false) {
             return [];
         }
 
         try {
             /** @var array<string, mixed> $decoded */
-            $decoded = json_decode($output, true, 8, JSON_THROW_ON_ERROR);
+            $decoded = json_decode($body, true, 8, JSON_THROW_ON_ERROR);
 
             return $decoded;
         } catch (\JsonException) {
@@ -523,7 +874,8 @@ final class DockerRunnerDriver implements RunnerDriver
         return $reference;
     }
 
-    private function writeEnvFile(RunSpecification $spec): string
+    /** @param array<string, string> $extra */
+    private function writeEnvFile(RunSpecification $spec, array $extra = []): string
     {
         $path = $this->temporaryPath('env');
 
@@ -542,7 +894,7 @@ final class DockerRunnerDriver implements RunnerDriver
         }
 
         @chmod($path, 0o600);
-        fwrite($handle, $this->template->renderEnvFile($spec));
+        fwrite($handle, $this->template->renderEnvFile($spec, $extra));
         fclose($handle);
 
         return $path;
@@ -565,30 +917,5 @@ final class DockerRunnerDriver implements RunnerDriver
         }
 
         return $directory.'/'.$kind.'-'.bin2hex(random_bytes(16));
-    }
-
-    /**
-     * @param  list<string>  $argv
-     * @return array{0: int, 1: string}
-     */
-    private function capture(array $argv): array
-    {
-        $descriptors = [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-        $process = proc_open($argv, $descriptors, $pipes);
-
-        if (! is_resource($process)) {
-            return [-1, ''];
-        }
-
-        $output = (string) stream_get_contents($pipes[1]);
-        $output .= (string) stream_get_contents($pipes[2]);
-
-        foreach ($pipes as $pipe) {
-            if (is_resource($pipe)) {
-                fclose($pipe);
-            }
-        }
-
-        return [proc_close($process), $output];
     }
 }

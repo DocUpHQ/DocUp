@@ -692,7 +692,6 @@ final class ArchitectureTest extends TestCase
             'Http::post(' => 'uses the Http facade',
             'Http::withHeaders(' => 'uses the Http facade',
             'fsockopen(' => 'opens a socket',
-            'stream_socket_client(' => 'opens a socket',
             'stream_context_create(' => 'builds a stream context, which is how a URL fetch is configured',
             'new PinnedCurlTransport' => 'constructs the egress transport',
             'new HardenedEgressClient' => 'constructs a second egress client',
@@ -737,6 +736,28 @@ final class ArchitectureTest extends TestCase
             // A URL handed to a stream function, in either quoting style.
             if (preg_match('/(file_get_contents|fopen|readfile|simplexml_load_file)\s*\(\s*[\'"]https?:/', $source) === 1) {
                 $offenders[] = $relative.' fetches a URL through a stream function';
+            }
+
+            /*
+             * 🛑 A socket is an outbound request **unless it is AF_UNIX**,
+             * and the distinction is checked rather than assumed.
+             *
+             * §8.3.9 governs requests that leave this host. A unix-domain
+             * socket does not leave the process's own filesystem: it has no
+             * address, no DNS, no port and no route, so none of the
+             * resolve-then-pin machinery the egress client exists for has
+             * anything to act on. Phase 07's worker→runner credential
+             * channel is one, and routing it through `HardenedEgressClient`
+             * would be meaningless — the client would have nothing to
+             * resolve.
+             *
+             * So the needle is the **scheme**, matched as a literal
+             * immediately inside the call. A socket whose address is built
+             * from a variable is flagged, because a scheme that cannot be
+             * read here is a scheme a reviewer cannot check either.
+             */
+            if (preg_match('/stream_socket_(?:client|server)\s*\(\s*(?![\'"]unix:\/\/)/', $source) === 1) {
+                $offenders[] = $relative.' opens a socket whose scheme is not a literal unix://';
             }
         }
 

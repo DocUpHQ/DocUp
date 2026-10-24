@@ -46,6 +46,19 @@ return [
     'lease_renew_seconds' => 20,
 
     /*
+     * 🛑 SPEC 8.1.7's hosting-only mode. With this false the application
+     * boots with no runner at all and a build trigger is REFUSED with a
+     * stable identifier rather than queued for a runner that will never
+     * arrive - which is the difference between "this installation does not
+     * build" and "your build is taking a very long time".
+     *
+     * "This is the single most important enterprise concession: it lets a
+     * security team adopt DocUp with the RCE surface removed and builds
+     * running in their own CI."
+     */
+    'enabled' => filter_var(env('DOCUP_BUILDS_ENABLED', true), FILTER_VALIDATE_BOOL),
+
+    /*
      * SPEC 8.5.18's defaults: "30 minutes, 4 GB, 1 CPU, 512 PIDs — all
      * operator-configurable, with none of Read the Docs' unenforced soft
      * limits". Enforced by the runtime, not by a watchdog that notices late.
@@ -56,6 +69,156 @@ return [
         'cpus' => env('DOCUP_BUILD_CPUS', '1'),
         'pids' => (int) env('DOCUP_BUILD_PIDS', 512),
         'tmpfs_mb' => (int) env('DOCUP_BUILD_TMPFS_MB', 512),
+
+        /*
+         * SPEC 8.5.18's disk limit, which has no Docker flag on most
+         * installations: `--storage-opt size=` is "supported only for
+         * overlay over xfs with 'pquota'", measured and refused by the
+         * daemon on an ordinary ext4 host (ADR 0011).
+         *
+         * 🛑 A sized tmpfs volume was the first answer and does not work
+         * either: a `local` volume with `type=tmpfs` is remounted EMPTY for
+         * every container, so the fetch stage's checkout would be gone
+         * before the build stage saw it. Measured, not assumed.
+         *
+         * So the workspace is a bind mount the runner can see (see
+         * `workspace_root`) and the cap is enforced by MEASUREMENT, polled
+         * from the runner's own process while the container runs. The
+         * build is killed at the cap rather than refused a write, so the
+         * author gets `resource.disk_quota_exceeded` instead of whatever
+         * their generator says about ENOSPC.
+         */
+        'disk_mb' => (int) env('DOCUP_BUILD_DISK_MB', 2048),
+    ],
+
+    /*
+     *--------------------------------------------------------------------
+     * SPEC 8.5.8-8.5.12: the sandbox, its trust zone and its egress
+     *--------------------------------------------------------------------
+     */
+    'sandbox' => [
+
+        /*
+         * 🛑 SPEC 8.5.11: "Isolation default MUST be hardened `runc`, with
+         * gVisor (`runsc`) documented as the recommended production
+         * runtime", and the application "MUST refuse to boot with
+         * APP_ENV=production, builds enabled and no explicit isolation
+         * declaration".
+         *
+         * Null is NOT a default of `runc`. It is the absence of a
+         * declaration, which is exactly what production boot refuses -
+         * SPEC 19/23's reasoning is that an operator who has not chosen
+         * has not understood the choice, and the fix is to make them make
+         * it rather than to pick for them.
+         */
+        'isolation' => env('DOCUP_BUILD_ISOLATION'),
+
+        /*
+         * 🛑 A TEST AFFORDANCE, and the only one in this file.
+         *
+         * `BuildServiceProvider::boot()` refuses a misconfigured
+         * installation, which would otherwise refuse the whole test suite
+         * - every test boots the application, and almost none of them has
+         * anything to say about sandboxing. Tests that DO exercise the
+         * refusal set this true and assert both directions.
+         *
+         * It is read only under `runningUnitTests()`, so setting it in a
+         * real environment does nothing at all. `ArchitectureTest` asserts
+         * that, because an affordance that worked in production would be
+         * the gate with a switch beside it that SPEC 20.4 forbids.
+         */
+        'assert_at_boot' => false,
+
+        /*
+         * The container runtimes `isolation` may name. A key, never a
+         * reference - the same rule as the image allowlist, for the same
+         * reason: this value reaches `docker run --runtime`.
+         */
+        'runtimes' => [
+            'runc' => 'runc',
+            'gvisor' => 'runsc',
+        ],
+
+        /*
+         * 🛑 SPEC 8.5.9's default, and the second half of SPEC 8.5.11's
+         * boot refusal: "`runc` plus open egress together MUST require
+         * DOCUP_ACKNOWLEDGE_UNSANDBOXED=true".
+         *
+         *   `allowlist` - the shipped default: the sandboxes network, the
+         *                 warden's nftables backstop, and the one CONNECT
+         *                 proxy. Nothing else is reachable.
+         *   `none`      - no network namespace at all (`--network none`),
+         *                 which is what Phase 06 shipped and is STRICTER
+         *                 than the allowlist rather than weaker.
+         *   `open`      - a routed network with no proxy and no backstop.
+         *                 This is the one that needs the acknowledgement.
+         */
+        'egress' => env('DOCUP_SANDBOX_EGRESS', 'allowlist'),
+
+        /*
+         * The SPEC 11.2 `sandboxes` zone. `internal: true` in compose, so
+         * there is no route off the host - and the nftables backstop
+         * closes the route ACROSS it, which internal does not.
+         */
+        'network' => env('DOCUP_SANDBOX_NETWORK', 'docup_sandboxes'),
+
+        /*
+         * The network-namespace warden of SPEC 8.5.9 (ADR 0011). Holds
+         * CAP_NET_ADMIN so the build container can hold none.
+         */
+        'warden_image' => env('DOCUP_IMAGE_WARDEN', 'docup/warden:1'),
+
+        /*
+         * How the runner finds the proxy. A LABEL rather than a name,
+         * because the container name depends on the compose project name
+         * and an operator who renamed their project would silently get a
+         * build with no egress at all.
+         */
+        'proxy_label' => 'docup.role=egress-proxy',
+        'proxy_port' => (int) env('DOCUP_PROXY_PORT', 3128),
+
+        /*
+         * 🛑 ONE FILE, TWO READERS (ADR 0011). The proxy renders its squid
+         * configuration from this file; the application reads the same file
+         * for `docup:doctor`, for the SPEC 8.5.12 self-test and for the
+         * message an author sees when a host is refused. A PHP copy of the
+         * list would drift from the one actually enforced.
+         */
+        'allowlist_file' => env('DOCUP_EGRESS_ALLOWLIST', base_path('deploy/egress-allowlist.conf')),
+
+        /*
+         * Where the runner mounts the host's cgroup hierarchy, read-only.
+         *
+         * SPEC 8.5.15 requires OOM to be read "authoritatively from cgroup
+         * `memory.events:oom_kill`" rather than inferred. 🛑 Measured in
+         * Phase 07: a container's cgroup is REMOVED when the container
+         * exits, so the file can only be read while the build is running -
+         * `CgroupSampler` polls it in the runner's existing output loop.
+         * Empty disables sampling, and the driver then says so rather than
+         * silently falling back.
+         */
+        'cgroup_root' => env('DOCUP_CGROUP_ROOT', '/hostcg'),
+
+        /*
+         * SPEC 8.5.12's boot self-test. The addresses it must NOT reach.
+         * Hostnames resolved inside the sandbox namespace, so these are the
+         * compose service names of the data zone.
+         */
+        'self_test' => [
+            'forbidden' => [
+                'database' => env('DB_HOST', 'db').':'.env('DB_PORT', '3306'),
+                'cache' => env('REDIS_HOST', 'cache').':'.env('REDIS_PORT', '6379'),
+                'metadata' => '169.254.169.254:80',
+            ],
+
+            /*
+             * ...and the one it MUST reach, through the proxy. A self-test
+             * that only proved unreachability would pass just as well on a
+             * container with no network at all, which is not what SPEC
+             * 8.5.12 asks for: "a proxied request succeeds".
+             */
+            'reachable' => env('DOCUP_SELF_TEST_URL', 'https://pypi.org/simple/'),
+        ],
     ],
 
     /*
@@ -109,8 +272,74 @@ return [
     'volume_prefix' => 'docup-build-',
 
     /*
-     * SPEC 8.5.5's two admission profiles. Phase 06 ships `simple`;
-     * `fair` arrives with the rest of admission control in Phase 07.
+     * Where those workspaces live.
+     *
+     * 🛑 THE SAME PATH INSIDE THE RUNNER AND ON THE HOST, and that is the
+     * whole trick. The runner is itself a container, so a path it passes to
+     * `docker run -v` is resolved by the DAEMON against the host - binding
+     * the same path into the runner at the same name is what lets one
+     * directory be both "the workspace the build writes to" and "a
+     * directory this process can measure with `stat`".
+     *
+     * It replaces the per-build named volume Phase 06 used, for a reason
+     * measured in Phase 07: SPEC 8.5.18 requires an ENFORCED disk limit, and
+     * neither portable alternative works. `--storage-opt size=` is
+     * "supported only for overlay over xfs with 'pquota'" (the daemon's own
+     * refusal on an ordinary host), and a `local` volume with
+     * `type=tmpfs` - which does carry a kernel-enforced size - is REMOUNTED
+     * EMPTY for every container, so the fetch stage's checkout is gone
+     * before the build stage starts. Both were tried.
+     *
+     * With a bind the runner can measure the tree in microseconds from its
+     * own process, on every poll of the output loop, and kill a container
+     * the moment it passes the cap. That is continuous enforcement rather
+     * than a limit checked once at the end - which is the distinction SPEC
+     * 8.5.18 draws when it rules out "Read the Docs' unenforced soft
+     * limits".
      */
-    'admission' => env('DOCUP_ADMISSION', 'simple'),
+    'workspace_root' => env('DOCUP_WORKSPACE_ROOT', '/var/lib/docup/workspaces'),
+
+    /*
+     *--------------------------------------------------------------------
+     * SPEC 8.5.5's two admission profiles
+     *--------------------------------------------------------------------
+     * `simple`: concurrency is the worker count, per project non-overlapping
+     *           with a queued cap and coalescing.
+     * `fair`:   a leader-locked dispatcher, nested installation /
+     *           organisation / project semaphores, and deficit round-robin
+     *           weighted by organisation share.
+     *
+     * 🛑 "Read the Docs holds an organisation-scoped lock over a per-project
+     * FIFO queue — a verified fairness bug where one organisation's backlog
+     * starves another's first build. Neither profile may reproduce it."
+     * `FairAdmissionTest` is that sentence as an assertion.
+     */
+    'admission' => [
+        'profile' => env('DOCUP_ADMISSION', 'simple'),
+
+        /*
+         * The nested semaphores, outermost first. Each is a ceiling on
+         * builds RUNNING in that scope, never on builds queued: a queue cap
+         * that refuses work is SPEC 8.5.5's `simple` coalescing, which is a
+         * different control with a different failure mode.
+         */
+        'installation_slots' => (int) env('DOCUP_ADMISSION_SLOTS', 4),
+        'organisation_slots' => (int) env('DOCUP_ADMISSION_ORG_SLOTS', 2),
+        'project_slots' => 1,
+
+        /*
+         * SPEC 8.5.5's `simple` queued cap. Beyond this, an older queued
+         * build for the same version is superseded rather than a new one
+         * refused - SPEC 8.5.4's fourth dedup layer, which is why the cap
+         * can be small without anybody losing a build.
+         */
+        'queued_cap_per_version' => 1,
+
+        /*
+         * Deficit round-robin's quantum, in slot-grants. An organisation's
+         * share is its weight; the deficit counter is what stops a large
+         * weight becoming a monopoly between dispatcher passes.
+         */
+        'default_organisation_weight' => 1,
+    ],
 ];

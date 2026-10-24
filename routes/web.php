@@ -6,6 +6,9 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\Api\ProjectController as ApiProjectController;
+use App\Http\Controllers\Health\LiveController;
+use App\Http\Controllers\Health\ReadyController;
+use App\Http\Controllers\Health\SelfTestController;
 use App\Http\Controllers\ProjectController;
 use App\Http\Controllers\ProjectVisibilityController;
 use Illuminate\Support\Facades\Route;
@@ -15,6 +18,23 @@ use Inertia\Inertia;
 | Phase 01 served one page: the login form. Phase 02 adds the organisation and
 | project surfaces behind authentication.
 */
+
+/*
+| §8.1.10's health endpoints. Registered FIRST and outside every middleware
+| group: an orchestrator's liveness probe must not depend on sessions, on
+| tenancy resolution or on anything else that could itself be the thing that
+| is broken.
+|
+| 🛑 These replace `withRouting(health: '/up')`, which is silently IGNORED
+| when `using:` is supplied - as it is in bootstrap/app.php, for the route
+| ordering reason recorded there. `/up` 404'd and the compose healthcheck
+| had been failing against it since Phase 01.
+*/
+Route::prefix('_/health')->name('health.')->group(function (): void {
+    Route::get('/', LiveController::class)->name('live');
+    Route::get('ready', ReadyController::class)->name('ready');
+    Route::get('self-test', SelfTestController::class)->name('self-test');
+});
 
 Route::get('/', fn () => redirect()->route('login'));
 
