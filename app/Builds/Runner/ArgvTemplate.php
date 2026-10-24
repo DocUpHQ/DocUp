@@ -230,7 +230,21 @@ final readonly class ArgvTemplate
          * if it is spelled like one. The validation in `RunSpecification`
          * stops it being a hostile *argument*; this ordering stops it being a
          * flag at all.
+         *
+         * 🛑 A stage carrying a §8.4.10 script takes neither path: its argv
+         * is two fixed elements, both chosen here, with nothing of the
+         * repository's in it. The commands are in a file the runner wrote
+         * (`DockerRunnerDriver::writeScript()`), which is the narrowest
+         * reading of §8.5.13's "fixed argv template" that still lets an
+         * author run their own build.
          */
+        if ($spec->script !== null) {
+            $argv[] = $spec->shell;
+            $argv[] = RunSpecification::SCRIPT_PATH;
+
+            return $argv;
+        }
+
         foreach ($spec->command as $argument) {
             $argv[] = $argument;
         }

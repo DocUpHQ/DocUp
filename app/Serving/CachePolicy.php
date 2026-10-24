@@ -82,6 +82,32 @@ final class CachePolicy
     }
 
     /**
+     * A published, versioned public contract (§8.1.11).
+     *
+     * 🛑 Here rather than in the controller, and that is the point of the
+     * architecture test that sent it here: §9.3.2's invariant is that **one**
+     * place decides public cacheability, so a second place that happened to
+     * be right today is still the crack a private response eventually goes
+     * through. The `.docup.yaml` schema is the first caller.
+     *
+     * Cacheable for a day, publicly, with no cache tags: the response carries
+     * no tenant's anything — the schema describes the shape of a
+     * configuration file and names no installation, no project and no host —
+     * so there is nothing to scope a purge to. §8.1.11 puts the version in
+     * the URL and gives the contract "a two-minor deprecation policy", which
+     * means v1 never changes meaning and a v2 is a different URL; a long
+     * cache is therefore correct rather than merely tolerable.
+     */
+    public static function forPublishedContract(): CacheDirectives
+    {
+        return CacheDirectives::publiclyCacheable(
+            maxAge: self::CDN_MAX_AGE,
+            cdnMaxAge: self::CDN_MAX_AGE,
+            cacheTags: [],
+        );
+    }
+
+    /**
      * §9.3.3's cache tags: "scoped to mount, project, version, build and theme".
      *
      * 🛑 Every tag is an opaque identifier, never a slug. A tag reaches the CDN,

@@ -9,6 +9,7 @@ namespace Tests\Arch;
 
 use App\Artifacts\RejectionCode;
 use App\Builds\BuildEnvironment;
+use App\Builds\Toolchain\ToolchainPresets;
 use App\Logging\RedactSecrets;
 use App\Source\SourceRejection;
 use Tests\TestCase;
@@ -1090,5 +1091,102 @@ final class ArchitectureTest extends TestCase
         );
 
         $this->assertSame(BuildEnvironment::OUTPUT_PATH, $environment['DOCUP_OUTPUT']);
+    }
+
+    /**
+     * 🛑 SPEC 8.5.19, stated as a requirement for this test by name: "An
+     * architecture test MUST assert that no lookup path omits the repository
+     * scope."
+     *
+     * Enforced structurally rather than by inspecting queries, because the
+     * thing that must be true is "there is nowhere else a lookup could be
+     * written". One class touches the `fragments` table; SPEC 14.2 names the
+     * trap it is guarding - two organisations with byte-identical sources
+     * sharing a fragment would make the cache a cross-tenant file-existence
+     * oracle - and SPEC 19/38 records that the answer is the repository row
+     * rather than an installation-level opt-in.
+     *
+     * The schema reinforces it: the primary key is
+     * `(repository_id, fragment_digest)` with no index on the digest alone,
+     * so a query that forgot the scope would table-scan rather than quietly
+     * succeed.
+     */
+    public function test_only_the_fragment_cache_reads_the_fragments_table(): void
+    {
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            if (! str_starts_with($relative, 'app/') || $relative === 'app/Builds/Fragments/FragmentCache.php') {
+                continue;
+            }
+
+            if (str_contains($this->code($file), "'fragments'")) {
+                $offenders[] = $relative;
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            '🛑 SPEC 8.5.19: only FragmentCache may read or write the fragments table, '
+                .'so that no lookup path can omit the repository scope: '.implode(', ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 11.4's seam, and the boundary that keeps it safe: "a new
+     * generator is a data file plus a fixture, not code".
+     *
+     * A preset names its image by **key** into SPEC 8.5.14's allowlist, never
+     * by reference. Without this, "a new generator is a data file" would
+     * become "a new image is a YAML value" the first time somebody found it
+     * convenient - and `RunSpecification` would be handed a name the operator
+     * never allowlisted.
+     */
+    public function test_every_preset_names_an_allowlisted_image_key(): void
+    {
+        $allowlist = array_keys((array) config('builds.images'));
+
+        foreach (ToolchainPresets::all() as $key => $preset) {
+            $this->assertContains(
+                $preset->image,
+                $allowlist,
+                $key.' names image "'.$preset->image.'", which is not a key of config(builds.images)',
+            );
+        }
+    }
+
+    /**
+     * 🛑 And the other half: nothing but the registry reads the preset
+     * directory.
+     *
+     * A second loader taking a path is one `$config['preset_file']` away from
+     * arbitrary command execution with no operator anywhere in the picture -
+     * the presets are the only place in the system where DocUp ships shell
+     * commands as data, so where they are loaded from is the trust boundary.
+     */
+    public function test_only_the_preset_registry_reads_the_toolchain_directory(): void
+    {
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            if (! str_starts_with($relative, 'app/') || $relative === 'app/Builds/Toolchain/ToolchainPresets.php') {
+                continue;
+            }
+
+            if (str_contains($this->code($file), 'resources/toolchains')) {
+                $offenders[] = $relative;
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'only ToolchainPresets may load a preset (SPEC 11.4): '.implode(', ', $offenders),
+        );
     }
 }

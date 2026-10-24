@@ -298,15 +298,37 @@ return [
         ],
 
         /*
-         * The one toolchain Phase 06 ships. SPEC 17 scopes this phase to
-         * "config schema beyond what MkDocs needs" being out of scope, so
-         * one pre-baked MkDocs image is the whole `build.os` enum for now;
-         * Phase 09's declarative toolchain presets (SPEC 11.4's
-         * `DocToolAdapter`) are what make adding the next one a data file.
+         * 🛑 The toolchain images, and the KEY is what a preset names.
+         *
+         * `resources/toolchains/*.yaml` carries an `image:` that must be one
+         * of these keys - never a reference - so SPEC 11.4's "a new
+         * generator is a data file" has not quietly become "a new image is a
+         * YAML value". `ToolchainPresetTest` asserts every shipped preset
+         * names a key that exists here.
+         *
+         * Four images for seven presets, because the division that matters
+         * is the language runtime rather than the generator: Sphinx and
+         * MkDocs are Python, Docusaurus, VitePress, Starlight and Antora are
+         * Node, and mdBook is one static binary.
          */
         'mkdocs' => [
             'reference' => env('DOCUP_IMAGE_MKDOCS', 'docup/build-mkdocs:1'),
             'digest' => env('DOCUP_IMAGE_MKDOCS_DIGEST'),
+        ],
+
+        'sphinx' => [
+            'reference' => env('DOCUP_IMAGE_SPHINX', 'docup/build-sphinx:1'),
+            'digest' => env('DOCUP_IMAGE_SPHINX_DIGEST'),
+        ],
+
+        'node' => [
+            'reference' => env('DOCUP_IMAGE_NODE', 'docup/build-node:1'),
+            'digest' => env('DOCUP_IMAGE_NODE_DIGEST'),
+        ],
+
+        'mdbook' => [
+            'reference' => env('DOCUP_IMAGE_MDBOOK', 'docup/build-mdbook:1'),
+            'digest' => env('DOCUP_IMAGE_MDBOOK_DIGEST'),
         ],
     ],
 

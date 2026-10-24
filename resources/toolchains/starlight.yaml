@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Starlight is an Astro integration rather than a generator of its own, so
+# this preset builds Astro. It is listed separately because SPEC 17 lists it
+# separately and because an author looking for "Starlight" should find it -
+# which is the whole argument for presets being data rather than a code path
+# per generator.
+
+key: starlight
+name: Astro Starlight
+image: node
+
+detect:
+  - astro.config.mjs
+  - astro.config.ts
+  - astro.config.js
+
+configuration:
+  key: starlight
+  required: false
+  candidates:
+    - astro.config.mjs
+    - astro.config.ts
+    - astro.config.js
+
+environment:
+  NPM_CONFIG_FUND: "false"
+  NPM_CONFIG_AUDIT: "false"
+  NPM_CONFIG_UPDATE_NOTIFIER: "false"
+  CI: "true"
+
+  # Astro's telemetry is an outbound request to a host that is not on SPEC
+  # 8.5.9's allowlist. Disabled rather than left to fail: a blocked telemetry
+  # call would put a confusing network error in an author's build log for
+  # something they never asked for.
+  ASTRO_TELEMETRY_DISABLED: "1"
+
+steps:
+  install:
+    # `npm ci` needs a lockfile and is the right command when there is one:
+    # it installs exactly what was committed, which is what SPEC 18.13's
+    # fragment-cache determinism depends on. A repository without one still
+    # builds, from a resolution made at build time - noted as the case that
+    # misses the cache rather than refused.
+    - |
+      if [ -f package-lock.json ]; then
+        npm ci --no-audit --no-fund --loglevel=error
+      else
+        npm install --no-audit --no-fund --no-package-lock --loglevel=error
+      fi
+
+formats:
+  html:
+    - npx --no-install astro build --outDir "$DOCUP_OUTPUT/html"
+
+determinism: >-
+  Deterministic for a committed lockfile. Astro emits content-hashed assets
+  and no build timestamp; the hashes move with the dependency tree, so `npm
+  ci` against a committed lockfile is what the fragment cache depends on.

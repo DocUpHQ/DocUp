@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+
+key: mkdocs
+name: MkDocs
+image: mkdocs
+
+detect:
+  - mkdocs.yml
+  - mkdocs.yaml
+
+configuration:
+  key: mkdocs
+  required: true
+  candidates:
+    - mkdocs.yml
+    - mkdocs.yaml
+
+strict_flag: "--strict"
+
+environment:
+  LANG: C.UTF-8
+  PYTHONDONTWRITEBYTECODE: "1"
+
+steps:
+  create_environment: []
+  install: []
+
+formats:
+  html:
+    - >-
+      mkdocs build
+      --config-file "$DOCUP_CONFIGURATION"
+      --site-dir "$DOCUP_OUTPUT/html"
+      $DOCUP_STRICT
+
+determinism: >-
+  Deterministic for a fixed theme and plugin set. mkdocs-material's
+  `git-revision-date-localized` plugin reads git history, which a `.git`-less
+  checkout (SPEC 8.5.7 removes it before the build stage) makes unavailable -
+  that plugin fails rather than varying, which is the better of the two.

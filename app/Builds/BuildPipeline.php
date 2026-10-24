@@ -10,9 +10,12 @@ namespace App\Builds;
 use App\Artifacts\ArtifactStore;
 use App\Artifacts\Publisher;
 use App\Artifacts\PublishOutcome;
+use App\Artifacts\TarArchiveWriter;
 use App\Audit\ActorType;
 use App\Audit\Audit;
 use App\Builds\Admission\Dispatcher;
+use App\Builds\Fragments\FragmentCache;
+use App\Builds\Fragments\FragmentDigest;
 use App\Builds\Log\BuildLog;
 use App\Builds\Log\BuildLogAppended;
 use App\Builds\Log\BuildLogArchive;
@@ -20,6 +23,15 @@ use App\Builds\Log\LogLine;
 use App\Builds\Runner\RunOutcome;
 use App\Builds\Runner\Spool;
 use App\Builds\Sandbox\SandboxPolicy;
+use App\Builds\Toolchain\ToolchainPlan;
+use App\Config\ConfigDiscovery;
+use App\Config\ConfigParser;
+use App\Config\ConfigRefused;
+use App\Config\ConfigRejection;
+use App\Config\DocupConfig;
+use App\Config\HtmlContext;
+use App\Config\ShellSemantics;
+use App\Config\YamlGate;
 use App\Credentials\CredentialVault;
 use App\Credentials\SecretRedactor;
 use App\Models\Build;
@@ -65,9 +77,11 @@ final class BuildPipeline
         ?Dispatcher $dispatcher = null,
         ?BuildLogArchive $archive = null,
         private readonly BuildGovernor $governor = new BuildGovernor,
+        ?FragmentCache $fragments = null,
     ) {
         $this->policy = $policy ?? SandboxPolicy::fromConfig();
         $this->dispatcher = $dispatcher ?? Dispatcher::fromConfig();
+        $this->fragments = $fragments ?? new FragmentCache;
 
         /*
          * Resolved from the container, not constructed: §11.4's
@@ -97,6 +111,12 @@ final class BuildPipeline
 
     /** The build being run, so the cancel check knows which row to read. */
     private ?Build $running = null;
+
+    /** §8.4.6's scoped variables, resolved once per build. See {@see resolveBaseEnvironment()}. */
+    private ?BuildEnvironment $baseEnvironment = null;
+
+    /** §8.5.19's cache. One object, because it is the only reader of `fragments`. */
+    private readonly FragmentCache $fragments;
 
     /**
      * 🛑 Resolved once per pipeline rather than read per stage.
@@ -275,8 +295,9 @@ final class BuildPipeline
             // Recorded against the step that produced it, after the fact: the
             // work happened above, because its result decides whether there
             // is a build to record it against at all.
-            $this->stage($recorder, $steps, Stage::Plan, function () use ($build, $plan, $source, $repository): void {
+            $this->stage($recorder, $steps, Stage::Plan, function () use ($build, $plan, $source, $repository, $component): void {
                 $this->recordPlan($build, $plan, $source, $repository);
+                $this->resolveBaseEnvironment($component, $repository, $plan);
             });
 
             $fetch = $this->stage($recorder, $steps, Stage::Fetch, fn (): RunOutcome => $this->fetch(
@@ -288,37 +309,101 @@ final class BuildPipeline
                 $waitSeconds,
             ));
 
-            $this->stage($recorder, $steps, Stage::ValidateConfig, function () use ($build, $fetch, $plan): void {
-                $this->validateConfig($build, $fetch, $plan);
+            /*
+             * The §8.4 resolution: the file, the schema, the preset and the
+             * two scripts. Captured by reference because every stage after
+             * this one is a function of it and PHP closures bind by value.
+             */
+            $toolchain = null;
+
+            $this->stage($recorder, $steps, Stage::ValidateConfig, function () use ($build, $fetch, $plan, $repository, &$toolchain): void {
+                $toolchain = $this->validateConfig($build, $fetch, $plan, $repository);
             });
 
             /*
-             * 🛑 Skipped, honestly. §8.5.14 requires images to be pre-baked,
-             * so in Phase 06 there is nothing to install and the stage has no
-             * work — and `skipped` with a reason says that, where a green
-             * `succeeded` would claim a dependency install happened. Phase 09's
-             * `python.install` is what gives this stage something to do.
+             * `stage()` rethrows anything the closure threw, so reaching
+             * here means it returned — but the binding is by reference and
+             * nothing in the type system says so. Thrown rather than
+             * asserted: `assert()` compiles out under
+             * `zend.assertions=-1`, which is the production setting, so the
+             * one environment where a null would do real damage is the one
+             * where the check would not run.
              */
-            $recorder->skip($steps[Stage::Environment->value], 'skipped.toolchain_prebaked');
-
-            $this->stage($recorder, $steps, Stage::Build, fn (): RunOutcome => $this->build(
-                $build,
-                $component,
-                $repository,
-                $plan,
-                $waitSeconds,
-            ));
+            if (! $toolchain instanceof ToolchainPlan) {
+                throw new \LogicException('validate_config returned no toolchain (§8.4)');
+            }
 
             /*
-             * 🛑 The HEX form, which is what the run specification carried.
-             * `getRawOriginal('id')` is the raw 16 bytes (§9.1.1), and using
-             * it here built a filename that could never match the one the
-             * runner wrote — so a build that had succeeded and produced a
-             * 2 MB tar was reported as `contract.no_output_directory`, which
-             * is the one failure identifier guaranteed to send an author
-             * looking at their own `mkdocs.yml`.
+             * 🛑 §8.5.25's component variables, read once and never during
+             * `fetch`. A fork build gets nothing at all — "withheld entirely
+             * from fork and pull-request builds regardless of the `public`
+             * flag".
              */
-            $archive = $this->spool->output($buildHex.'-build');
+            $variables = ComponentEnvironment::forComponent(
+                $component,
+                $build->buildRequest?->from_fork === true,
+            );
+
+            $fragment = $this->fragmentFor($plan, $toolchain, $variables);
+            $cached = $this->fragments->lookup($repository->id, $fragment->bytes());
+
+            if ($variables->makesFragmentUncacheable()) {
+                // 🛑 §8.5.19: a configuration that referenced a secret may not
+                // be served from the cache either, so the hit is discarded
+                // rather than merely not recorded.
+                $cached = null;
+            }
+
+            if ($cached instanceof Build) {
+                /*
+                 * 🛑 §8.5.19: "A cache hit skips the environment and build
+                 * stages entirely — this is what makes a shared API
+                 * repository feeding 40 projects affordable." Those two and
+                 * no others: `collect`, `store` and `publish` still run,
+                 * because this version needs its own artifacts and §8.21.6
+                 * allows exactly one way to produce them.
+                 */
+                $recorder->skip($steps[Stage::Environment->value], 'skipped.fragment_cache_hit');
+                $recorder->skip($steps[Stage::Build->value], 'skipped.fragment_cache_hit');
+
+                $this->narrate('fragment cache hit: reusing build '.bin2hex($cached->id).' (§8.5.19)');
+                $this->fragments->recordHit($build, $repository->id, $fragment->bytes());
+
+                $archive = $this->rehydrate($cached, $buildHex);
+            } else {
+                $this->runEnvironmentStage($recorder, $steps, $build, $toolchain, $variables, $waitSeconds);
+
+                $this->stage($recorder, $steps, Stage::Build, fn (): RunOutcome => $this->build(
+                    $build,
+                    $component,
+                    $repository,
+                    $plan,
+                    $toolchain,
+                    $variables,
+                    $waitSeconds,
+                ));
+
+                /*
+                 * 🛑 The HEX form, which is what the run specification
+                 * carried. `getRawOriginal('id')` is the raw 16 bytes
+                 * (§9.1.1), and using it here built a filename that could
+                 * never match the one the runner wrote — so a build that had
+                 * succeeded and produced a 2 MB tar was reported as
+                 * `contract.no_output_directory`, which is the one failure
+                 * identifier guaranteed to send an author looking at their
+                 * own `mkdocs.yml`.
+                 */
+                $archive = $this->spool->output($buildHex.'-build');
+
+                $this->fragments->remember(
+                    $build,
+                    $repository->id,
+                    $fragment->bytes(),
+                    cacheable: ! $variables->makesFragmentUncacheable(),
+                );
+
+                $this->fragments->link($build, $repository->id, $fragment->bytes(), wasHit: false);
+            }
 
             $this->stage($recorder, $steps, Stage::Collect, function () use ($archive): void {
                 if (! is_file($archive) || filesize($archive) === 0) {
@@ -577,13 +662,96 @@ final class BuildPipeline
         $build->forceFill(['commit_sha' => $plan->sources[0]['commit_sha']])->save();
     }
 
-    /** §8.5.7's credential-free fetch, as a runner job. */
+    /**
+     * §8.5.7's credential-free fetch, as one or two runner jobs.
+     *
+     * 🛑 **Two passes, and §8.4.11 is the reason.** The `sparse` key decides
+     * what to check out and lives inside the file being checked out, so the
+     * only ordering in which a declarative sparse key can affect the build
+     * that declares it is: clone without a working tree, read the four §8.4.1
+     * candidates out of the object store, parse them **in this process**
+     * (§8.4.9's "outside any sandbox"), then check out. The clone happens
+     * once; the second pass is a container start against the workspace the
+     * first left behind.
+     *
+     * 🛑 **The pre-parse here cannot fail the build.** A configuration that
+     * does not parse is a `validate_config` failure with its own identifier
+     * and its own step row; swallowing it here and letting that stage say so
+     * is what keeps `fetch` a statement about the source and nothing else.
+     */
     private function fetch(
         Build $build,
         Repository $repository,
         ComponentSource $source,
         string $commitSha,
         string $ref,
+        ?int $waitSeconds,
+    ): RunOutcome {
+        $probe = $this->fetchPass($build, $repository, $source, $ref, 'probe', [], $waitSeconds);
+
+        $sparse = $this->sparsePatternsFrom($probe);
+
+        $outcome = $this->fetchPass($build, $repository, $source, $ref, 'checkout', $sparse, $waitSeconds);
+
+        if ($sparse !== []) {
+            $this->narrate('sparse checkout: '.implode(' ', $sparse).' (§8.4.11)');
+        }
+
+        $this->recordFetchFacts($build, $outcome, $commitSha);
+
+        return $outcome;
+    }
+
+    /**
+     * §8.4.11's patterns, from a configuration nothing has validated yet.
+     *
+     * Deliberately forgiving: anything that is not a clean parse yielding a
+     * `sparse` list means no narrowing, and `validate_config` will report
+     * whatever was actually wrong. The one thing this must not do is throw.
+     *
+     * @return list<string>
+     */
+    private function sparsePatternsFrom(RunOutcome $probe): array
+    {
+        $bytes = $this->configBytesFrom($probe);
+
+        if ($bytes === null) {
+            return [];
+        }
+
+        try {
+            return ConfigParser::parse($bytes, 'probe')->sparse();
+        } catch (ConfigRefused) {
+            return [];
+        }
+    }
+
+    /** The configuration file's bytes as the fetcher carried them, or null. */
+    private function configBytesFrom(RunOutcome $outcome): ?string
+    {
+        $encoded = $outcome->facts['config_b64'] ?? null;
+
+        if (! is_string($encoded) || $encoded === '') {
+            return null;
+        }
+
+        $decoded = base64_decode($encoded, true);
+
+        return $decoded === false ? null : $decoded;
+    }
+
+    /**
+     * One pass of the fetcher.
+     *
+     * @param  list<string>  $sparse
+     */
+    private function fetchPass(
+        Build $build,
+        Repository $repository,
+        ComponentSource $source,
+        string $ref,
+        string $mode,
+        array $sparse,
         ?int $waitSeconds,
     ): RunOutcome {
         $buildId = bin2hex($build->id);
@@ -607,6 +775,8 @@ final class BuildPipeline
                 $ref,
                 '/workspace/source',
                 $source->source_path === '' ? '.' : $source->source_path,
+                $mode,
+                ...$sparse,
             ],
             environment: [],
             volume: BuildConfig::string('volume_prefix', 'docup-build-').$buildId,
@@ -623,11 +793,38 @@ final class BuildPipeline
              */
             egress: $this->policy->egressFor(Stage::Fetch),
             acceptsStdin: true,
+
+            /*
+             * 🛑 The two §8.4.11 passes get two job identifiers. Sharing one
+             * meant the second pass read the first's leftover result the
+             * moment it was submitted and returned it as its own — so the
+             * checkout never ran, the worktree stayed empty, and the
+             * generator failed on a missing configuration file that looked
+             * exactly like the author's mistake. See
+             * {@see RunSpecification::$pass}.
+             */
+            pass: $mode,
         );
 
         $outcome = $this->dispatch($spec, $this->credentialFor($repository, $build), $waitSeconds);
 
         if (! $outcome->succeeded()) {
+            /*
+             * 🛑 §8.4.11: exit 64 is the fetcher saying sparse checkout was
+             * requested and narrowed nothing — "MUST fail loudly rather than
+             * silently falling back to a full clone". Classed `config`
+             * rather than `source`, because the patterns came from the
+             * author's file and the author is who can fix it.
+             */
+            if ($outcome->exitCode === 64) {
+                throw BuildFailure::of(
+                    FailureClass::Config,
+                    ConfigRejection::SparseCheckoutFailed->value,
+                    Stage::Fetch,
+                    $outcome->exitCode,
+                );
+            }
+
             throw BuildFailure::of(
                 FailureClass::tryFrom((string) $outcome->failureClass) ?? FailureClass::Source,
                 $outcome->failureReason ?? 'clone_failed',
@@ -635,8 +832,6 @@ final class BuildPipeline
                 $outcome->exitCode,
             );
         }
-
-        $this->recordFetchFacts($build, $outcome, $commitSha);
 
         return $outcome;
     }
@@ -678,13 +873,28 @@ final class BuildPipeline
     /**
      * §8.4.9's configuration read, outside any sandbox and under hard caps.
      *
-     * Phase 06 needs only enough to know the project is MkDocs and to digest
-     * the file for §8.5.2; the full contract is §8.4 and arrives in Phase 09.
-     * The fetcher reports what it found, so nothing here opens an archive or
-     * runs a parser over attacker-controlled bytes beyond a bounded YAML read.
+     * > "The system MUST parse configuration **outside any sandbox** under
+     * > hard caps: ≤256 KiB, nesting depth ≤32, YAML aliases disabled, single
+     * > document, validated against a published JSON Schema."
+     *
+     * 🛑 **This method runs in the worker, which holds the database
+     * credentials and the `APP_KEY`, and that is the specified place.**
+     * {@see Stage::executesRepositoryCode()} answers false for this stage:
+     * a YAML parser is not an execution engine, and the caps are what make
+     * the statement true rather than hopeful — {@see YamlGate}
+     * refuses the bytes before {@see ConfigParser} builds anything from them.
+     *
+     * Returns the resolved §11.4 toolchain, because every stage after this
+     * one is a function of it.
+     *
+     * @throws BuildFailure
      */
-    private function validateConfig(Build $build, RunOutcome $fetch, BuildPlan $plan): void
-    {
+    private function validateConfig(
+        Build $build,
+        RunOutcome $fetch,
+        BuildPlan $plan,
+        Repository $repository,
+    ): ToolchainPlan {
         $digest = is_string($fetch->facts['config_digest'] ?? null)
             ? $fetch->facts['config_digest']
             : hash('sha256', '');
@@ -715,9 +925,326 @@ final class BuildPipeline
             'plan_digest' => $complete->digestBytes(),
         ])->save();
 
-        if (($fetch->facts['config_found'] ?? null) === false) {
-            throw BuildFailure::of(FailureClass::Config, 'no_mkdocs_configuration', Stage::ValidateConfig);
+        try {
+            return $this->resolveToolchain($build, $fetch, $plan, $repository);
+        } catch (ConfigRefused $refused) {
+            /*
+             * 🛑 The author reads the sentence, the operator's alert reads
+             * the identifier, and neither reads the other's. `userMessage()`
+             * appends the offending key — a key, never a value, because the
+             * message goes into a log whose redaction has not yet seen this
+             * file (see {@see ConfigRefused}).
+             */
+            $this->narrate($refused->userMessage());
+
+            throw BuildFailure::of(
+                FailureClass::Config,
+                $refused->rejection->value,
+                Stage::ValidateConfig,
+            );
         }
+    }
+
+    /**
+     * The §8.4 file, the §11.4 preset and the two scripts.
+     *
+     * @throws ConfigRefused
+     */
+    private function resolveToolchain(
+        Build $build,
+        RunOutcome $fetch,
+        BuildPlan $plan,
+        Repository $repository,
+    ): ToolchainPlan {
+        if (($fetch->facts['config_oversize'] ?? null) === true) {
+            // The fetcher refused to read it, so there are no bytes to
+            // refuse here; the cap is §8.4.9's and the identifier is the
+            // same one `YamlGate` would have produced.
+            throw ConfigRefused::of(ConfigRejection::TooLarge, 'over '.ConfigRejection::MAX_BYTES.' bytes');
+        }
+
+        $bytes = $this->configBytesFrom($fetch);
+        $filename = is_string($fetch->facts['config_file'] ?? null) ? $fetch->facts['config_file'] : '';
+
+        $config = $bytes === null || $filename === ''
+            ? DocupConfig::absent()
+            : ConfigParser::parse($bytes, $filename);
+
+        if ($config->isPresent()) {
+            $this->narrate('configuration: '.$filename
+                .(ConfigDiscovery::isCompatibilityName($filename) ? ' (Read the Docs compatibility name, §20.5)' : ''));
+        }
+
+        /*
+         * 🛑 §8.5.14: images are pre-baked and a build container has no
+         * capabilities and a read-only root, so `build.apt_packages` cannot
+         * be installed by anybody. Said at the TOP of the log rather than
+         * left for the generator to fail over a missing binary thirty
+         * seconds later — §8.4.2 preserves the key for compatibility, and
+         * refusing the build outright would reject a great many repositories
+         * that list packages they do not actually need.
+         */
+        if ($config->aptPackages() !== []) {
+            $this->narrate(
+                'build.apt_packages is accepted but NOT installed: build images are pre-baked (§8.5.14) '
+                .'and run with no capabilities, so no package manager can run inside one. Listed: '
+                .implode(', ', $config->aptPackages()),
+            );
+        }
+
+        $component = $build->component;
+
+        $toolchain = ToolchainPlan::resolve(
+            config: $config,
+            sourcePath: $plan->sources[0]['source_path'],
+            presentFiles: $this->filesFrom($fetch),
+            htmlContext: HtmlContext::fromCloneUrl(
+                $repository->clone_url,
+                $plan->sources[0]['ref'],
+                dirname('/'.ltrim((string) $config->generatorConfiguration(
+                    $config->declaredToolchain() ?? 'mkdocs',
+                ), '/')),
+            ),
+            semantics: ShellSemantics::fromStored($component?->shell_semantics),
+        );
+
+        $this->narrate('toolchain: '.$toolchain->preset->name
+            .($config->declaredToolchain() === null && ! $config->hasCommands()
+                ? ' (inferred from the checkout; name it with `toolchain: '.$toolchain->preset->key.'` to be explicit)'
+                : '')
+            .($toolchain->semantics === ShellSemantics::Legacy
+                ? ' — 🛑 legacy shell semantics: a failing command will NOT fail the build (§8.4.10)'
+                : ''));
+
+        return $toolchain;
+    }
+
+    /**
+     * The shallow file list the fetcher reported, for preset detection.
+     *
+     * @return list<string>
+     */
+    private function filesFrom(RunOutcome $fetch): array
+    {
+        $files = [];
+
+        foreach (is_array($fetch->facts['files'] ?? null) ? $fetch->facts['files'] : [] as $file) {
+            if (is_string($file)) {
+                $files[] = $file;
+            }
+        }
+
+        return $files;
+    }
+
+    /**
+     * §8.5.19's digest for this build.
+     *
+     * 🛑 The repository is not an input — it is the lookup scope, and
+     * {@see FragmentDigest} explains why that
+     * distinction is kept visible rather than folded into a hash.
+     */
+    private function fragmentFor(
+        BuildPlan $plan,
+        ToolchainPlan $toolchain,
+        ComponentEnvironment $variables,
+    ): FragmentDigest {
+        $image = BuildConfig::map('images')[$toolchain->preset->image] ?? [];
+        $imageDigest = is_array($image) && is_string($image['digest'] ?? null) ? $image['digest'] : null;
+
+        return new FragmentDigest(
+            sourceDigest: FragmentDigest::sourceDigestFor(
+                $plan->sources[0]['commit_sha'],
+                $plan->sources[0]['source_path'],
+            ),
+            envDigest: FragmentDigest::envDigestFor(
+                $toolchain->preset->image,
+                $imageDigest,
+                $toolchain->preset->key,
+            ),
+            configDigest: FragmentDigest::configDigestFor(
+                $toolchain->config->digest,
+                $toolchain->semantics->value,
+                'agnostic',
+                $toolchain->configuration,
+            ),
+            publicEnv: $variables->public,
+        );
+    }
+
+    /**
+     * §8.5.6's `environment` stage: install what the build needs.
+     *
+     * 🛑 Skipped rather than run empty when there is nothing to install.
+     * Phase 06 recorded `skipped.toolchain_prebaked` here and that was
+     * honest; a preset with no install step and a repository with no
+     * `python.install` and no hooks is still that case, and a container
+     * started to run `true` is a second of every build spent proving it.
+     *
+     * @param  array<string, BuildStep>  $steps
+     */
+    private function runEnvironmentStage(
+        StepRecorder $recorder,
+        array $steps,
+        Build $build,
+        ToolchainPlan $toolchain,
+        ComponentEnvironment $variables,
+        ?int $waitSeconds,
+    ): void {
+        $script = $toolchain->environmentScript();
+
+        if ($script === null) {
+            $recorder->skip($steps[Stage::Environment->value], 'skipped.nothing_to_install');
+
+            return;
+        }
+
+        $this->stage($recorder, $steps, Stage::Environment, fn (): RunOutcome => $this->environment(
+            $build,
+            $toolchain,
+            $variables,
+            $script,
+            $waitSeconds,
+        ));
+    }
+
+    /** The install, with the §8.5.9 allowlist and no credentials. */
+    private function environment(
+        Build $build,
+        ToolchainPlan $toolchain,
+        ComponentEnvironment $variables,
+        string $script,
+        ?int $waitSeconds,
+    ): RunOutcome {
+        $buildId = bin2hex($build->id);
+
+        $spec = new RunSpecification(
+            buildId: $buildId,
+            stage: Stage::Environment,
+            imageKey: $toolchain->preset->image,
+            command: [],
+            environment: array_merge(
+                $this->containerEnvironment($toolchain),
+                $variables->forStage(Stage::Environment),
+            ),
+            volume: BuildConfig::string('volume_prefix', 'docup-build-').$buildId,
+            workdir: $toolchain->sourceDir,
+            timeoutSeconds: Stage::Environment->timeoutSeconds(),
+            egress: $this->policy->egressFor(Stage::Environment),
+            script: $script,
+            shell: $toolchain->semantics->shell(),
+        );
+
+        $outcome = $this->dispatch($spec, null, $waitSeconds);
+
+        if (! $outcome->succeeded()) {
+            throw BuildFailure::of(
+                FailureClass::tryFrom((string) $outcome->failureClass) ?? FailureClass::User,
+                $outcome->failureReason ?? 'dependency_install_failed',
+                Stage::Environment,
+                $outcome->exitCode,
+            );
+        }
+
+        return $outcome;
+    }
+
+    /**
+     * §8.4.6's scoped variables plus §8.4.7's `html_context`, for a container.
+     *
+     * @return array<string, string>
+     */
+    private function containerEnvironment(ToolchainPlan $toolchain): array
+    {
+        $base = $this->baseEnvironment ?? throw new \LogicException(
+            'the build environment is resolved in run(), before any container stage',
+        );
+
+        return array_merge($base->forContainer(), $toolchain->environment());
+    }
+
+    /**
+     * §8.4.6's scoped variables for this build, resolved once.
+     *
+     * 🛑 The clone URL is stripped of userinfo before it goes anywhere near
+     * a container. `READTHEDOCS_GIT_CLONE_URL` is read by `conf.py` files
+     * and printed into build logs, and an operator's `https://x:TOKEN@host/…`
+     * remote would be in both.
+     */
+    private function resolveBaseEnvironment(Component $component, Repository $repository, BuildPlan $plan): void
+    {
+        $this->baseEnvironment = new BuildEnvironment(
+            productionDomain: is_string(config('docup.origins.docs')) ? config('docup.origins.docs') : '',
+            componentKey: $component->key,
+            cloneUrl: self::withoutUserinfo($repository->clone_url),
+            refIdentifier: $plan->sources[0]['ref'],
+            commitSha: $plan->sources[0]['commit_sha'],
+            versionLabel: $plan->sources[0]['ref'],
+        );
+    }
+
+    /** `https://user:pass@host/x` becomes `https://host/x`. */
+    private static function withoutUserinfo(string $url): string
+    {
+        return (string) preg_replace('#^([a-z][a-z0-9+.-]*://)[^/@]*@#i', '$1', $url);
+    }
+
+    /**
+     * Rebuild a cached fragment's tree into an archive the §8.21.6 path can
+     * ingest.
+     *
+     * 🛑 Through `PublishSource`, not around it. §8.21.6: "The built-in
+     * runner MUST be implemented as the **first consumer** of this path, not
+     * a privileged special case." A cache hit that wrote into the store
+     * directly would be exactly the second, privileged route that
+     * requirement exists to forbid — and it would skip the §8.8.2
+     * validations and the §8.4.5 contract check with it.
+     */
+    private function rehydrate(Build $cached, string $buildHex): string
+    {
+        $store = app(ArtifactStore::class);
+
+        // The RAW 16 bytes, not the hex. `prefixFor()` renders canonical
+        // UUID text and is ADR 0006's presentation boundary; handing it hex
+        // throws rather than producing a wrong key, which is the right way
+        // round but still a thing to get right at the call site.
+        $prefix = $store->prefixFor($cached->id);
+        $keys = $store->list($prefix);
+
+        if ($keys === []) {
+            throw BuildFailure::of(FailureClass::Infra, 'fragment_artifacts_missing', Stage::Collect);
+        }
+
+        $path = $this->spool->output($buildHex.'-build');
+        $entries = [];
+
+        foreach ($keys as $key) {
+            $relative = ltrim(substr($key, strlen($prefix)), '/');
+
+            /*
+             * Only the published tree. The cached build's own manifest and
+             * provenance are facts about *that* build and are re-emitted for
+             * this one by the ingest — copying them would attribute this
+             * build's output to the other build's plan.
+             */
+            if (! str_starts_with($relative, 'html/')) {
+                continue;
+            }
+
+            $contents = $store->get($key);
+
+            if ($contents !== null) {
+                $entries[$relative] = $contents;
+            }
+        }
+
+        ksort($entries);
+
+        TarArchiveWriter::write($path, $entries);
+
+        $this->narrate('reused '.count($entries).' files from the cached fragment');
+
+        return $path;
     }
 
     /** The generator, with no network and no credentials. */
@@ -726,31 +1253,35 @@ final class BuildPipeline
         Component $component,
         Repository $repository,
         BuildPlan $plan,
+        ToolchainPlan $toolchain,
+        ComponentEnvironment $variables,
         ?int $waitSeconds,
     ): RunOutcome {
         $buildId = bin2hex($build->id);
-        $sourcePath = trim($plan->sources[0]['source_path'], '/');
-        $workdir = '/workspace/source'.($sourcePath === '' ? '' : '/'.$sourcePath);
-
-        $environment = new BuildEnvironment(
-            productionDomain: is_string(config('docup.origins.docs')) ? config('docup.origins.docs') : '',
-            componentKey: $component->key,
-            cloneUrl: $repository->clone_url,
-            refIdentifier: $plan->sources[0]['ref'],
-            commitSha: $plan->sources[0]['commit_sha'],
-            versionLabel: $plan->sources[0]['ref'],
-        );
 
         $spec = new RunSpecification(
             buildId: $buildId,
             stage: Stage::Build,
-            imageKey: 'mkdocs',
-            command: ['mkdocs', 'build', '--strict', '--site-dir', BuildEnvironment::OUTPUT_PATH.'/html'],
+
+            /*
+             * 🛑 Still a KEY into §8.5.14's allowlist, and still never a
+             * reference. Phase 06 hard-coded `mkdocs`; the preset now
+             * chooses, and `ToolchainPresets` only loads from the shipped
+             * directory — so "a new generator is a data file" (§11.4) has
+             * not become "a new image is a YAML value".
+             */
+            imageKey: $toolchain->preset->image,
+
+            // Empty: the commands are in the script file the runner writes.
+            command: [],
 
             // 🛑 §8.7.10: the project scope is absent, not empty.
-            environment: $environment->forContainer(),
+            environment: array_merge(
+                $this->containerEnvironment($toolchain),
+                $variables->forStage(Stage::Build),
+            ),
             volume: BuildConfig::string('volume_prefix', 'docup-build-').$buildId,
-            workdir: $workdir,
+            workdir: $toolchain->sourceDir,
             timeoutSeconds: Stage::Build->timeoutSeconds(),
 
             /*
@@ -763,6 +1294,8 @@ final class BuildPipeline
             egress: $this->policy->egressFor(Stage::Build),
             exportPath: BuildEnvironment::OUTPUT_PATH,
             releaseWorkspace: true,
+            script: $toolchain->buildScript(),
+            shell: $toolchain->semantics->shell(),
         );
 
         $outcome = $this->dispatch($spec, null, $waitSeconds);

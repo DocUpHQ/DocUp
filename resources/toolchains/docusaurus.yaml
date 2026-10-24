@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+
+key: docusaurus
+name: Docusaurus
+image: node
+
+detect:
+  - docusaurus.config.js
+  - docusaurus.config.ts
+  - docusaurus.config.mjs
+
+configuration:
+  key: docusaurus
+  required: false
+  candidates:
+    - docusaurus.config.js
+    - docusaurus.config.ts
+    - docusaurus.config.mjs
+
+environment:
+  # npm writes a progress bar, a funding notice and an update check to a
+  # non-tty; none of it is useful in a build log and the update check is an
+  # outbound request to a host that is not on SPEC 8.5.9's allowlist.
+  NPM_CONFIG_FUND: "false"
+  NPM_CONFIG_AUDIT: "false"
+  NPM_CONFIG_UPDATE_NOTIFIER: "false"
+  CI: "true"
+
+steps:
+  # 🛑 This is the stage SPEC 8.5.9's npm allowlist entry exists for, and the
+  # first toolchain that needs it. Docusaurus is ESM, and ESM resolution
+  # ignores NODE_PATH, so a pre-baked global install cannot serve a repository
+  # whose plugins and theme live in its own node_modules. The install runs in
+  # the sandbox, through the CONNECT proxy, with the nftables backstop behind
+  # it - which is exactly the containment Phase 07 built.
+  install:
+    # `npm ci` needs a lockfile and is the right command when there is one:
+    # it installs exactly what was committed, which is what SPEC 18.13's
+    # fragment-cache determinism depends on. A repository without one still
+    # builds, from a resolution made at build time - noted as the case that
+    # misses the cache rather than refused.
+    - |
+      if [ -f package-lock.json ]; then
+        npm ci --no-audit --no-fund --loglevel=error
+      else
+        npm install --no-audit --no-fund --no-package-lock --loglevel=error
+      fi
+
+formats:
+  html:
+    - npx --no-install docusaurus build --out-dir "$DOCUP_OUTPUT/html"
+
+determinism: >-
+  Deterministic for a committed lockfile. Docusaurus emits no build timestamp
+  in its default theme, but its asset filenames are content-hashed, so a
+  dependency float changes every hash - `npm ci` against a committed
+  package-lock.json is what makes a second build identical. A repository
+  without a lockfile will miss the fragment cache on most builds.

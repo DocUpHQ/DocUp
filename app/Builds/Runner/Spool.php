@@ -68,7 +68,7 @@ final readonly class Spool
     /** `<build>-<stage>`: one job per stage of a build, and collisions are a bug. */
     public function jobId(RunSpecification $spec): string
     {
-        return $spec->buildId.'-'.$spec->stage->value;
+        return $spec->buildId.'-'.$spec->stage->value.($spec->pass === '' ? '' : '-'.$spec->pass);
     }
 
     public function inbox(string $jobId): string

@@ -19,7 +19,9 @@
         "inertiajs/inertia-laravel": "^3.0",
         "laravel/fortify": "^1.41",
         "laravel/framework": "^13.17",
-        "laravel/tinker": "^3.0"
+        "laravel/tinker": "^3.0",
+        "opis/json-schema": "^2.4",
+        "symfony/yaml": "^8.1"
     },
     "require-dev": {
         "cyclonedx/cyclonedx-php-composer": "^6.2",
@@ -33,8 +35,7 @@
         "pestphp/pest": "^5.0",
         "pestphp/pest-plugin-laravel": "^5.0",
         "phpunit/phpunit": "^13.4",
-        "rector/rector": "^2.0",
-        "symfony/yaml": "^8.1"
+        "rector/rector": "^2.0"
     },
     "autoload": {
         "psr-4": {

@@ -9,6 +9,7 @@ namespace App\Builds;
 
 use App\Builds\Exceptions\RunSpecificationRefused;
 use App\Builds\Sandbox\EgressMode;
+use App\Config\ShellSemantics;
 
 /**
  * The typed run specification of §8.5.13.
@@ -91,9 +92,63 @@ final readonly class RunSpecification
 
         /** Destroy the per-build workspace afterwards, whatever the outcome. */
         public bool $releaseWorkspace = false,
+
+        /**
+         * 🛑 §8.4.10's build script, as **data written to a file** rather
+         * than as an argument.
+         *
+         * Phase 09 is the first stage whose commands come from a repository,
+         * and the two obvious ways to pass them are both wrong. Joining them
+         * into one argv element is refused outright by {@see assertValid()},
+         * which rejects a newline in any argument — deliberately, because an
+         * argument carrying a newline is how a line gets smuggled past
+         * anything that logs or filters per line. Passing them as many
+         * arguments would make argv itself repository-shaped, which is the
+         * opposite of §8.5.13's "fixed argv template".
+         *
+         * So the script crosses as its own field, the runner writes it into
+         * the build's workspace at {@see SCRIPT_PATH}, and argv becomes the
+         * **completely fixed** `[shell, SCRIPT_PATH]` — no repository string
+         * in it at all. That is strictly narrower than what Phase 06 shipped,
+         * where the generator's own flags were argv elements.
+         */
+        public ?string $script = null,
+
+        /** Which interpreter runs {@see $script}; §8.4.10's two modes. */
+        public string $shell = '/bin/bash',
+
+        /**
+         * 🛑 A discriminator for a stage that runs more than once.
+         *
+         * §8.5.13's spool addresses a job by `<build>-<stage>`, which was
+         * unique until §8.4.11 made `fetch` two passes — probe, then
+         * checkout. Two passes under one identifier share an inbox file, a
+         * result file and a live log, and the failure is silent in the worst
+         * way: the second pass reads the FIRST pass's leftover result the
+         * moment it is submitted, returns it as its own, and the build
+         * continues with a worktree nobody ever checked out. Measured in
+         * Phase 09, from two `pass=probe` lines in one build log.
+         *
+         * Empty for every stage that runs once, so their job identifiers —
+         * and the `<build>-build.tar` the publisher reads — are unchanged.
+         */
+        public string $pass = '',
     ) {
         $this->assertValid();
     }
+
+    /**
+     * Where the runner writes {@see $script} inside the container.
+     *
+     * Under the workspace because that is the one path that exists in both
+     * the runner's filesystem and the container's, at the same name (Phase
+     * 07's bind mount). A dot-directory so that a `cp -R` of the checkout
+     * does not sweep it into somebody's published site.
+     */
+    public const SCRIPT_PATH = '/workspace/.docup/build.sh';
+
+    /** 🛑 A script is a program, not a payload. 1 MiB is already absurd for one. */
+    public const MAX_SCRIPT_BYTES = 1048576;
 
     /**
      * @throws \InvalidArgumentException when any field could reach argv as a flag
@@ -174,6 +229,48 @@ final readonly class RunSpecification
             && (preg_match('#^/[A-Za-z0-9/_.-]*$#', $this->exportPath) !== 1 || str_contains($this->exportPath, '..'))) {
             throw new \InvalidArgumentException('exportPath must be an absolute path with no traversal');
         }
+
+        $this->assertScriptValid();
+    }
+
+    /**
+     * §8.4.10's script, which is the one field whose content is a repository's.
+     *
+     * 🛑 **A NUL is refused and a newline is not**, which is the exact
+     * opposite of the rule for argv and for the same underlying reason. A
+     * newline is what a shell script is made of; a NUL truncates the file at
+     * whatever writes it, so a script containing one is a script whose tail
+     * nobody has seen. The shell is checked against a two-member allowlist
+     * rather than a pattern, because it is the first argv element and
+     * {@see ShellSemantics} is the only thing that may choose it.
+     */
+    private function assertScriptValid(): void
+    {
+        if (! in_array($this->shell, ['/bin/bash', '/bin/sh'], true)) {
+            throw new \InvalidArgumentException('the shell must be /bin/bash or /bin/sh (§8.4.10)');
+        }
+
+        // The pass becomes part of a filename in the spool, so it is held to
+        // the same shape as every other value that does.
+        if ($this->pass !== '' && preg_match('/^[a-z][a-z0-9_]{0,31}$/', $this->pass) !== 1) {
+            throw new \InvalidArgumentException('a pass label must be lower_snake_case');
+        }
+
+        if ($this->script === null) {
+            return;
+        }
+
+        if ($this->stage === Stage::Fetch) {
+            throw new \InvalidArgumentException('the fetch stage runs no repository script (§8.5.7)');
+        }
+
+        if ($this->script === '' || strlen($this->script) > self::MAX_SCRIPT_BYTES) {
+            throw new \InvalidArgumentException('a build script must be between 1 and 1 MiB');
+        }
+
+        if (str_contains($this->script, "\0")) {
+            throw new \InvalidArgumentException('a build script may not contain a NUL byte');
+        }
     }
 
     /** @return array<string, mixed> */
@@ -193,6 +290,9 @@ final readonly class RunSpecification
             'accepts_stdin' => $this->acceptsStdin,
             'export_path' => $this->exportPath,
             'release_workspace' => $this->releaseWorkspace,
+            'script' => $this->script,
+            'shell' => $this->shell,
+            'pass' => $this->pass,
         ];
     }
 
@@ -231,6 +331,9 @@ final readonly class RunSpecification
             acceptsStdin: ($data['accepts_stdin'] ?? false) === true,
             exportPath: is_string($data['export_path'] ?? null) ? $data['export_path'] : null,
             releaseWorkspace: ($data['release_workspace'] ?? false) === true,
+            script: is_string($data['script'] ?? null) ? $data['script'] : null,
+            shell: is_string($data['shell'] ?? null) ? $data['shell'] : '/bin/bash',
+            pass: is_string($data['pass'] ?? null) ? $data['pass'] : '',
         );
     }
 
@@ -264,7 +367,7 @@ final readonly class RunSpecification
         $known = [
             'build_id', 'stage', 'image_key', 'command', 'environment', 'volume',
             'workdir', 'timeout_seconds', 'egress', 'read_only_root',
-            'accepts_stdin', 'export_path', 'release_workspace',
+            'accepts_stdin', 'export_path', 'release_workspace', 'script', 'shell', 'pass',
         ];
 
         $privilegeSeeking = [

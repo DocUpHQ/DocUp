@@ -97,6 +97,20 @@ arch()->preset()->laravel()
         // are also public contract — operators alert on the identifiers — so
         // they belong beside the code that produces them.
         'App\Builds',
+        // Phase 09, and the argument has not changed. phpstan-strict.neon
+        // raises app/Config to level 9 on §9.4's grounds — a type error in
+        // configuration parsing is a security bug rather than a crash, which
+        // is why `app/Config/README.md` has said so since Phase 01. Moving
+        // ConfigRejection to App\Enums would move it OUT of the namespace the
+        // higher bar covers, and its values are §8.1.11 public contract:
+        // `config.unknown_key` reaches an operator's alert rule, so it
+        // belongs beside the parser that produces it.
+        //
+        // ConfigRefused stays beside it for the reason the App\Egress note
+        // gives: it carries a ConfigRejection, so a shared App\Exceptions
+        // would import the configuration namespace into a namespace
+        // everything else depends on.
+        'App\Config',
     ]);
 
 arch()->preset()->strict()

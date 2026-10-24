@@ -148,4 +148,58 @@ final class GitSafetyTest extends TestCase
         $this->assertSame('true', $config['fetch.fsckObjects']);
         $this->assertSame('/dev/null', $config['core.hooksPath']);
     }
+
+    /**
+     * 🛑 The fetcher enforces exactly the policy this class describes.
+     *
+     * `deploy/fetch-entrypoint.sh` has claimed since Phase 06 that the two
+     * are "asserted equal by GitSafetyParityTest". They were not: no such
+     * test existed, and the claim sat in a comment for three phases. Written
+     * here in Phase 09, which is the phase that changed that file.
+     *
+     * The divergence it guards against is not cosmetic. The application
+     * validates a clone URL against one policy and the fetcher clones under
+     * another; a flag present in one and absent from the other means the
+     * check that passed was not the check that ran. `http.followRedirects`
+     * is the sharpest example — without it in the fetcher, a URL approved by
+     * `GitUrlPolicy` can 302 to one that would not have been.
+     *
+     * `credential.helper` is the one exemption, and it is a real difference
+     * rather than a drift: §8.5.7 makes the fetcher set it to a helper
+     * reading a file descriptor when a credential arrived, and to the empty
+     * string when none did. This class declares the empty default; the
+     * fetcher implements both branches, and both are checked below.
+     */
+    public function test_the_fetcher_enforces_the_same_configuration(): void
+    {
+        $script = (string) file_get_contents(base_path('deploy/fetch-entrypoint.sh'));
+
+        foreach (GitSafety::configuration() as $key => $value) {
+            if ($key === 'credential.helper') {
+                continue;
+            }
+
+            $this->assertStringContainsString(
+                '-c '.$key.'='.$value,
+                $script,
+                "deploy/fetch-entrypoint.sh does not set {$key}={$value}; §8.3.4's policy "
+                    .'must be the one the fetcher actually runs under',
+            );
+        }
+
+        // §8.5.7's two branches, both present.
+        $this->assertStringContainsString('-c "credential.helper=!cat $CRED_FILE"', $script);
+        $this->assertStringContainsString('-c credential.helper=', $script);
+
+        // And the environment half, which §8.3.4 cares about just as much:
+        // a `url.<base>.insteadOf` rule in a system or user config rewrites
+        // the remote AFTER it has been validated.
+        foreach (GitSafety::environment() as $name => $value) {
+            $this->assertStringContainsString(
+                'export '.$name.'='.$value,
+                $script,
+                'deploy/fetch-entrypoint.sh does not export '.$name,
+            );
+        }
+    }
 }
