@@ -451,6 +451,21 @@ jobs:
           echo "::error::migrations never succeeded"
           exit 1
 
+      # 🛑 SPEC 8.22.1, applied where it can actually take effect.
+      #
+      # The compose stack mounts these scripts for first initialisation, which
+      # happens against an EMPTY schema — so every statement naming a migrated
+      # table fails there and the entrypoint wrapper only keeps the container
+      # alive. This is the run that hardens the log, and it mirrors the
+      # baseline gate's own "Harden the audit log" step for the same reason:
+      # the script an operator applies is the script CI applies.
+      - name: Harden the audit log
+        run: |
+          set -euo pipefail
+          docker compose -f '${{ matrix.compose }}' exec -T \
+            -e MYSQL_PWD=docup-root db \
+            sh -c 'mysql -u root docup' < deploy/mysql/init/10-audit-append-only.sql
+
       - name: Wait for the edge to answer
         run: |
           set -euo pipefail
