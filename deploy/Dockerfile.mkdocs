@@ -41,7 +41,11 @@ RUN pip install --no-cache-dir \
 # shell without it however badly sphinx failed. A deliberate incompatibility
 # with Read the Docs is only worth having if it is reliably in force, so the
 # interpreter is installed rather than assumed.
-RUN apk add --no-cache bash \
+# 🛑 `zip` is here for SPEC 8.4.5's `htmlzip`, which is generator-agnostic:
+# the zip of the html tree this build already produced. The same package and
+# the same preset command in all four images, so the one format that does
+# not depend on the generator cannot quietly work for Sphinx alone.
+RUN apk add --no-cache bash zip \
  && bash -c 'set -euo pipefail'
 
 # 🛑 Never root, and never writable. The container also runs `--read-only`

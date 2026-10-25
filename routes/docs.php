@@ -6,8 +6,10 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\Serving\DocumentController;
+use App\Http\Controllers\Serving\DownloadController;
 use App\Http\Controllers\Serving\ProvenanceController;
 use App\Http\Middleware\RejectNonCanonicalPath;
+use App\Serving\OfflineFormat;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -77,6 +79,32 @@ foreach ($apexes as $index => $apex) {
                 ->where('docupHostLabel', '[a-z0-9]([a-z0-9-]*[a-z0-9])?')
                 ->where('build', '[0-9a-fA-F-]{36}')
                 ->name('docs.provenance.'.$index);
+
+            /*
+             * §7.3's `/_/downloads/...` — §8.4.5's offline formats.
+             *
+             * Before the catch-all for the same reason provenance is: `/_/`
+             * is reserved and unmountable, so the resolver refuses it and a
+             * route declared after `/{docupPath?}` would never be reached.
+             *
+             * 🛑 The format segment is constrained HERE as well as matched
+             * against {@see OfflineFormat} in the controller, and the
+             * duplication is deliberate. The router pattern means a request
+             * for `../../etc/passwd` never reaches PHP; the enum means a
+             * request that does reach PHP still cannot name a storage path.
+             * Either alone would be enough today and the pair survives
+             * someone relaxing one of them.
+             *
+             * `{language}` and `{version}` carry the same character classes
+             * §8.6.6 and §8.6.12 give them. A slug outside that set cannot
+             * exist, so a request carrying one is answered by the router.
+             */
+            Route::get('/_/downloads/{language}/{version}/{format}', DownloadController::class)
+                ->where('docupHostLabel', '[a-z0-9]([a-z0-9-]*[a-z0-9])?')
+                ->where('language', '[a-z]{2,3}(-[a-z0-9]{2,8})?')
+                ->where('version', '[a-z0-9][a-z0-9._-]{0,79}')
+                ->where('format', implode('|', OfflineFormat::values()))
+                ->name('docs.downloads.'.$index);
 
             /*
              * One route for every documentation path. SPEC 7.3's grammar is the

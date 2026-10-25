@@ -19,6 +19,7 @@ use App\Builds\Toolchain\ToolchainPresets;
 use App\Config\ConfigParser;
 use App\Config\HtmlContext;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Feature\Serving\DownloadServingTest;
 use Tests\Support\GeneratorFixtures;
 use Tests\Support\RequiresBuildImages;
 use Tests\TestCase;
@@ -100,6 +101,38 @@ final class GeneratorConformanceTest extends TestCase
     public function test_a_network_generator_builds_from_twelve_lines(string $toolchain): void
     {
         $this->assertGeneratorBuilds($toolchain);
+    }
+
+    /**
+     * 🛑 Phase 12's first exit criterion: "A Sphinx project yields PDF, ePub
+     * and zipped HTML at documented URLs".
+     *
+     * This is the *produces them* half. The *serves them* half is
+     * {@see DownloadServingTest}, which publishes the
+     * three files directly — the two halves are separated so a LaTeX
+     * failure and a header failure are different test names.
+     *
+     * 🛑 It runs the real toolchain in the real sandbox image, so it is a
+     * demonstration rather than a claim: `sphinx-build -b latex`, `latexmk`
+     * and `zip` all actually execute, and the assertion is on the bytes in
+     * the exported archive.
+     */
+    public function test_a_sphinx_project_yields_pdf_epub_and_zipped_html(): void
+    {
+        $this->assertGeneratorBuilds(
+            'sphinx',
+            GeneratorFixtures::sphinxWithOfflineFormats(),
+            [
+                // 🛑 The canonical leaves of §8.4.5 and §10.3. The preset
+                // writes these names itself, so the build log shows the
+                // contract; `ArtifactIngestor` enforces them regardless, for
+                // the builds that use `build.commands` and never run a
+                // preset at all.
+                'pdf/document.pdf',
+                'epub/document.epub',
+                'htmlzip/document.zip',
+            ],
+        );
     }
 
     /** @return iterable<string, array{string}> */
@@ -195,14 +228,18 @@ final class GeneratorConformanceTest extends TestCase
         );
     }
 
-    private function assertGeneratorBuilds(string $toolchain): void
+    /**
+     * @param  array<string, string>|null  $files  a fixture other than the toolchain's own
+     * @param  list<string>  $alsoExpect  further paths the output archive must carry
+     */
+    private function assertGeneratorBuilds(string $toolchain, ?array $files = null, array $alsoExpect = []): void
     {
         $preset = ToolchainPresets::get($toolchain);
         $image = $this->imageReferenceFor($preset->image);
 
         $this->requireBuildImages([$image]);
 
-        $files = GeneratorFixtures::all()[$toolchain];
+        $files ??= GeneratorFixtures::all()[$toolchain];
         $driver = new DockerRunnerDriver;
         $buildId = bin2hex(random_bytes(16));
         $volume = $driver->createWorkspace($buildId);
@@ -295,6 +332,14 @@ final class GeneratorConformanceTest extends TestCase
                 $this->archiveContains($archive, 'html/index.html'),
                 $toolchain.' produced no html/index.html in $DOCUP_OUTPUT (§8.4.5)',
             );
+
+            // §8.4.5's offline formats, where the caller asked for them.
+            foreach ($alsoExpect as $path) {
+                $this->assertTrue(
+                    $this->archiveContains($archive, $path),
+                    $toolchain.' produced no '.$path.' in $DOCUP_OUTPUT (§8.4.5)',
+                );
+            }
         } finally {
             $driver->destroyWorkspace($volume);
             @unlink(Spool::fromConfig()->output($buildId.'-build'));

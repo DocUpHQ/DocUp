@@ -571,6 +571,33 @@ jobs:
 
           docker pull -q busybox:stable
 
+      # 🛑 §8.5.14: "the default image — which carries a LaTeX distribution
+      # for PDF output — MUST stay under a stated compressed-size ceiling,
+      # declared in the image's own documentation and asserted in CI."
+      #
+      # The declaration is in deploy/Dockerfile.sphinx; this is the
+      # assertion. Measured the way a registry stores it — per-image gzip at
+      # the default level — rather than by `docker images`, which reports the
+      # uncompressed size and would make the ceiling mean something else.
+      #
+      # A failure here is not "make the number bigger". The number is what
+      # every Sphinx build pulls, including the ones that only wanted HTML,
+      # and raising it is a §9.4 gate change with the same rules as any
+      # other: propose the amendment, do not route around it.
+      - name: The Sphinx image is within its stated size ceiling
+        run: |
+          set -euo pipefail
+          ceiling=$((400 * 1024 * 1024))
+          actual=$(docker save docup/build-sphinx:1 | gzip -6 | wc -c)
+
+          printf 'sphinx image: %s bytes compressed (%s MiB), ceiling %s MiB\n' \
+            "$actual" "$((actual / 1048576))" "$((ceiling / 1048576))"
+
+          if [ "$actual" -gt "$ceiling" ]; then
+            echo "::error::SPEC 8.5.14: the Sphinx image is $((actual / 1048576)) MiB compressed, over its stated $((ceiling / 1048576)) MiB ceiling"
+            exit 1
+          fi
+
       # 🛑 The §11.2 topology, by hand rather than by compose: this job runs
       # PHP on the runner itself, so the "app zone" is the GitHub runner and
       # only the sandbox half needs building. `--internal` is the same flag

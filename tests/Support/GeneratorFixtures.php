@@ -99,6 +99,73 @@ final class GeneratorFixtures
         ];
     }
 
+    /**
+     * The same project, asking for §8.4.5's three offline formats.
+     *
+     * 🛑 A separate fixture rather than `formats: all` on {@see sphinx()},
+     * so a LaTeX failure names LaTeX. Phase 09's exit criterion — six
+     * generators from twelve lines — is measured against that fixture, and
+     * coupling it to a TeX distribution would mean a missing font package
+     * failing a test about configuration budgets.
+     *
+     * Seven lines of YAML, which is still inside Phase 09's budget: the
+     * whole of PDF, EPUB and zipped HTML is one key.
+     *
+     * The document is richer than {@see sphinx()}'s on purpose. A heading
+     * and a paragraph exercise almost no LaTeX; an admonition needs
+     * `framed`, a literal block needs `fancyvrb`, a table needs `tabulary`
+     * and a footnote needs `footnotehyper` — and those are the packages an
+     * incomplete TeX installation is missing. A fixture that passed on a
+     * one-line document and failed on every real one would be worse than no
+     * fixture at all.
+     *
+     * @return array<string, string>
+     */
+    public static function sphinxWithOfflineFormats(): array
+    {
+        return [
+            '.docup.yaml' => <<<'YAML'
+            version: 2
+            toolchain: sphinx
+            formats: all
+            sphinx:
+              builder: dirhtml
+              configuration: docs/conf.py
+            YAML,
+
+            // `version` and `copyright` are set because the EPUB3 builder
+            // warns without them, and §8.4.2's `fail_on_warning` would then
+            // fail a build for a metadata field the author never asked about.
+            'docs/conf.py' => "project = 'Fixture'\nauthor = 'DocUp'\ncopyright = '2026'\n"
+                ."version = '1.0'\nrelease = '1.0'\nextensions = []\nexclude_patterns = ['_build']\n",
+
+            'docs/index.rst' => <<<'RST'
+            Fixture
+            =======
+
+            .. note::
+
+               An admonition, which LaTeX renders through ``framed``.
+
+            .. code-block:: python
+
+               def hello(name: str) -> str:
+                   return f"hello {name}"
+
+            ======  ======
+            Format  Status
+            ======  ======
+            pdf     yes
+            epub    yes
+            ======  ======
+
+            A footnote [#f1]_ and an :index:`index entry`.
+
+            .. [#f1] Which needs ``footnotehyper``.
+            RST,
+        ];
+    }
+
     /** @return array<string, string> */
     private static function mdbook(): array
     {
