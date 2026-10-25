@@ -381,7 +381,7 @@ final class SkipRuleAndFanoutTest extends TestCase
             'project_version_id' => $version->id,
             'component_id' => $component->id,
             'mount_path' => '/',
-            'selector_kind' => 'ref',
+            'selector_kind' => 'pinned_ref',
             'selector_value' => 'main',
             'is_required' => true,
             'is_primary' => true,

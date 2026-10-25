@@ -304,25 +304,80 @@ final class MountPolicyTest extends TestCase
     }
 
     /**
-     * 🛑 §17 Phase 13: "Explicitly not in scope: More than one component per
-     * project version (P14)."
+     * 🛑 Phase 14 lifts Phase 13's blanket refusal, and this test is
+     * what replaced it.
      *
-     * Refused rather than allowed-and-untested: §8.7.6's nav splicing,
-     * §8.7.14's collision policy and §8.7.15's shadowing refusal are all
-     * P14's, and a second mount today would serve with none of them.
+     * Phase 13 refused every second mount with
+     * `composition.multiple_mounts_not_yet_supported`, naming §8.7.6's nav
+     * splicing, §8.7.14's collision policy and §8.7.15's shadowing refusal
+     * as the reason — all three had to land together. They did, in Phase
+     * 14, so a second mount at a **disjoint** prefix is now ordinary.
+     *
+     * The blanket refusal became §8.7.15's narrow one, which is the next
+     * test. Keeping both assertions in one place is deliberate: "a second
+     * mount is allowed" and "a shadowing second mount is not" are one
+     * rule, and a reader who finds only the first would reasonably assume
+     * there is no second.
      */
-    public function test_a_second_component_on_one_version_is_refused_until_phase_14(): void
+    public function test_a_second_component_at_a_disjoint_prefix_is_accepted(): void
     {
         $version = $this->version(AccessLevel::Public, AccessLevel::Public);
 
         $this->mounts->attach($version, $this->makeComponent(AccessLevel::Public));
+        $this->mounts->attach(
+            $version,
+            $this->makeComponent(AccessLevel::Public),
+            'guides',
+            isPrimary: false,
+        );
+
+        $this->assertSame(2, $version->mounts()->count());
+    }
+
+    /**
+     * 🛑 §8.7.15: "A new mount path that is a prefix of, or prefixed
+     * by, an existing mount path in the same project version MUST be
+     * **refused by default**."
+     *
+     * "By default" is the operative phrase: the override exists, it is
+     * audited, and it moves the question to publish time where the file
+     * manifests can say which paths actually disappeared.
+     */
+    public function test_a_second_component_that_shadows_an_existing_mount_is_refused(): void
+    {
+        $version = $this->version(AccessLevel::Public, AccessLevel::Public);
+
+        $this->mounts->attach($version, $this->makeComponent(AccessLevel::Public));
+        $this->mounts->attach(
+            $version,
+            $this->makeComponent(AccessLevel::Public),
+            'guides',
+            isPrimary: false,
+        );
 
         try {
-            $this->mounts->attach($version, $this->makeComponent(AccessLevel::Public), 'guides', isPrimary: false);
-            $this->fail('a second mount must be refused in Phase 13');
+            $this->mounts->attach(
+                $version,
+                $this->makeComponent(AccessLevel::Public),
+                'guides/advanced',
+                isPrimary: false,
+            );
+
+            $this->fail('§8.7.15 refuses a mount path prefixed by an existing one');
         } catch (CompositionRefused $refused) {
-            $this->assertSame(CompositionRejection::MultipleMountsNotYetSupported, $refused->rejection);
+            $this->assertSame(CompositionRejection::MountPathShadows, $refused->rejection);
         }
+
+        // And the override is what lets an operator mean it.
+        $this->mounts->attach(
+            $version,
+            $this->makeComponent(AccessLevel::Public),
+            'guides/advanced',
+            isPrimary: false,
+            shadowingOverride: true,
+        );
+
+        $this->assertSame(3, $version->mounts()->count());
     }
 
     /**

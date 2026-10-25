@@ -74,6 +74,23 @@ final class Component extends Model
         return $this->hasMany(ComponentMount::class);
     }
 
+    /**
+     * §8.7.1's "current location": where this component's documentation
+     * lives right now.
+     *
+     * A list rather than one row because §8.7.22's distributed component
+     * [P2] merges several sources under a `module` namespace. Until that
+     * ships there is exactly one, and callers that need "the" source take
+     * the first — stated here so the plural is not read as support for a
+     * feature that does not exist yet.
+     *
+     * @return HasMany<ComponentSource, $this>
+     */
+    public function sources(): HasMany
+    {
+        return $this->hasMany(ComponentSource::class);
+    }
+
     /** @return HasMany<Build, $this> */
     public function builds(): HasMany
     {

@@ -52,6 +52,8 @@ use Illuminate\Support\Carbon;
  * @property int $chrome_documents
  * @property int $chrome_injected
  * @property array<string, mixed>|null $chrome_coverage
+ * @property array<array-key, mixed>|null $nav_json §8.7.6 fragment lifted from .docup.yaml
+ * @property array<array-key, mixed>|null $cross_references §8.7.16 outgoing /_/x/ references
  * @property Carbon|null $started_at
  * @property Carbon|null $finished_at
  * @property Carbon|null $queued_at
@@ -101,6 +103,8 @@ final class Build extends Model
             'chrome_documents' => 'integer',
             'chrome_injected' => 'integer',
             'chrome_coverage' => 'array',
+            'nav_json' => 'array',
+            'cross_references' => 'array',
             'queued_at' => 'datetime:Y-m-d H:i:s.v',
             'started_at' => 'datetime:Y-m-d H:i:s.v',
             'finished_at' => 'datetime:Y-m-d H:i:s.v',

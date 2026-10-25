@@ -8,6 +8,8 @@ declare(strict_types=1);
 namespace App\Artifacts;
 
 use App\Artifacts\Exceptions\IngestRejected;
+use App\Composition\Navigation\NavFragment;
+use App\Serving\Resolver;
 use App\Support\Uuid;
 
 /**
@@ -68,10 +70,34 @@ final class ArtifactIngestor
      * would let a build supply its own manifest — and the manifest is what the
      * serving path trusts instead of probing storage.
      */
-    private const OUTPUT_FORMATS = ['html', 'pdf', 'epub', 'htmlzip'];
+    private const OUTPUT_FORMATS = ['html', 'pdf', 'epub', 'htmlzip', 'nav'];
 
     /** The formats §8.4.5 restricts to exactly one file. */
     private const SINGLE_FILE_FORMATS = ['pdf', 'epub', 'htmlzip'];
+
+    /**
+     * 🛑 §8.7.6's nav fragment: accepted from a build, and never served.
+     *
+     * The note above says `nav` is "a §10.3 format but not an output
+     * directory: DocUp emits those itself, so accepting them from an upload
+     * would let a build supply its own manifest". That argument is exactly
+     * right for `manifest` and `provenance`, and exactly wrong for `nav` —
+     * §8.7.6 **defines** the fragment as lifted from the repository's own
+     * `nav:`, `mkdocs.yml`, `SUMMARY.md` or `sidebars.js`, so it is
+     * repository content by requirement rather than by accident.
+     *
+     * What makes that safe is not refusing it but normalising it:
+     * {@see NavFragment} is the trust boundary,
+     * and nothing reads these bytes without passing through it. And unlike
+     * `manifest`, nothing on the serving path trusts a nav fragment for
+     * existence — {@see Resolver::resolveFile()} only ever
+     * looks under `html/`, so this directory is unreachable by a reader
+     * however it is addressed.
+     */
+    private const METADATA_FORMATS = ['nav'];
+
+    /** The one stored path §8.7.6's fragment may occupy. */
+    public const NAV_LEAF = 'nav/nav.json';
 
     /**
      * Filenames refused outright, wherever they appear.
@@ -402,7 +428,7 @@ final class ArtifactIngestor
             throw IngestRejected::because(RejectionCode::MissingHtmlIndex, detail: 'no html/index.html');
         }
 
-        foreach (self::SINGLE_FILE_FORMATS as $format) {
+        foreach ([...self::SINGLE_FILE_FORMATS, ...self::METADATA_FORMATS] as $format) {
             $count = $counts[$format] ?? 0;
 
             if ($count > 1) {
@@ -453,11 +479,7 @@ final class ArtifactIngestor
         foreach ($paths as $path => $entry) {
             $format = $this->formatOf($path);
 
-            $canonical[
-                $format !== null && in_array($format, self::SINGLE_FILE_FORMATS, true)
-                    ? self::offlineLeafFor($format)
-                    : $path
-            ] = $entry;
+            $canonical[$this->canonicalLeafFor($format) ?? $path] = $entry;
         }
 
         return $canonical;
@@ -474,6 +496,27 @@ final class ArtifactIngestor
      * `application/zip` is what the extension allowlist knows and what a
      * reader's operating system will open.
      */
+    /**
+     * The one stored path a single-file format may occupy, or null.
+     *
+     * §8.7.6's `nav` joins §8.4.5's three for the same reason they are
+     * there: a generator names the file and the name is author-supplied, so
+     * the leaf is DocUp's to decide. Sphinx would write `navigation.json`
+     * and MkDocs `nav.json`, and the composition reads one path.
+     */
+    private function canonicalLeafFor(?string $format): ?string
+    {
+        if ($format === null) {
+            return null;
+        }
+
+        if (in_array($format, self::SINGLE_FILE_FORMATS, true)) {
+            return self::offlineLeafFor($format);
+        }
+
+        return $format === 'nav' ? self::NAV_LEAF : null;
+    }
+
     public static function offlineLeafFor(string $format): string
     {
         return $format.'/document.'.match ($format) {
@@ -511,6 +554,7 @@ final class ArtifactIngestor
 
         $manifest = new FileManifest;
         $coverage = new InjectionCoverage;
+        $references = new CrossReferences;
         $buildIdText = Uuid::toText($buildId);
         $actualTotal = 0;
 
@@ -533,7 +577,7 @@ final class ArtifactIngestor
                 throw IngestRejected::because(RejectionCode::UnknownOutputDirectory, $path);
             }
 
-            [$digest, $bytes, $buffered] = $this->prepare($reader, $entry, $path, $buildIdText, $coverage);
+            [$digest, $bytes, $buffered] = $this->prepare($reader, $entry, $path, $buildIdText, $coverage, $references);
 
             $actualTotal += $bytes;
 
@@ -594,6 +638,7 @@ final class ArtifactIngestor
             totalBytes: $actualTotal,
             contentSha256: $manifest->digest(),
             coverage: $coverage,
+            references: $references,
         );
     }
 
@@ -622,6 +667,7 @@ final class ArtifactIngestor
         string $path,
         string $buildIdText,
         InjectionCoverage $coverage,
+        CrossReferences $references,
     ): array {
         $compressed = self::isCompressedHtml($path);
 
@@ -684,8 +730,8 @@ final class ArtifactIngestor
         }
 
         $stored = $compressed
-            ? $this->injectCompressed($raw, $path, $buildIdText, $coverage)
-            : $this->injectPlain($raw, $path, $buildIdText, $coverage);
+            ? $this->injectCompressed($raw, $path, $buildIdText, $coverage, $references)
+            : $this->injectPlain($raw, $path, $buildIdText, $coverage, $references);
 
         return [hash('sha256', $stored), strlen($stored), $stored];
     }
@@ -696,6 +742,7 @@ final class ArtifactIngestor
         string $path,
         string $buildIdText,
         InjectionCoverage $coverage,
+        CrossReferences $references,
     ): string {
         /*
          * 🛑 An `.html` file whose bytes are gzip is a mis-named compressed
@@ -710,6 +757,15 @@ final class ArtifactIngestor
                 'an .html file whose bytes are gzip',
             );
         }
+
+        /*
+         * 🛑 §8.7.16's references, collected from the bytes this pass
+         * already holds. The scan is of the ORIGINAL document rather than
+         * the injected one, because injection adds two tags of DocUp's own
+         * and scanning its output would mean the collector's input depended
+         * on the injector's version.
+         */
+        $references->scan($path, $raw);
 
         $injection = $this->chrome->inject($raw, $buildIdText);
         $coverage->record($path, $injection->outcome);
@@ -735,6 +791,7 @@ final class ArtifactIngestor
         string $path,
         string $buildIdText,
         InjectionCoverage $coverage,
+        CrossReferences $references,
     ): string {
         $plain = @gzdecode($raw);
 
@@ -745,6 +802,8 @@ final class ArtifactIngestor
                 'could not be decompressed',
             );
         }
+
+        $references->scan($path, $plain);
 
         $injection = $this->chrome->inject($plain, $buildIdText);
         $coverage->record($path, $injection->outcome);

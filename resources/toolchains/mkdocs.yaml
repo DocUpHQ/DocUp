@@ -34,6 +34,104 @@ formats:
       --site-dir "$DOCUP_OUTPUT/html"
       $DOCUP_STRICT
 
+    # 🛑 SPEC 8.7.6's nav fragment, lifted from "the generator's own output
+    # (MkDocs `nav`, ...)". Appended to the `html` step rather than given a
+    # format of its own, because it needs the same image, the same working
+    # directory and the same source tree - and a format would have to be
+    # requested, while navigation is not optional.
+    #
+    # Two properties make this safe to run against an arbitrary repository:
+    # the loader is `SafeLoader` with every unknown tag mapped to None, so
+    # `!!python/name:material.extensions...` (which mkdocs-material's own
+    # documented configuration uses) parses rather than executing; and every
+    # failure ends in `|| true`, because SPEC 8.7.6 degrades a missing
+    # fragment to a labelled section and a nav extractor must never be able
+    # to fail a build.
+    #
+    # The bytes are NOT trusted on the way back in: DocUp normalises them
+    # through NavFragment, which is where hrefs are checked and the tree is
+    # bounded. This step only has to produce something shaped like a nav.
+    - |
+      cat > "$DOCUP_WORK_DIR/docup-nav.py" <<'DOCUP_NAV_EOF'
+      import json, sys
+      import yaml
+
+      class Tolerant(yaml.SafeLoader):
+          pass
+
+      Tolerant.add_multi_constructor('', lambda loader, suffix, node: None)
+      Tolerant.add_multi_constructor('tag:yaml.org,2002:python/name:', lambda l, s, n: None)
+
+      with open(sys.argv[1], 'rb') as handle:
+          document = yaml.load(handle, Loader=Tolerant) or {}
+
+      if not isinstance(document, dict):
+          sys.exit(0)
+
+      nav = document.get('nav')
+
+      if not isinstance(nav, list) or not nav:
+          sys.exit(0)
+
+      # MkDocs defaults `use_directory_urls` to true, which turns `a/b.md`
+      # into `a/b/` and `index.md` into the directory itself. A fragment
+      # that kept the source extension would link to files that do not
+      # exist, which is worse than no fragment at all.
+      directory_urls = document.get('use_directory_urls', True) is not False
+
+      def href(source):
+          if not isinstance(source, str) or not source:
+              return None
+
+          if '://' in source or source.startswith('/'):
+              return None
+
+          if not source.endswith(('.md', '.markdown')):
+              return source
+
+          stem = source.rsplit('.', 1)[0]
+
+          if not directory_urls:
+              return stem + '.html'
+
+          if stem == 'index' or stem == 'README':
+              return ''
+
+          if stem.endswith('/index') or stem.endswith('/README'):
+              return stem.rsplit('/', 1)[0] + '/'
+
+          return stem + '/'
+
+      def convert(entry):
+          if isinstance(entry, str):
+              target = href(entry)
+              return None if target is None else {'label': entry, 'href': target}
+
+          if not isinstance(entry, dict) or len(entry) != 1:
+              return None
+
+          label, value = next(iter(entry.items()))
+
+          if isinstance(value, list):
+              children = [node for node in (convert(item) for item in value) if node]
+              return {'label': str(label), 'children': children} if children else None
+
+          target = href(value)
+
+          return None if target is None else {'label': str(label), 'href': target}
+
+      nodes = [node for node in (convert(entry) for entry in nav) if node]
+
+      if nodes:
+          with open(sys.argv[2], 'w', encoding='utf-8') as out:
+              json.dump({'schema': 'docup.nav-fragment/1', 'nodes': nodes}, out)
+      DOCUP_NAV_EOF
+      python3 "$DOCUP_WORK_DIR/docup-nav.py" "$DOCUP_CONFIGURATION" "$DOCUP_WORK_DIR/nav.json" || true
+      if [ -s "$DOCUP_WORK_DIR/nav.json" ]; then
+        mkdir -p "$DOCUP_OUTPUT/nav"
+        mv "$DOCUP_WORK_DIR/nav.json" "$DOCUP_OUTPUT/nav/nav.json"
+      fi
+
   # SPEC 8.4.5's `htmlzip`, identical in all seven presets because it does
   # not depend on the generator: it is the zip of the html tree this build
   # has already produced, which is why `html` is always first in

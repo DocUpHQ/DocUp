@@ -50,18 +50,58 @@ enum CompositionRejection: string
     case PrimaryMountNotAtRoot = 'composition.primary_mount_not_at_root';
 
     /**
-     * §17 Phase 13: "Explicitly not in scope: More than one component per
-     * project version (P14)."
+     * 🛑 **Retired in Phase 14, and kept because it was once emitted.**
      *
-     * A refusal rather than an untested success. The schema accommodates it
-     * and the resolver reads a list, but the nav splicing of §8.7.6, the
-     * collision policy of §8.7.14 and the shadowing refusal of §8.7.15 are
-     * all P14's — and a second mount today would serve with none of them.
+     * Phase 13 refused every second mount with this identifier, naming
+     * §8.7.6's nav splicing, §8.7.14's collision policy and §8.7.15's
+     * shadowing refusal as the reason — all three had to land together.
+     * They did, so nothing produces it any more and
+     * {@see self::MountPathShadows} is the narrow refusal that replaced it.
+     *
+     * The case stays because §8.1.11 makes these values public contract:
+     * an operator's alert rule or an audit export may still carry it, and
+     * a value that cannot be looked up is worse than one that resolves to
+     * "this no longer happens, and here is what does".
      */
     case MultipleMountsNotYetSupported = 'composition.multiple_mounts_not_yet_supported';
 
     /** §8.7.15, which P14 implements in full with its override redirects. */
     case MountPathShadows = 'composition.mount_path_shadows';
+
+    /**
+     * 🛑 §8.7.14: "Output path collisions MUST fail the build by default,
+     * naming **both** contributing sources and the exact path."
+     *
+     * The detail carries all three, because a bare identifier would send an
+     * operator through every mounted repository looking for the other half.
+     */
+    case PathCollision = 'composition.path_collision';
+
+    /**
+     * §8.7.14's refused tie: `priority_wins` with two equal priorities.
+     *
+     * Refused rather than broken arbitrarily, because an author who set a
+     * precedence strategy believed they had expressed an order.
+     */
+    case CollisionPriorityTie = 'composition.collision_priority_tie';
+
+    /**
+     * 🛑 §8.7.20: "New publications MUST fail closed when a required mount
+     * cannot resolve."
+     */
+    case RequiredMountUnresolved = 'composition.required_mount_unresolved';
+
+    /**
+     * §8.7.6: "an unresolvable include on a required mount fails the
+     * publish."
+     */
+    case NavIncludeUnresolvable = 'composition.nav_include_unresolvable';
+
+    /**
+     * §8.8.7's gate: a release-kind version whose composition has drifted
+     * and whose drift event nobody has approved.
+     */
+    case DriftApprovalRequired = 'composition.drift_approval_required';
 
     /** A mount path that is not a canonical, slash-free-at-the-edges prefix. */
     case MountPathNotCanonical = 'composition.mount_path_not_canonical';

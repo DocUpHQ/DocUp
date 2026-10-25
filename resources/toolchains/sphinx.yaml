@@ -49,6 +49,130 @@ formats:
       -d "$DOCUP_WORK_DIR/doctrees"
       "$DOCUP_CONFIGURATION_DIR" "$DOCUP_OUTPUT/html"
 
+    # 🛑 SPEC 8.7.6's nav fragment, from "the generator's own output
+    # (... Sphinx `-b json` toctree ...)".
+    #
+    # 🛑 Read from the root document's `toctree` directives rather than by
+    # running a second `-b json` build, and the reason is cost: a JSON build
+    # is a whole second pass over every page of the repository, for a tree
+    # that is written down in one file. A `toctree` IS the navigation Sphinx
+    # renders - the JSON builder's `globaltoc` is derived from these same
+    # directives - so this reads the source rather than a projection of it.
+    #
+    # Both syntaxes, because MyST is in the default image: reStructuredText's
+    # `.. toctree::` and MyST's ```{toctree}```. A `:caption:` becomes a
+    # section label, which is how a Sphinx author already groups pages.
+    #
+    # Ends in `|| true` like every nav step: SPEC 8.7.6 degrades a missing
+    # fragment to a labelled section, so this must never fail a build.
+    - |
+      cat > "$DOCUP_WORK_DIR/docup-nav.py" <<'DOCUP_NAV_EOF'
+      import json, os, re, sys
+
+      source_dir = sys.argv[1]
+      target = sys.argv[2]
+      builder = sys.argv[3] if len(sys.argv) > 3 else 'html'
+
+      root = None
+      for candidate in ('index.rst', 'index.md', 'index.txt', 'contents.rst'):
+          path = os.path.join(source_dir, candidate)
+          if os.path.isfile(path):
+              root = path
+              break
+
+      if root is None:
+          sys.exit(0)
+
+      with open(root, encoding='utf-8', errors='replace') as handle:
+          lines = handle.read().splitlines()
+
+      DIRECTIVE = re.compile(r'^(\s*)(\.\.\s+toctree::|```+\{toctree\}|:::+\{toctree\})\s*$')
+      nodes = []
+      index = 0
+
+      while index < len(lines):
+          opened = DIRECTIVE.match(lines[index])
+          if not opened:
+              index += 1
+              continue
+
+          indent = len(opened.group(1))
+          fence = opened.group(2)[0] if opened.group(2)[0] in '`:' else None
+          index += 1
+          caption = None
+          entries = []
+
+          while index < len(lines):
+              line = lines[index]
+              stripped = line.strip()
+              index += 1
+
+              if fence is not None:
+                  # A MyST block ends only at its closing fence, so an entry
+                  # at column zero is ordinary rather than a dedent.
+                  if stripped and set(stripped) == {fence}:
+                      break
+              elif stripped and not line.startswith(' ' * (indent + 1)):
+                  # reStructuredText ends a directive by dedenting. Step back
+                  # so the outer loop sees this line, which may itself open
+                  # the next toctree.
+                  index -= 1
+                  break
+
+              if stripped.startswith(':') and stripped.count(':') >= 2:
+                  if stripped.startswith(':caption:'):
+                      caption = stripped.split(':caption:', 1)[1].strip()
+                  continue
+
+              if stripped:
+                  entries.append(stripped)
+
+          children = []
+          for entry in entries:
+              label, marker, document = entry.rpartition('<')
+              if marker:
+                  document = document.rstrip('>').strip()
+                  label = label.strip()
+              else:
+                  document = entry.strip()
+                  label = document.rsplit('/', 1)[-1].replace('-', ' ').replace('_', ' ').strip()
+
+              if not document or document.startswith(('http://', 'https://', '/')):
+                  continue
+
+              # `dirhtml` serves `a/b` as `a/b/`; `html` serves it as
+              # `a/b.html`. A fragment that assumed one would link to
+              # files the other never wrote.
+              # 🛑 `url`, not `target`: `target` is the output path this
+              # script writes to, and shadowing it here made the script
+              # write the fragment to a file named after the last nav
+              # entry — which `|| true` then swallowed, so the only
+              # symptom was a Sphinx component with no navigation.
+              if builder == 'dirhtml':
+                  url = '' if document == 'index' else document + '/'
+              else:
+                  url = document + '.html'
+
+              children.append({'label': label or document, 'href': url})
+
+          if not children:
+              continue
+
+          if caption:
+              nodes.append({'label': caption, 'children': children})
+          else:
+              nodes.extend(children)
+
+      if nodes:
+          with open(target, 'w', encoding='utf-8') as out:
+              json.dump({'schema': 'docup.nav-fragment/1', 'nodes': nodes}, out)
+      DOCUP_NAV_EOF
+      python3 "$DOCUP_WORK_DIR/docup-nav.py" "$DOCUP_CONFIGURATION_DIR" "$DOCUP_WORK_DIR/nav.json" "$DOCUP_BUILDER" || true
+      if [ -s "$DOCUP_WORK_DIR/nav.json" ]; then
+        mkdir -p "$DOCUP_OUTPUT/nav"
+        mv "$DOCUP_WORK_DIR/nav.json" "$DOCUP_OUTPUT/nav/nav.json"
+      fi
+
   # SPEC 8.4.5's `pdf`, via LaTeX (SPEC 8.5.14's distribution, in
   # deploy/Dockerfile.sphinx).
   #

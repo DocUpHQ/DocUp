@@ -10,6 +10,7 @@ namespace App\Models;
 use App\Auth\AccessLevel;
 use App\Auth\Tenancy;
 use App\Auth\TenancyPosture;
+use App\Composition\SelectorKind;
 use App\Concerns\BelongsToOrganisation;
 use App\Concerns\HasUuidKey;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -34,12 +35,19 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string $component_id
  * @property string $mount_path
  * @property string|null $base_url_mode §8.7.11; null takes the component's default
+ * @property string $selector_kind §8.7.5; see {@see SelectorKind}
+ * @property string|null $selector_value
+ * @property string|null $mirror_fallback §8.7.5; only `mirror_label` reads it
+ * @property bool $shadowing_override 🛑 §8.7.15; audited, per mount
  * @property bool $is_required
  * @property bool $is_primary
  * @property AccessLevel $min_access_snapshot
  */
 #[Tenancy(TenancyPosture::OrganisationScoped)]
-#[Fillable(['mount_path', 'selector_kind', 'selector_value', 'is_required', 'is_primary', 'min_access_snapshot'])]
+#[Fillable([
+    'mount_path', 'selector_kind', 'selector_value', 'mirror_fallback',
+    'is_required', 'is_primary', 'shadowing_override', 'min_access_snapshot',
+])]
 final class ComponentMount extends Model
 {
     use BelongsToOrganisation;
@@ -60,6 +68,7 @@ final class ComponentMount extends Model
         'selector_kind' => 'latest_success',
         'is_required' => true,
         'is_primary' => false,
+        'shadowing_override' => false,
         'min_access_snapshot' => 'members',
     ];
 
@@ -69,6 +78,7 @@ final class ComponentMount extends Model
         return [
             'is_required' => 'boolean',
             'is_primary' => 'boolean',
+            'shadowing_override' => 'boolean',
             'min_access_snapshot' => AccessLevel::class,
             'created_at' => 'datetime:Y-m-d H:i:s.v',
             'updated_at' => 'datetime:Y-m-d H:i:s.v',

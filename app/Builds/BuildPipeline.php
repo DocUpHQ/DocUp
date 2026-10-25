@@ -24,6 +24,7 @@ use App\Builds\Runner\RunOutcome;
 use App\Builds\Runner\Spool;
 use App\Builds\Sandbox\SandboxPolicy;
 use App\Builds\Toolchain\ToolchainPlan;
+use App\Composition\Navigation\NavFragment;
 use App\Config\ConfigDiscovery;
 use App\Config\ConfigParser;
 use App\Config\ConfigRefused;
@@ -1233,7 +1234,39 @@ final class BuildPipeline
                 ? ' — 🛑 legacy shell semantics: a failing command will NOT fail the build (§8.4.10)'
                 : ''));
 
+        $this->recordDeclaredNavigation($build, $config);
+
         return $toolchain;
+    }
+
+    /**
+     * §8.7.6's first nav source: the repository's own `nav:` declaration.
+     *
+     * > "lifted from `.docup.yaml` `nav:` or the generator's own output"
+     *
+     * Stored on the build row because this is the only place in the system
+     * that holds the parsed configuration — §8.4.9 puts the parse in the
+     * worker, outside any sandbox, and the generator never sees the result.
+     * The alternative sources land in the artifact at `nav/nav.json`,
+     * written by the preset inside the sandbox; the composition planner
+     * prefers this one, which is what makes §8.7.6's "or" an ordering.
+     *
+     * 🛑 Stored **raw**, exactly as the author wrote it. Normalising here
+     * would put the trust boundary in two places, and
+     * {@see NavFragment} is the one that reads
+     * both sources.
+     */
+    private function recordDeclaredNavigation(Build $build, DocupConfig $config): void
+    {
+        $nav = $config->nav();
+
+        if ($nav === []) {
+            return;
+        }
+
+        $build->forceFill(['nav_json' => $nav])->save();
+
+        $this->narrate('navigation: '.count($nav).' top-level entries declared in `nav:` (§8.7.6)');
     }
 
     /**
