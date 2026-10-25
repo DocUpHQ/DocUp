@@ -105,7 +105,8 @@ final class GeneratorConformanceTest extends TestCase
      * navigation tree in which every link 404s, which is worse than no
      * fragment at all.
      *
-     * @param  array{0: string, 1: array<string, string>, 2: list<string>}  $case
+     * @param  array<string, string>  $files  the fixture to build
+     * @param  list<string>  $expectedHrefs  every href the fragment must carry, sorted
      */
     #[DataProvider('navigationFixtures')]
     public function test_a_generator_emits_a_nav_fragment_whose_hrefs_exist(
@@ -720,9 +721,10 @@ final class GeneratorConformanceTest extends TestCase
                 $size = (int) octdec(trim(substr($header, 124, 12)) ?: '0');
 
                 if ($full === $path || str_ends_with($full, '/'.$path)) {
-                    $bytes = $size === 0 ? '' : (string) fread($handle, $size);
-
-                    return $bytes;
+                    // A header whose size field is absent or negative is a
+                    // malformed archive, not an empty file; both read as ''
+                    // here and the caller's `isEmpty()` check catches it.
+                    return $size > 0 ? (string) fread($handle, $size) : '';
                 }
 
                 fseek($handle, (int) (ceil($size / 512) * 512), SEEK_CUR);
