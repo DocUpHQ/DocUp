@@ -94,6 +94,37 @@ final class AppServiceProvider extends ServiceProvider
 
             return [$perToken, Limit::perMinute(600)->by('ip:'.(string) $request->ip())];
         });
+
+        /*
+         * §9.4.5's "webhook ingestion per integration", and §8.5.4's
+         * "build triggers per repository per minute" — one limiter,
+         * because on the incoming path they are the same thing: an
+         * integration belongs to exactly one repository (§8.3.6).
+         *
+         * 🛑 Keyed on the integration id from the PATH, which is
+         * unauthenticated input, and that is deliberate: the limit has to
+         * apply before the signature is checked, or an attacker with no
+         * secret at all could make us unseal an envelope and compute an
+         * HMAC as fast as they can send bytes. A limiter keyed on the
+         * verified integration would only ever throttle legitimate
+         * senders.
+         *
+         * The per-IP limit is the backstop for exactly that case: a flood
+         * across many invented integration ids has a different key every
+         * time and would otherwise never trip the first limit.
+         *
+         * 120 a minute is far above any real provider. GitHub sends one
+         * delivery per push; a monorepo with a script pushing twenty tags
+         * in a loop is the busiest honest shape, and it fits.
+         */
+        RateLimiter::for('webhooks', function (Request $request): array {
+            $integration = (string) $request->route('integration');
+
+            return [
+                Limit::perMinute(120)->by('webhook:'.$integration),
+                Limit::perMinute(600)->by('webhook-ip:'.(string) $request->ip()),
+            ];
+        });
     }
 
     /**

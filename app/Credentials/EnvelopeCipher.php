@@ -252,6 +252,31 @@ final readonly class EnvelopeCipher
         ]);
     }
 
+    /**
+     * The AAD for a §8.19.3 incoming-webhook secret.
+     *
+     * A third domain string, for the reason {@see variableAad()} gives: three
+     * record types sealed by one cipher under one KEK, and a shared prefix
+     * would mean a ciphertext lifted from one table opening in another. A
+     * webhook secret moved into a credential row would be a credential the
+     * attacker already knows, because they can read it off their own
+     * repository's webhook settings page.
+     *
+     * The repository id is bound in because §8.3.6 gives a repository exactly
+     * one integration for life: an integration re-pointed at a different
+     * repository is a new row, not an edit, so nothing here can make an
+     * existing envelope unopenable.
+     */
+    public static function webhookAad(string $integrationId, string $organisationId, string $repositoryId): string
+    {
+        return implode('|', [
+            'docup.webhook_integration.v'.self::VERSION,
+            bin2hex($organisationId),
+            bin2hex($repositoryId),
+            bin2hex($integrationId),
+        ]);
+    }
+
     /** @return list<string> the current KEK first, then each previous one */
     private function candidateKeks(): array
     {

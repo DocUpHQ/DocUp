@@ -84,9 +84,24 @@ final class ComposeFilesTest extends TestCase
         // broker in the runner zone, holding the container-runtime socket
         // and no credentials at all. Phase 01 had one service called
         // `runner` doing the first job, which is why the rename happened.
-        foreach (['app:', 'db:', 'cache:', 'worker:', 'runner:'] as $service) {
+        //
+        // 🛑 `scheduler` is here from Phase 11, and it is asserted rather
+        // than merely present because its ABSENCE is what went unnoticed
+        // for four phases. routes/console.php has scheduled SPEC 8.22.1's
+        // daily signed audit anchor and SPEC 8.22.6's mandatory hard purge
+        // since Phase 02, and nothing ran `schedule:work`, so neither had
+        // ever executed in a deployment. A scheduler that is absent looks
+        // exactly like one with nothing due, which is why the only thing
+        // that can catch it is a test naming it.
+        foreach (['app:', 'db:', 'cache:', 'worker:', 'runner:', 'scheduler:'] as $service) {
             $this->assertStringContainsString($service, $production);
         }
+
+        $this->assertStringContainsString(
+            'schedule:work',
+            $production,
+            '🛑 the scheduler service must actually run the scheduler; a container that boots and waits is the bug this caught',
+        );
 
         $this->assertStringContainsString('mysql:8.4', $production, 'SPEC 11.1: MySQL 8.4 LTS; 8.0 is EOL');
         $this->assertStringContainsString('valkey', $production, 'SPEC 11.1: Valkey, not Redis');

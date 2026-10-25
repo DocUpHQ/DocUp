@@ -10,6 +10,7 @@ namespace App\Versions;
 use App\Artifacts\ArtifactReaper;
 use App\Audit\ActorType;
 use App\Audit\Audit;
+use App\Automation\AutomationAction;
 use App\Models\Build;
 use App\Models\Project;
 use App\Models\ProjectVersion;
@@ -262,6 +263,75 @@ final readonly class VersionOperations
         );
 
         $this->reconcilePointers($version, $actorId);
+
+        return $discarded;
+    }
+
+    /**
+     * §8.6.15's `delete_version`: the row goes, and the URLs with it.
+     *
+     * > "removal MUST be an automation-rule action (`delete_version`)
+     * > triggered by ref disappearance rather than by ref creation. Nothing
+     * > may delete reader-visible URLs without either an explicit rule or an
+     * > explicit action."
+     *
+     * 🛑 **The only operation in DocUp that destroys reader-visible URLs**,
+     * which is why it is not reachable from a sync, not reachable from a
+     * build, and reachable from an automation rule only when that rule is
+     * attached to `version_disappeared`
+     * ({@see AutomationAction::isValidFor()}).
+     *
+     * It wipes first and deletes second, so the artifacts go through §8.8.2's
+     * one write path rather than being orphaned by a cascade. A deleted row
+     * whose bytes remain is storage nothing will ever reclaim: the collector
+     * of §8.8.9 finds builds by their version, and the version is gone.
+     *
+     * 🛑 The slug history goes too — by cascade, declared on the foreign
+     * key. A 301 pointing at a version that no longer exists is a redirect
+     * to a 404, which is worse than the 404 the reader would have got
+     * directly: two round trips to the same answer, and a search engine that
+     * believes the URL moved rather than that it went.
+     *
+     * @param  string|null  $actorId  raw 16 bytes
+     * @return int how many builds' artifacts were discarded
+     */
+    public function delete(ProjectVersion $version, ?string $actorId = null): int
+    {
+        $discarded = $this->wipe($version, $actorId);
+
+        $project = $version->project;
+        $organisationId = $version->organisation_id;
+        $slug = $version->slug;
+
+        $version->delete();
+
+        Audit::record(
+            action: 'version.deleted',
+            actorType: $actorId === null ? ActorType::System : ActorType::User,
+            organisationId: $organisationId,
+            actorId: $actorId,
+            subjectType: 'project_version',
+            subjectId: $version->id,
+            payload: ['slug' => $slug, 'builds_discarded' => $discarded],
+        );
+
+        if ($project instanceof Project) {
+            Invalidation::bumpRouting(
+                projectId: $project->id,
+                cause: 'version pointer change',
+                organisationId: $organisationId,
+                actorId: $actorId,
+            );
+
+            /** @var list<ProjectVersion> $remaining */
+            $remaining = array_values(
+                ProjectVersion::query()->where('project_id', $project->id)->get()->all(),
+            );
+
+            $channels = $this->channels->reconcile($project, $remaining);
+
+            $this->defaultPointer->reconcile($project, $remaining, $channels, $actorId);
+        }
 
         return $discarded;
     }
