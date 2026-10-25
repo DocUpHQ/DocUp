@@ -24,7 +24,12 @@ use App\Builds\Runner\RunOutcome;
 use App\Builds\Runner\Spool;
 use App\Builds\Sandbox\SandboxPolicy;
 use App\Builds\Toolchain\ToolchainPlan;
+use App\Composition\CompositionRefused;
+use App\Composition\CompositionRejection;
 use App\Composition\Navigation\NavFragment;
+use App\Composition\SinglePass\ComposedContentKey;
+use App\Composition\SinglePass\Composer;
+use App\Composition\SinglePass\SourceSlot;
 use App\Config\ConfigDiscovery;
 use App\Config\ConfigParser;
 use App\Config\ConfigRefused;
@@ -80,6 +85,14 @@ final class BuildPipeline
         ?BuildLogArchive $archive = null,
         private readonly BuildGovernor $governor = new BuildGovernor,
         ?FragmentCache $fragments = null,
+
+        /*
+         * §8.7.12's generated playbook. Defaulted rather than injected for
+         * the reason `Publisher`'s collaborators are: there are several
+         * construction sites and a pipeline built without one would run a
+         * `single_pass` project with no composition at all.
+         */
+        private readonly Composer $composer = new Composer,
     ) {
         $this->policy = $policy ?? SandboxPolicy::fromConfig();
         $this->dispatcher = $dispatcher ?? Dispatcher::fromConfig();
@@ -213,26 +226,62 @@ final class BuildPipeline
             return null;
         }
 
-        $source = ComponentSource::query()
-            ->where('component_id', $component->id)
-            ->where('state', 'active')
-            ->first();
+        /*
+         * 🛑 §8.7.12's two modes diverge here, and only here.
+         *
+         * `mount` builds ONE component from ONE source, which is every
+         * project by default and is what the rest of this method was
+         * written around. `single_pass` builds the whole version from
+         * every contributing source "side by side in one sandbox", so the
+         * slot list is resolved first and the primary slot supplies the
+         * component, source and repository the pipeline is shaped around —
+         * §8.7.3 gives the primary mount the root, which makes its
+         * `.docup.yaml` the project's build configuration.
+         *
+         * `$slots` is empty in `mount` mode, and every difference below is
+         * guarded on it being non-empty. One branch, named once.
+         */
+        $slots = $this->isSinglePass($version) ? $this->slotsFor($version) : [];
 
-        if (! $source instanceof ComponentSource) {
-            // §8.3.2: a component with no attached repository is a component
-            // nothing can build. Reported as a refusal rather than a failure,
-            // because no build was ever possible.
-            $request->settle('rejected', 'rejected.no_repository_attached');
+        if ($slots !== []) {
+            $primary = $slots[0];
+            $component = $primary->component;
+            $source = $primary->source;
+            $repository = $primary->repository;
+        } else {
+            if ($this->isSinglePass($version)) {
+                /*
+                 * A composed version with nothing to compose. Refused with
+                 * its own identifier rather than `no_repository_attached`,
+                 * because the remedy is different: one is "attach a
+                 * repository", the other is "mount something".
+                 */
+                $request->settle('rejected', CompositionRejection::SinglePassNoSources->value);
 
-            return null;
-        }
+                return null;
+            }
 
-        $repository = $source->repository;
+            $source = ComponentSource::query()
+                ->where('component_id', $component->id)
+                ->where('state', 'active')
+                ->first();
 
-        if (! $repository instanceof Repository) {
-            $request->settle('rejected', 'rejected.no_repository_attached');
+            if (! $source instanceof ComponentSource) {
+                // §8.3.2: a component with no attached repository is a component
+                // nothing can build. Reported as a refusal rather than a failure,
+                // because no build was ever possible.
+                $request->settle('rejected', 'rejected.no_repository_attached');
 
-            return null;
+                return null;
+            }
+
+            $repository = $source->repository;
+
+            if (! $repository instanceof Repository) {
+                $request->settle('rejected', 'rejected.no_repository_attached');
+
+                return null;
+            }
         }
 
         // ------------------------------------------------------------ plan
@@ -240,7 +289,9 @@ final class BuildPipeline
         // Before the build row exists, because its outcome may be that no
         // build should exist (§8.5.2).
         try {
-            $plan = $this->resolvePlan($version, $source, $repository);
+            $plan = $slots === []
+                ? $this->resolvePlan($version, $source, $repository)
+                : $this->resolveComposedPlan($version, $slots);
         } catch (BuildFailure $failure) {
             $request->settle('failed', $failure->identifier());
 
@@ -277,7 +328,7 @@ final class BuildPipeline
          * build somewhere already has these inputs, so publish THAT one
          * here". The first produces no publish and the second produces one.
          */
-        $reusable = $this->reusableBuildFor($version, $component, $source, $plan);
+        $reusable = $this->reusableBuildFor($version, $component, $source, $plan, $slots !== []);
 
         if ($reusable instanceof Build) {
             return $this->publishReused($request, $version, $reusable);
@@ -304,7 +355,7 @@ final class BuildPipeline
              * version publishes it, which is the outcome §8.7.9 asks for
              * and the one a plain `superseded` would have silently denied.
              */
-            $raced = $this->reusableBuildFor($version, $component, $source, $plan);
+            $raced = $this->reusableBuildFor($version, $component, $source, $plan, $slots !== []);
 
             if ($raced instanceof Build) {
                 return $this->publishReused($request, $version, $raced);
@@ -326,7 +377,7 @@ final class BuildPipeline
              */
             $concurrent = Build::query()
                 ->where('organisation_id', $version->organisation_id)
-                ->where('content_key', $this->contentKeyFor($version, $component, $source, $plan) ?? '')
+                ->where('content_key', $this->contentKeyFor($version, $component, $source, $plan, $slots !== []) ?? '')
                 ->whereIn('state', ['queued', 'running'])
                 ->exists();
 
@@ -371,14 +422,16 @@ final class BuildPipeline
                 $this->resolveBaseEnvironment($component, $repository, $plan, $this->mountFor($version, $component));
             });
 
-            $fetch = $this->stage($recorder, $steps, Stage::Fetch, fn (): RunOutcome => $this->fetch(
-                $build,
-                $repository,
-                $source,
-                $plan->sources[0]['commit_sha'],
-                $plan->sources[0]['ref'],
-                $waitSeconds,
-            ));
+            $fetch = $this->stage($recorder, $steps, Stage::Fetch, fn (): RunOutcome => $slots === []
+                ? $this->fetch(
+                    $build,
+                    $repository,
+                    $source,
+                    $plan->sources[0]['commit_sha'],
+                    $plan->sources[0]['ref'],
+                    $waitSeconds,
+                )
+                : $this->fetchComposed($build, $plan, $slots, $waitSeconds));
 
             /*
              * The §8.4 resolution: the file, the schema, the preset and the
@@ -405,6 +458,21 @@ final class BuildPipeline
             }
 
             /*
+             * 🛑 §8.7.12's playbook, generated from the resolved plan.
+             *
+             * After `validate_config`, because the preset is what decides
+             * which file to write and `validate_config` is what resolves
+             * the preset. Before the fragment digest below, because the
+             * composition is an input to the build's output and a digest
+             * that did not cover it would serve one composition's bytes
+             * for another's — the §8.5.19 mistake Phase 13 found with
+             * `$DOCUP_BASE_PATH`, in a new place.
+             */
+            if ($slots !== []) {
+                $toolchain = $this->composeSinglePass($toolchain, $slots);
+            }
+
+            /*
              * 🛑 §8.5.25's component variables, read once and never during
              * `fetch`. A fork build gets nothing at all — "withheld entirely
              * from fork and pull-request builds regardless of the `public`
@@ -422,6 +490,23 @@ final class BuildPipeline
                 // 🛑 §8.5.19: a configuration that referenced a secret may not
                 // be served from the cache either, so the hit is discarded
                 // rather than merely not recorded.
+                $cached = null;
+            }
+
+            if ($slots !== []) {
+                /*
+                 * 🛑 §8.7.13's "fragment cacheability" row, made real:
+                 * `single_pass` is "not cacheable per source: the output of
+                 * one source depends on the others, which is what the
+                 * shared pass is for."
+                 *
+                 * §8.5.19's digest is per source and the cache is keyed per
+                 * repository, so a composed build's fragment would be
+                 * indexed under one contributing repository and be a
+                 * function of all of them. The hit is discarded rather than
+                 * the lookup skipped, so the one place that decides
+                 * cacheability stays one place.
+                 */
                 $cached = null;
             }
 
@@ -470,7 +555,21 @@ final class BuildPipeline
                     $build,
                     $repository->id,
                     $fragment->bytes(),
-                    cacheable: ! $variables->makesFragmentUncacheable(),
+
+                    /*
+                     * 🛑 A composed build is remembered but never
+                     * `cacheable`. §8.7.13 says `single_pass` output is
+                     * "not cacheable per source", and the direction that
+                     * matters is this one: a composed artifact offered to
+                     * a later `mount`-mode build of one contributing
+                     * repository would serve three repositories' pages
+                     * under one component's prefix.
+                     *
+                     * Recorded rather than skipped so `build_fragments`
+                     * still answers "what did this build key on", which is
+                     * what makes a cache miss explicable.
+                     */
+                    cacheable: $slots === [] && ! $variables->makesFragmentUncacheable(),
                 );
 
                 $this->fragments->link($build, $repository->id, $fragment->bytes(), wasHit: false);
@@ -695,8 +794,9 @@ final class BuildPipeline
         Component $component,
         ComponentSource $source,
         BuildPlan $plan,
+        bool $composed = false,
     ): ?Build {
-        $key = $this->contentKeyFor($version, $component, $source, $plan);
+        $key = $this->contentKeyFor($version, $component, $source, $plan, $composed);
 
         if ($key === null) {
             return null;
@@ -723,7 +823,14 @@ final class BuildPipeline
         Component $component,
         ComponentSource $source,
         BuildPlan $plan,
+        bool $composed = false,
     ): ?string {
+        if ($composed) {
+            // §8.7.12's build has several components, so §8.7.9's key is
+            // over the ordered set of them. See ComposedContentKey.
+            return ComposedContentKey::compute($version->organisation_id, $plan);
+        }
+
         /*
          * 🛑 `orderedSources()` is a list of `sourceId:sha` STRINGS for the
          * plan digest, not the rows — so the commit is read from `sources`
@@ -869,13 +976,25 @@ final class BuildPipeline
             $row->forceFill([
                 'organisation_id' => $build->organisation_id,
                 'build_id' => $build->id,
-                'component_source_id' => $source->id,
-                'repository_id' => $repository->id,
+
+                /*
+                 * 🛑 Each entry's OWN source and repository, not the
+                 * caller's. A `mount`-mode plan has one entry and the two
+                 * agree; a §8.7.12 `single_pass` plan has one per
+                 * contributing repository, and writing the primary's ids
+                 * against all of them would make `build_sources` — which
+                 * §8.5.24's provenance reads — say that one repository
+                 * produced the whole composed site.
+                 */
+                'component_source_id' => $pinned['source_id'],
+                'repository_id' => $pinned['repository_id'],
                 'ref' => $pinned['ref'],
                 'commit_sha' => $pinned['commit_sha'],
                 'source_path' => $pinned['source_path'],
             ])->save();
         }
+
+        unset($source, $repository);
 
         $build->forceFill(['commit_sha' => $plan->sources[0]['commit_sha']])->save();
     }
@@ -904,12 +1023,13 @@ final class BuildPipeline
         string $commitSha,
         string $ref,
         ?int $waitSeconds,
+        string $target = BuildEnvironment::REPOSITORY_PATH,
     ): RunOutcome {
-        $probe = $this->fetchPass($build, $repository, $source, $ref, 'probe', [], $waitSeconds);
+        $probe = $this->fetchPass($build, $repository, $source, $ref, 'probe', [], $waitSeconds, $target);
 
         $sparse = $this->sparsePatternsFrom($probe);
 
-        $outcome = $this->fetchPass($build, $repository, $source, $ref, 'checkout', $sparse, $waitSeconds);
+        $outcome = $this->fetchPass($build, $repository, $source, $ref, 'checkout', $sparse, $waitSeconds, $target);
 
         if ($sparse !== []) {
             $this->narrate('sparse checkout: '.implode(' ', $sparse).' (§8.4.11)');
@@ -918,6 +1038,111 @@ final class BuildPipeline
         $this->recordFetchFacts($build, $outcome, $commitSha);
 
         return $outcome;
+    }
+
+    /**
+     * 🛑 §8.7.12's generated playbook, attached to the resolved toolchain.
+     *
+     * The refusal is translated into a `config` failure because that is
+     * what it is from the author's side: a project set to `single_pass`
+     * whose toolchain DocUp cannot write a source list for, or a primary
+     * component that has not said what the site root is. Both are fixed in
+     * configuration and neither is a defect in the build.
+     *
+     * @param  list<SourceSlot>  $slots
+     *
+     * @throws BuildFailure
+     */
+    private function composeSinglePass(ToolchainPlan $toolchain, array $slots): ToolchainPlan
+    {
+        try {
+            $composition = $this->composer->compose(
+                $toolchain->preset,
+                $slots,
+                $toolchain->config,
+                $this->antoraUiBundle(),
+            );
+        } catch (CompositionRefused $refused) {
+            $this->narrate($refused->getMessage());
+
+            throw BuildFailure::of(FailureClass::Config, $refused->identifier(), Stage::ValidateConfig);
+        }
+
+        $this->narrate(
+            'composition: '.count($slots).' sources into one pass, playbook at '
+                .$composition->path().' (§8.7.12)',
+        );
+
+        return $toolchain->composedWith($composition);
+    }
+
+    /**
+     * Antora's default UI bundle, from configuration rather than a literal.
+     *
+     * 🛑 A remote URL, fetched during the build stage through §8.5.9's
+     * CONNECT proxy — which is what the Phase 09 Antora fixture already
+     * does and why gitlab.com is on the allowlist. It is configuration
+     * because an operator running an air-gapped installation has to be
+     * able to point it at their own mirror, and a literal in a generated
+     * playbook would make that a code change.
+     */
+    private function antoraUiBundle(): string
+    {
+        $configured = config('builds.antora.ui_bundle');
+
+        return is_string($configured) && $configured !== '' ? $configured : '';
+    }
+
+    /**
+     * 🛑 §8.7.12's "all sources checked out side by side in one sandbox".
+     *
+     * One {@see self::fetch()} per contributing source, each into its own
+     * slot under `/workspace/source`, in the plan's order — so the primary
+     * is first and its probe is the one returned. §8.4.9 parses one
+     * configuration file, and §8.7.3 makes the primary mount the owner of
+     * the root, so the primary's is the project's.
+     *
+     * 🛑 **Sequential, not concurrent.** Each fetch is a container start
+     * against the same workspace volume, and §8.5.13's fixed argv template
+     * gives the runner one job at a time. Concurrency here would also make
+     * the §8.5.9 egress budget a function of how many repositories a
+     * project composes, which is the kind of load nobody plans for.
+     *
+     * @param  list<SourceSlot>  $slots
+     *
+     * @throws BuildFailure
+     */
+    private function fetchComposed(Build $build, BuildPlan $plan, array $slots, ?int $waitSeconds): RunOutcome
+    {
+        $primary = null;
+
+        foreach ($slots as $index => $slot) {
+            $entry = $plan->sources[$index] ?? null;
+
+            if ($entry === null) {
+                continue;
+            }
+
+            $this->narrate('fetch: '.$slot->component->key.' into '.$slot->path().' (§8.7.12)');
+
+            $outcome = $this->fetch(
+                $build,
+                $slot->repository,
+                $slot->source,
+                $entry['commit_sha'],
+                $entry['ref'],
+                $waitSeconds,
+                $slot->path(),
+            );
+
+            $primary ??= $outcome;
+        }
+
+        if (! $primary instanceof RunOutcome) {
+            throw BuildFailure::of(FailureClass::Source, 'composition_fetched_nothing', Stage::Fetch);
+        }
+
+        return $primary;
     }
 
     /**
@@ -971,6 +1196,7 @@ final class BuildPipeline
         string $mode,
         array $sparse,
         ?int $waitSeconds,
+        string $target = BuildEnvironment::REPOSITORY_PATH,
     ): RunOutcome {
         $buildId = bin2hex($build->id);
 
@@ -991,7 +1217,15 @@ final class BuildPipeline
             command: [
                 $repository->clone_url,
                 $ref,
-                '/workspace/source',
+
+                /*
+                 * 🛑 The checkout directory, which §8.7.12's
+                 * `single_pass` makes a per-source decision: every
+                 * contributing repository gets its own slot under
+                 * `/workspace/source`, "side by side in one sandbox".
+                 * `mount` mode passes the default and is unchanged.
+                 */
+                $target,
                 $source->source_path === '' ? '.' : $source->source_path,
                 $mode,
                 ...$sparse,
@@ -1065,7 +1299,19 @@ final class BuildPipeline
      */
     private function recordFetchFacts(Build $build, RunOutcome $outcome, string $plannedSha): void
     {
-        $source = BuildSource::query()->where('build_id', $build->id)->first();
+        /*
+         * 🛑 Matched on the commit, not "the first row". A `mount`-mode
+         * build has one `build_sources` row and the two are the same; a
+         * §8.7.12 composed build has one per contributing repository, and
+         * writing every fetch's facts onto the first would make §18.14's
+         * `filter_honoured` — the flag that catches a provider silently
+         * ignoring a partial clone — a statement about whichever source
+         * happened to be fetched last.
+         */
+        $source = BuildSource::query()
+            ->where('build_id', $build->id)
+            ->where('commit_sha', $plannedSha)
+            ->first() ?? BuildSource::query()->where('build_id', $build->id)->first();
 
         if (! $source instanceof BuildSource) {
             return;
@@ -1863,6 +2109,118 @@ final class BuildPipeline
 
         return $this->refs->defaultBranch($repository->clone_url)
             ?? throw BuildFailure::of(FailureClass::Source, 'no_default_branch', Stage::Plan);
+    }
+
+    /**
+     * 🛑 §8.7.12's `single_pass`: is this project composed at build time?
+     *
+     * Read from the project, which is where §10.4 puts it and is the harder
+     * of the two to change later — a version-level policy would let `v1`
+     * serve a composed site and `v2` a mounted one, which is two 404
+     * chains, two cross-reference mechanisms and two provenance shapes in
+     * one project.
+     */
+    private function isSinglePass(ProjectVersion $version): bool
+    {
+        return $version->project?->merge_policy === 'single_pass';
+    }
+
+    /**
+     * Every contributing source of a composed version, primary first.
+     *
+     * 🛑 **Primary first, then by mount path.** The order decides two
+     * things that must not wobble between builds: which component's
+     * `.docup.yaml` is the project's configuration (§8.7.3 gives the root
+     * to the primary) and the order sources appear in the generated
+     * playbook. Sorting the rest by mount path rather than by insertion
+     * means adding a component does not reorder the others.
+     *
+     * A mount whose component has no active source is **skipped** rather
+     * than fatal, for §8.7.20's reason: a component can become orphaned
+     * while a composition keeps serving. Whether the result is publishable
+     * is the required-mount question, and it is asked where it belongs.
+     *
+     * @return list<SourceSlot>
+     */
+    private function slotsFor(ProjectVersion $version): array
+    {
+        /** @var list<ComponentMount> $mounts */
+        $mounts = array_values(
+            ComponentMount::query()
+                ->where('project_version_id', $version->id)
+                ->orderByDesc('is_primary')
+                ->orderBy('mount_path')
+                ->get()
+                ->all(),
+        );
+
+        $slots = [];
+
+        foreach ($mounts as $mount) {
+            $component = $mount->component;
+
+            if (! $component instanceof Component) {
+                continue;
+            }
+
+            $source = ComponentSource::query()
+                ->where('component_id', $component->id)
+                ->where('state', 'active')
+                ->orderBy('id')
+                ->first();
+
+            if (! $source instanceof ComponentSource) {
+                continue;
+            }
+
+            $repository = $source->repository;
+
+            if (! $repository instanceof Repository) {
+                continue;
+            }
+
+            $slots[] = SourceSlot::for($component, $source, $repository, $mount->is_primary);
+        }
+
+        return $slots;
+    }
+
+    /**
+     * §8.5.1's pin, for every contributing source at once.
+     *
+     * 🛑 **Every ref is pinned before any repository code executes**, which
+     * is §8.5.1's whole sentence and is not weakened by there being several
+     * of them. {@see BuildPlan} already sorts the pairs when it digests, so
+     * two triggers that resolved the same sources in a different order
+     * produce the same `plan_digest` and §8.5.2's short-circuit still
+     * fires for a composed project.
+     *
+     * @param  list<SourceSlot>  $slots
+     *
+     * @throws BuildFailure
+     */
+    private function resolveComposedPlan(ProjectVersion $version, array $slots): BuildPlan
+    {
+        $sources = [];
+
+        foreach ($slots as $slot) {
+            $ref = $this->refFor($slot->source, $slot->repository);
+
+            $sources[] = [
+                'source_id' => $slot->source->id,
+                'repository_id' => $slot->repository->id,
+                'ref' => $ref,
+                'commit_sha' => $this->refs->resolve($slot->repository->clone_url, $ref),
+                'source_path' => $slot->source->source_path,
+            ];
+        }
+
+        return new BuildPlan(
+            versionId: $version->id,
+            sources: $sources,
+            configDigest: '',
+            envDigest: $this->envDigest(),
+        );
     }
 
     private function componentFor(BuildRequest $request, ProjectVersion $version): ?Component

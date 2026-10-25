@@ -187,6 +187,20 @@
       }
     },
 
+    "antora": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "configuration": { "$ref": "#/$defs/repositoryPath" },
+        "start_page": {
+          "description": "SPEC 8.7.12's `single_pass`: the page Antora writes at the site root, as `<component>::<page>`. Read only from the PRIMARY component of a composed project, because SPEC 8.7.3 makes the primary mount the owner of the root index.html. Required for a single_pass Antora build and ignored in mount mode, where each component's own playbook names its own root. Antora writes nothing at the site root without it, and SPEC 8.4.5 makes html/index.html mandatory.",
+          "type": "string",
+          "maxLength": 255,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._@/-]*::[A-Za-z0-9][A-Za-z0-9._/-]*$"
+        }
+      }
+    },
+
     "submodules": {
       "type": "object",
       "additionalProperties": false,

@@ -245,6 +245,32 @@ final readonly class DocupConfig
     }
 
     /**
+     * 🛑 §8.7.12's `single_pass` start page, from the PRIMARY component.
+     *
+     * Antora writes nothing at the site root unless a playbook names a
+     * start page, and §8.4.5 makes `html/index.html` mandatory — so a
+     * composed Antora site needs one. §8.7.3 makes the primary mount "the
+     * owner of the root `index.html`, the fallback `404.html` and theme
+     * assets", which is why only the primary component's configuration is
+     * read for it.
+     *
+     * Ignored in `mount` mode, where each component's own playbook names
+     * its own root and DocUp writes no playbook at all.
+     */
+    public function antoraStartPage(): ?string
+    {
+        $antora = $this->raw['antora'] ?? null;
+
+        if (! is_array($antora)) {
+            return null;
+        }
+
+        $page = $antora['start_page'] ?? null;
+
+        return is_string($page) && $page !== '' ? $page : null;
+    }
+
+    /**
      * 🛑 §8.7.6's nav fragment, as the repository declared it.
      *
      * > "Each build emits a normalised **nav fragment** with hrefs relative

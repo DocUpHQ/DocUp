@@ -7,7 +7,9 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Composition;
 
+use App\Builds\Toolchain\ToolchainPresets;
 use App\Composition\ModeBehaviour;
+use App\Composition\SinglePass\Composer;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -80,16 +82,26 @@ final class ModeBehaviourTest extends TestCase
     }
 
     /**
-     * 🛑 Only `mount` is live. Phase 15 brings the other column.
+     * 🛑 Both columns are live as of Phase 15, and `overlay` is not a mode.
      *
-     * Asserted so that a future reader cannot take the `single_pass`
-     * column for implemented behaviour, and so that P15 has a test to
-     * flip.
+     * Phase 14 shipped `mount` and this test asserted that `single_pass`
+     * was **not** implemented, so that nobody could take its column for
+     * behaviour. Phase 15 built it, and the test it left behind is this
+     * one: every documented mode is implemented, and a mode nobody has
+     * built is not in {@see ModeBehaviour::MODES} at all.
      */
-    public function test_only_mount_mode_is_implemented_in_this_phase(): void
+    public function test_every_documented_mode_is_implemented(): void
     {
-        $this->assertTrue(ModeBehaviour::implementedIn('mount'));
-        $this->assertFalse(ModeBehaviour::implementedIn('single_pass'));
+        foreach (ModeBehaviour::MODES as $mode) {
+            $this->assertTrue(
+                ModeBehaviour::implementedIn($mode),
+                $mode.' is in the matrix, so it must be behaviour rather than intent',
+            );
+        }
+
+        // §8.7.12 defers `overlay` past 1.0; it is neither a mode nor
+        // implemented, and both halves of that have to stay true together.
+        $this->assertFalse(ModeBehaviour::implementedIn('overlay'));
     }
 
     /**
@@ -112,6 +124,44 @@ final class ModeBehaviourTest extends TestCase
                 $row,
                 $contents,
                 'app/Composition/README.md is generated from ModeBehaviour::table(); re-render it',
+            );
+        }
+    }
+
+    /**
+     * 🛑 §8.7.12's per-preset precedence, documented and **closed**.
+     *
+     * §17's Phase 15 asks for "documented per-preset precedence when a
+     * repository ships its own". Closed is the part that matters: a preset
+     * with no entry is a preset whose `single_pass` behaviour nobody
+     * decided, and {@see Composer} refuses what it cannot compose rather
+     * than falling back to the other mode's rules.
+     */
+    public function test_every_preset_has_a_documented_single_pass_precedence(): void
+    {
+        $presets = ToolchainPresets::names();
+        sort($presets, SORT_STRING);
+
+        $documented = array_keys(Composer::PRECEDENCE);
+        sort($documented, SORT_STRING);
+
+        $this->assertSame(
+            $presets,
+            $documented,
+            'every shipped preset needs an entry, and no entry may name a preset that does not exist',
+        );
+    }
+
+    /** And the committed documentation carries what the code says. */
+    public function test_the_documented_precedence_matches_the_code(): void
+    {
+        $contents = (string) file_get_contents(dirname(__DIR__, 3).'/app/Composition/README.md');
+
+        foreach (explode("\n", trim(Composer::precedenceMarkdown())) as $row) {
+            $this->assertStringContainsString(
+                $row,
+                $contents,
+                'app/Composition/README.md is generated from Composer::PRECEDENCE; re-render it',
             );
         }
     }
