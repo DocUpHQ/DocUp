@@ -56,6 +56,10 @@ final readonly class CompositionPlanner
      */
     public function plan(ProjectVersion $version, ?Build $justBuilt = null): CompositionPlan
     {
+        if ($version->project?->merge_policy === 'single_pass') {
+            return $this->planSinglePass($version, $justBuilt);
+        }
+
         $resolved = $this->resolveMounts($version, $justBuilt);
 
         $this->assertRequiredMountsResolved($resolved);
@@ -72,6 +76,74 @@ final readonly class CompositionPlanner
             linkIssues: $this->linkIssues($resolved),
             shadowRedirects: $overlap->shadowRedirects,
             shadowOverflow: $overlap->shadowOverflow,
+        );
+    }
+
+    /**
+     * 🛑 §8.7.12's `single_pass`, where the composition happened in the
+     * sandbox and the manifest has one thing to say.
+     *
+     * Four of §8.7.13's eight rows are decided here, and each one is an
+     * absence rather than a different implementation — which is the point:
+     *
+     * - **the 404 chain** has one step, because there is one routing mount
+     *   and therefore one file manifest for the whole version;
+     * - **navigation** is "the one generator's own navigation for the whole
+     *   site", so nothing is spliced and `nav_json` is empty — the nav is
+     *   in the HTML the generator wrote;
+     * - **cross-references** are "resolved inside the build by the
+     *   generator's own mechanism", so the §8.7.16 map is empty and
+     *   `/_/x/…` answers 404, which is the honest answer when there is
+     *   nothing to redirect;
+     * - **link issues** cannot exist, because an unresolved `xref:` is the
+     *   generator's failure and failed the build.
+     *
+     * The non-primary mounts are not dropped from the record: the composed
+     * build's `build_sources` rows name every contributing repository and
+     * commit, which is what §8.7.21 reads. What they are not is **routing**
+     * entries, because in this mode they do not route anything.
+     *
+     * @throws CompositionRefused when the primary mount cannot resolve
+     */
+    private function planSinglePass(ProjectVersion $version, ?Build $justBuilt): CompositionPlan
+    {
+        $primary = null;
+
+        foreach ($this->resolveMounts($version, $justBuilt) as $mount) {
+            if ($mount->mount->is_primary) {
+                $primary = $mount;
+
+                break;
+            }
+        }
+
+        if (! $primary instanceof ResolvedMount) {
+            /*
+             * §8.7.3's primary mount is what owns the root, and in this
+             * mode it owns everything. Refused with the same identifier
+             * `Mounts::assertPublishable()` uses, because it is the same
+             * fact: a version with no primary mount has no root.
+             */
+            throw CompositionRefused::of(
+                CompositionRejection::PrimaryMountMissing,
+                'a single_pass version serves one composed build and needs a primary mount to own it',
+            );
+        }
+
+        if (! $primary->resolution->resolved()) {
+            throw CompositionRefused::of(
+                CompositionRejection::RequiredMountUnresolved,
+                $primary->describe().' is the composed build and resolved to nothing ('
+                    .$primary->resolution->outcome->value.')',
+            );
+        }
+
+        return new CompositionPlan(
+            mounts: [$primary],
+            nav: [],
+            xref: [],
+            linkIssues: [],
+            shadowRedirects: [],
         );
     }
 

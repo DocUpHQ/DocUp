@@ -103,6 +103,28 @@ enum CompositionRejection: string
      */
     case DriftApprovalRequired = 'composition.drift_approval_required';
 
+    /**
+     * 🛑 §8.7.12: a project set to `single_pass` whose toolchain DocUp
+     * cannot write the source list for.
+     *
+     * Refused rather than fallen back to `mount`, because a silent
+     * fallback means a project serving the other mode's 404 chain,
+     * cross-reference mechanism and failure domain — the ambiguity §8.7.13
+     * calls "the single largest specification risk in the composition
+     * area".
+     */
+    case SinglePassUnsupportedToolchain = 'composition.single_pass_unsupported_toolchain';
+
+    /**
+     * §8.4.5 makes `html/index.html` mandatory and Antora writes no site
+     * root without `site.start_page`, which only the primary component
+     * (§8.7.3) is entitled to name.
+     */
+    case SinglePassStartPageMissing = 'composition.single_pass_start_page_missing';
+
+    /** §8.7.12: a `single_pass` version with nothing mounted to compose. */
+    case SinglePassNoSources = 'composition.single_pass_no_sources';
+
     /** A mount path that is not a canonical, slash-free-at-the-edges prefix. */
     case MountPathNotCanonical = 'composition.mount_path_not_canonical';
 

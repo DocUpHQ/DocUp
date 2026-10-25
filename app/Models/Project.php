@@ -59,6 +59,7 @@ use Illuminate\Support\Facades\DB;
  * @property string|null $resolved_stable_version_id
  * @property string|null $resolved_latest_version_id
  * @property bool $has_ever_been_guarded
+ * @property string $merge_policy §8.7.12's composition mode; see §8.7.13's matrix
  */
 #[Tenancy(TenancyPosture::OrganisationScoped)]
 #[Fillable(['slug', 'name', 'description', 'visibility'])]

@@ -284,6 +284,27 @@ return [
      * DOCUP_ALLOW_UNVERIFIED_BUILD_IMAGES is what a production installation
      * needs in order to boot that way.
      */
+    /*
+     * SPEC 8.7.12's `single_pass` composition.
+     *
+     * 🛑 Antora needs a UI bundle and a generated playbook has to name one,
+     * because the repository's own playbook — the file that would normally
+     * carry it — is deliberately not read in this mode. A remote URL,
+     * fetched during the build stage through SPEC 8.5.9's CONNECT proxy;
+     * gitlab.com is already on the allowlist because it is a git host, and
+     * the Phase 09 Antora fixture has fetched the same bundle since then.
+     *
+     * Configuration rather than a literal, because an air-gapped
+     * installation has to be able to point this at its own mirror and a
+     * constant in a generated playbook would make that a code change.
+     */
+    'antora' => [
+        'ui_bundle' => env(
+            'DOCUP_ANTORA_UI_BUNDLE',
+            'https://gitlab.com/antora/antora-ui-default/-/jobs/artifacts/HEAD/raw/build/ui-bundle.zip?job=bundle-stable',
+        ),
+    ],
+
     'images' => [
 
         /*

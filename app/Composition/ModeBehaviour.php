@@ -119,17 +119,22 @@ final readonly class ModeBehaviour
     }
 
     /**
-     * Which axes are live behaviour today rather than P15's statement of
-     * intent.
+     * Which modes are live behaviour rather than a statement of intent.
      *
-     * 🛑 Every `mount` cell is implemented and tested in Phase 14. No
-     * `single_pass` cell is, because `single_pass` itself is Phase 15 — and
-     * saying so here is what keeps the table honest: a test that asserted
-     * the `single_pass` column would be asserting documentation.
+     * 🛑 Both, since Phase 15. Phase 14 shipped `mount` and left this
+     * method answering false for `single_pass` so that no test could
+     * assert an aspiration; Phase 15 implements the other column, and
+     * `SinglePassCompositionTest` asserts the four rows that differ
+     * observably — the 404 chain, the navigation source, the
+     * cross-reference mechanism and fragment cacheability.
+     *
+     * The method stays rather than being deleted. §8.7.12 defers `overlay`
+     * past 1.0, and when somebody writes its column this is where they
+     * will say it is not built yet.
      */
     public static function implementedIn(string $mode): bool
     {
-        return $mode === 'mount';
+        return in_array($mode, self::MODES, true);
     }
 
     /**

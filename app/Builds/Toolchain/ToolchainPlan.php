@@ -9,6 +9,7 @@ namespace App\Builds\Toolchain;
 
 use App\Builds\BuildEnvironment;
 use App\Builds\BuildPipeline;
+use App\Composition\SinglePass\GeneratedComposition;
 use App\Config\BuildJobs;
 use App\Config\ConfigRefused;
 use App\Config\ConfigRejection;
@@ -47,7 +48,47 @@ final readonly class ToolchainPlan
         public string $sourceDir,
         public ?string $configuration,
         public HtmlContext $htmlContext,
+
+        /*
+         * 🛑 §8.7.12's generated playbook, present only in `single_pass`.
+         *
+         * Null is `mount` mode, which is every project by default and is
+         * the shape this class had for six phases: one source, the
+         * repository's own generator configuration. When it is present it
+         * REPLACES the configuration path rather than adding to it — see
+         * {@see self::environment()} — because the whole point of the mode
+         * is that the repository's file is not the one read.
+         */
+        public ?GeneratedComposition $composition = null,
     ) {}
+
+    /**
+     * The same plan, composed from several sources (§8.7.12).
+     *
+     * A separate method rather than a constructor argument because the
+     * composition cannot exist until the plan does: the generator is
+     * chosen by the preset, and the preset is what `resolve()` works out.
+     */
+    public function composedWith(GeneratedComposition $composition): self
+    {
+        return new self(
+            preset: $this->preset,
+            config: $this->config,
+            jobs: $this->jobs,
+            semantics: $this->semantics,
+
+            /*
+             * The PARENT of the checkouts. Every slot is a child of it, the
+             * generated playbook names each one absolutely, and the script's
+             * own `cd` has somewhere to land that belongs to no single
+             * contributing repository.
+             */
+            sourceDir: BuildEnvironment::REPOSITORY_PATH,
+            configuration: $this->configuration,
+            htmlContext: $this->htmlContext,
+            composition: $composition,
+        );
+    }
 
     /**
      * Resolve a plan, or refuse with a §8.4 identifier.
@@ -141,9 +182,15 @@ final readonly class ToolchainPlan
      */
     public function environment(): array
     {
-        $configuration = $this->configuration === null
-            ? ''
-            : $this->sourceDir.'/'.ltrim($this->configuration, '/');
+        /*
+         * 🛑 In `single_pass` the generator is pointed at DocUp's file
+         * and at nothing else, which is what makes §8.7.12's guarantee
+         * hold: a contributing repository's own `antora-playbook.yml` is
+         * still on disk and is simply never named.
+         */
+        $configuration = $this->composition instanceof GeneratedComposition
+            ? $this->composition->path()
+            : ($this->configuration === null ? '' : $this->sourceDir.'/'.ltrim($this->configuration, '/'));
 
         return array_merge(
             $this->preset->environment,
@@ -180,6 +227,17 @@ final readonly class ToolchainPlan
     public function environmentScript(): ?string
     {
         $lines = [];
+
+        /*
+         * 🛑 §8.7.12's composition, written FIRST — before
+         * `post_checkout`, which §8.5.7 puts in this stage and which is the
+         * repository's own code. A hook that ran before the playbook
+         * existed could watch for the file and race it; writing first
+         * means the only state a hook can observe is the finished one.
+         */
+        if ($this->composition instanceof GeneratedComposition) {
+            $lines = array_merge($lines, $this->section('composition', $this->composition->commands()));
+        }
 
         /*
          * 🛑 §8.5.7: "All user-defined hooks **including `post_checkout`**
