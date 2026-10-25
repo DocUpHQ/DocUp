@@ -1,0 +1,9 @@
+version: 2
+toolchain: mkdocs
+mkdocs:
+  configuration: mkdocs.yml
+  fail_on_warning: true
+nav:
+  - Writing for DocUp: index.html
+  - Builds: builds.html
+  - Navigation: navigation.html

@@ -1,0 +1,13 @@
+site_name: .docup.yaml reference
+docs_dir: docs
+nav:
+  - .docup.yaml: index.md
+
+# 🛑 Flat .html URLs, not MkDocs' default directory URLs.
+#
+# The `.docup.yaml` nav: this guide declares takes precedence over the
+# fragment MkDocs emits (SPEC 8.7.6), so the two have to agree about what a
+# page URL looks like — and under `use_directory_urls: true` they would not:
+# the declared `installing.html` would name a file MkDocs never wrote.
+# Phase 17 found this by writing the manual; see the build log.
+use_directory_urls: false

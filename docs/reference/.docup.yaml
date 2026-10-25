@@ -1,0 +1,7 @@
+version: 2
+toolchain: mkdocs
+mkdocs:
+  configuration: mkdocs.yml
+  fail_on_warning: true
+nav:
+  - .docup.yaml: index.html

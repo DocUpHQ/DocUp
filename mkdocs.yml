@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# 🛑 The parallel plain-MkDocs build (SPEC 17, Phase 17).
+#
+# The same three guides that DocUp composes into one site from three
+# repositories, built by `mkdocs build` with no DocUp involved at all:
+#
+#     mkdocs build --strict
+#
+# A documentation portal whose own manual is only readable when the portal is
+# up has chosen the wrong failure mode. This file is the other one.
+#
+# 🛑 It is NOT the composed site's configuration and must not grow into it.
+# Each guide keeps its own `docs/<guide>/mkdocs.yml`, which is what DocUp
+# builds; this one exists so the manual survives DocUp being broken, and the
+# moment the two disagree about which pages exist, `DogfoodManualTest` fails.
+#
+# The nav below is flat on purpose. DocUp's composed site arranges the same
+# pages by topic through SPEC 8.7.6's layout tree, which is a project-side
+# construct this file deliberately has no equivalent of — the difference
+# between the two is itself part of what Phase 17 is dogfooding.
+
+site_name: DocUp
+site_description: A self-hosted documentation portal
+
+docs_dir: docs
+
+nav:
+  - Operating DocUp:
+      - Overview: operator/docs/index.md
+      - Installing: operator/docs/installing.md
+      - Composition modes: operator/docs/composition.md
+      - Running it: operator/docs/operations.md
+  - Writing for DocUp:
+      - Overview: author/docs/index.md
+      - Builds: author/docs/builds.md
+      - Navigation: author/docs/navigation.md
+  - Reference:
+      - .docup.yaml: reference/docs/index.md
+
+# Each guide is a repository of its own, so its own build configuration sits
+# beside its pages. In this build those files are inside `docs_dir` and MkDocs
+# would copy them into the site verbatim — a fallback manual that ships two
+# YAML files it never renders.
+exclude_docs: |
+  */mkdocs.yml
+  */.docup.yaml
+
+markdown_extensions:
+  - admonition
+  - tables
