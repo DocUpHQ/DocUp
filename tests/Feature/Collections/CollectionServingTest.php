@@ -217,6 +217,42 @@ final class CollectionServingTest extends TestCase
         // 🛑 And the language switcher is the translation group's, available
         // from the member as well — one project's languages, one switcher.
         $this->assertSame(['en', 'ja'], array_column($fromParent->languages, 'language'));
+
+        /*
+         * 🛑 Each language points at the **same documentation**, not at
+         * whatever version of that language sorted first. A switcher that
+         * sent a reader on `/en/v1/` to another version of `/ja/` would look
+         * like a language switch and be a version change, and the reader has
+         * no way to tell.
+         */
+        $this->assertSame(
+            [
+                'https://'.$this->host.'/en/v1/',
+                'https://'.$this->host.'/ja/v1/',
+            ],
+            array_column($fromParent->languages, 'href'),
+        );
+    }
+
+    /** 🛑 And the switcher follows the group rather than the version list. */
+    public function test_the_language_switcher_prefers_the_default_version_s_group(): void
+    {
+        // An older Japanese version that is NOT part of `v1`'s group, and
+        // which sorts ahead of it by insertion order.
+        $stray = $this->version($this->parent, 'v0', 'ja');
+        $this->publish($stray, ['html/index.html']);
+
+        $this->publishEverything();
+
+        [, $version] = $this->resolveFor("http://{$this->host}/en/v1/");
+        $flyout = app(Flyout::class)->for(...$this->resolveFor("http://{$this->host}/en/v1/"));
+
+        $this->assertSame('v1', $version->slug);
+        $this->assertSame(
+            'https://'.$this->host.'/ja/v1/',
+            $flyout->languages[1]['href'],
+            'the switcher took the stray v0 instead of the translation of v1',
+        );
     }
 
     /**
@@ -263,6 +299,37 @@ final class CollectionServingTest extends TestCase
             ->headers->get('Link');
 
         $this->assertNull($link, 'a page with no translation has no alternates');
+    }
+
+    /**
+     * 🛑 "across versions, mounts **and** domains" — the domain axis.
+     *
+     * A second verified domain serving the same project gets alternates
+     * pointing at the **canonical** host, not at itself. §8.11.9 already
+     * points `rel=canonical` there "for N domains serving identical
+     * content", and self-anchored alternates on an alias would annotate
+     * pages the very same response tells a crawler to ignore.
+     */
+    public function test_a_serving_alias_annotates_the_canonical_domain(): void
+    {
+        $this->publishEverything();
+
+        $alias = 'mirror-'.bin2hex(random_bytes(3)).'.'.$this->docsApex();
+        $this->giveASecondSubdomain($this->parent, $alias);
+
+        Cache::flush();
+
+        $response = $this->getExactly("http://{$alias}/ja/v1/");
+        $response->assertOk();
+
+        $link = (string) $response->headers->get('Link');
+
+        $this->assertStringContainsString('<https://'.$this->host.'/en/v1/>', $link);
+        $this->assertStringNotContainsString($alias, $link, 'an alias must not annotate itself');
+
+        // And the alias is `noindex`, which is what makes the two consistent:
+        // §8.10.2 derives `is_indexable` from `mode = canonical`.
+        $this->assertSame('noindex', $response->headers->get('X-Robots-Tag'));
     }
 
     /** A project with one language pays nothing: no group, no header. */
@@ -718,6 +785,39 @@ final class CollectionServingTest extends TestCase
         ]);
 
         return $domainId;
+    }
+
+    /**
+     * A second verified host for the same project, serving rather than
+     * canonical (§8.10.2's default for every domain after the first).
+     */
+    private function giveASecondSubdomain(Project $project, string $host): void
+    {
+        $domainId = Uuid::v7();
+
+        DB::table('domains')->insert([
+            'id' => $domainId,
+            'organisation_id' => $this->organisation->id,
+            'host' => $host,
+            'kind' => 'default_subdomain',
+            'state' => 'active',
+            'verified_at' => now(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('domain_mounts')->insert([
+            'id' => Uuid::v7(),
+            'organisation_id' => $this->organisation->id,
+            'domain_id' => $domainId,
+            'project_id' => $project->id,
+            'path_prefix' => '',
+            'mode' => 'serve',
+            'mount_exposure' => 'inherit',
+            'position' => 1,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
     }
 
     private function docsApex(): string

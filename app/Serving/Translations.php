@@ -91,18 +91,25 @@ final readonly class Translations
     {
         $mount = $location->mountFor($project);
         $scheme = $project->versioningScheme;
-        $seen = [];
+        $default = $project->defaultVersion();
+
+        /*
+         * 🛑 The default version's **translation group** first, and only then
+         * whatever else that language has. A switcher that offered the first
+         * servable row per language would send a reader on `/en/v3/` to
+         * `/ja/v1/` because `v1` happened to sort first — which looks like a
+         * language switch and is a version downgrade, and the reader has no
+         * way to tell. §8.6.12's group is the only thing that says two
+         * versions are the same documentation.
+         */
+        $preferred = $default === null ? [] : $this->byLanguage($project->translationsOf($default));
+        $fallback = $this->byLanguage($project->versions);
+
         $roots = [];
 
-        foreach ($project->versions as $version) {
-            if (! $version->isServable() || isset($seen[$version->language])) {
-                continue;
-            }
-
-            $seen[$version->language] = true;
-
+        foreach ($preferred + $fallback as $language => $version) {
             $roots[] = [
-                'language' => $version->language,
+                'language' => $language,
                 'href' => $location->origin.VersionUrl::root($mount, $scheme, $version),
             ];
         }
@@ -110,6 +117,25 @@ final readonly class Translations
         usort($roots, static fn (array $a, array $b): int => strcmp($a['language'], $b['language']));
 
         return $roots;
+    }
+
+    /**
+     * The first servable version of each language, keyed by language.
+     *
+     * @param  list<SnapshotVersion>  $versions
+     * @return array<string, SnapshotVersion>
+     */
+    private function byLanguage(array $versions): array
+    {
+        $found = [];
+
+        foreach ($versions as $version) {
+            if ($version->isServable() && ! isset($found[$version->language])) {
+                $found[$version->language] = $version;
+            }
+        }
+
+        return $found;
     }
 
     /**
