@@ -51,6 +51,18 @@ formats:
   html:
     - npx --no-install docusaurus build --out-dir "$DOCUP_OUTPUT/html"
 
+  # SPEC 8.4.5's `htmlzip`, identical in all seven presets because it does
+  # not depend on the generator: it is the zip of the html tree this build
+  # has already produced, which is why `html` is always first in
+  # ToolchainPlan::formats().
+  #
+  # `-X` drops the extra attribute fields (uid, gid, platform metadata) that
+  # would otherwise make two builds of one commit on two hosts differ; the
+  # stored mtimes remain, and `determinism` below says so.
+  htmlzip:
+    - mkdir -p "$DOCUP_OUTPUT/htmlzip"
+    - cd "$DOCUP_OUTPUT" && zip -q -r -X htmlzip/document.zip html
+
 determinism: >-
   Deterministic for a committed lockfile. Docusaurus emits no build timestamp
   in its default theme, but its asset filenames are content-hashed, so a

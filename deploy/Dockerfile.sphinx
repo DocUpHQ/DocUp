@@ -32,7 +32,54 @@ RUN pip install --no-cache-dir \
         "myst-parser==${MYST_VERSION}" \
  && find /usr/local -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
+# 🛑 SPEC 8.5.14's LaTeX distribution, and SPEC 17 Phase 12's size ceiling.
+#
+# "the default image — which carries a LaTeX distribution for PDF output —
+# MUST stay under a stated compressed-size ceiling, declared in the image's
+# own documentation and asserted in CI."
+#
+# **Declared ceiling: 400 MiB compressed.** Measured 2026-10-25 at 326 MiB
+# (`docker save | gzip -6`), 862 MB uncompressed. The 74 MiB of headroom is
+# for TeX Live's own drift between Alpine releases, not for adding packages:
+# a package added here is a package every Sphinx build pulls, including the
+# ones that only ever wanted HTML.
+#
+# 🛑 **This image, not a separate `sphinx-pdf` one.** A second image would
+# keep HTML-only builds small, and it was rejected because it makes
+# `env_digest` depend on which formats a build happens to emit — so a
+# repository that adds `formats: [pdf]` would invalidate the SPEC 8.5.19
+# fragment cache for its HTML too, and the cache is what makes a shared
+# component affordable. SPEC 11.2's minimal profile disables PDF as a build
+# policy instead, which is the right lever: it costs one pull, not a cache.
+#
+# Three packages, not four. `texmf-dist-pictures` is a transitive dependency
+# of `texmf-dist-latexextra`, so naming it changed nothing — measured, both
+# ways, at the same 862 MB.
+#
+# What was verified on this set (2026-10-25), with sphinx-rtd-theme and a
+# document carrying admonitions, a code block, a table, a footnote and an
+# index: `sphinx-build -b latex` then `latexmk -pdf` produces a PDF. Alpine's
+# TeX packaging is incomplete in places, so this was measured rather than
+# assumed — the alternative was a Debian base at roughly twice the size.
+#
+# 🛑 No `make`. Sphinx's own `latexpdf` target runs `make`, which runs
+# `latexmk`; the preset runs `latexmk` directly, so the command stays
+# somewhere SPEC 8.4.10's `set -euo pipefail` governs and the image carries
+# one less interpreter a repository could target.
+ARG TEXLIVE_PACKAGES="texlive texmf-dist-latexextra texmf-dist-fontsrecommended"
+
+RUN apk add --no-cache ${TEXLIVE_PACKAGES} \
+ && rm -rf /var/cache/apk/* \
+ && latexmk --version >/dev/null
+
 # 🛑 bash, for SPEC 8.4.10's `set -euo pipefail`.
+#
+# `zip` is here for SPEC 8.4.5's `htmlzip`, which is generator-agnostic: the
+# zip of the html tree this build already produced. `zip` rather than
+# Python's `zipfile` module so the command in `resources/toolchains/*.yaml`
+# is byte-identical across all four images — a per-image variant of one
+# format's command is how the three that are not Sphinx quietly stop
+# producing it.
 #
 # Alpine's /bin/sh is busybox ash, whose `pipefail` support is a build-time
 # option rather than a guarantee, and `pipefail` is the flag that catches the
@@ -40,7 +87,7 @@ RUN pip install --no-cache-dir \
 # shell without it however badly sphinx failed. A deliberate incompatibility
 # with Read the Docs is only worth having if it is reliably in force, so the
 # interpreter is installed rather than assumed.
-RUN apk add --no-cache bash \
+RUN apk add --no-cache bash zip \
  && bash -c 'set -euo pipefail'
 
 # 🛑 Never root, and never writable. The container also runs `--read-only`

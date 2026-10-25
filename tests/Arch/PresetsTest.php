@@ -270,6 +270,11 @@ arch()
         'App\Serving\ArtifactHandoff',
         'App\Serving\FileKind',
         'App\Serving\HostKind',
+        // Phase 12. §8.4.5's three offline formats, and the enum IS the
+        // allowlist: the format arrives as a URL segment from an
+        // unauthenticated reader and decides both a storage path and a
+        // filename extension, so `tryFrom` returning null is the refusal.
+        'App\Serving\OfflineFormat',
         'App\Serving\RejectionReason',
         'App\Serving\RouteKind',
     ]);

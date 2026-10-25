@@ -49,6 +49,61 @@ formats:
       -d "$DOCUP_WORK_DIR/doctrees"
       "$DOCUP_CONFIGURATION_DIR" "$DOCUP_OUTPUT/html"
 
+  # SPEC 8.4.5's `pdf`, via LaTeX (SPEC 8.5.14's distribution, in
+  # deploy/Dockerfile.sphinx).
+  #
+  # 🛑 `latexmk`, not Sphinx's own `latexpdf` target. That target shells out
+  # to `make`, which shells out to `latexmk` — so `make` would be a third
+  # interpreter in the image and one more layer between SPEC 8.4.10's
+  # `set -euo pipefail` and the command that can fail. latexmk is what does
+  # the work either way, and it is what handles the multi-pass run a
+  # document with cross-references and an index needs: a single `pdflatex`
+  # emits "Rerun to get cross-references right" and a PDF with `??` where
+  # every reference should be, which is a green build and a broken download.
+  #
+  # 🛑 A SEPARATE doctree directory from `html`. Sphinx caches a parsed
+  # doctree per builder and the latex builder's differs; sharing the
+  # directory makes the second builder discard and reparse everything, which
+  # is slower, and makes the output depend on which builder ran first.
+  pdf:
+    - >-
+      sphinx-build -b latex $DOCUP_STRICT
+      -d "$DOCUP_WORK_DIR/doctrees-latex"
+      "$DOCUP_CONFIGURATION_DIR" "$DOCUP_WORK_DIR/latex"
+    - >-
+      cd "$DOCUP_WORK_DIR/latex" &&
+      latexmk -pdf -dvi- -ps- -interaction=nonstopmode -halt-on-error
+    # 🛑 `document.pdf`, which is SPEC 8.4.5's identifier-free leaf. Sphinx
+    # names the file after `project` in conf.py, which is author-supplied and
+    # is exactly the kind of value SPEC 8.8.1 forbids in a storage key. The
+    # ingestor renames it anyway — a repository using `build.commands` never
+    # runs this line — but writing it correctly here keeps the contract
+    # visible in the build log rather than only in a PHP class.
+    - mkdir -p "$DOCUP_OUTPUT/pdf"
+    - cp "$DOCUP_WORK_DIR"/latex/*.pdf "$DOCUP_OUTPUT/pdf/document.pdf"
+
+  # SPEC 8.4.5's `epub`. Pure Python, no distribution to install.
+  epub:
+    - >-
+      sphinx-build -b epub $DOCUP_STRICT
+      -d "$DOCUP_WORK_DIR/doctrees-epub"
+      "$DOCUP_CONFIGURATION_DIR" "$DOCUP_WORK_DIR/epub"
+    - mkdir -p "$DOCUP_OUTPUT/epub"
+    - cp "$DOCUP_WORK_DIR"/epub/*.epub "$DOCUP_OUTPUT/epub/document.epub"
+
+  # SPEC 8.4.5's `htmlzip`, identical in all seven presets because it does
+  # not depend on the generator: it is the zip of the html tree this build
+  # has already produced, which is why `html` is always first in
+  # ToolchainPlan::formats().
+  #
+  # `-X` drops the extra attribute fields (uid, gid, platform metadata) that
+  # would otherwise make two builds of one commit on two hosts differ.
+  # SPEC 18.13's remaining gap is the stored mtimes, which zip has no flag
+  # for — see `determinism` below.
+  htmlzip:
+    - mkdir -p "$DOCUP_OUTPUT/htmlzip"
+    - cd "$DOCUP_OUTPUT" && zip -q -r -X htmlzip/document.zip html
+
 determinism: >-
   Deterministic with SOURCE_DATE_EPOCH set, which this preset sets. Without it
   Sphinx writes a per-file "last updated" stamp taken from the working tree's
@@ -56,3 +111,13 @@ determinism: >-
   stable for a stable input set. Extensions that read the clock or the
   environment (sphinxcontrib-versioning, some changelog plugins) defeat the
   cache and must be listed per repository rather than worked around here.
+  The offline formats are weaker and the difference is stated rather than
+  elided. `pdf`: LaTeX stamps /CreationDate and /ModDate into the PDF trailer
+  and an /ID derived from them, so two builds of one commit differ in those
+  three fields and nowhere else; SOURCE_DATE_EPOCH is honoured by pdfTeX
+  from TeX Live 2016 onward, which makes them stable here, and a distribution
+  that ignored it would not. `epub`: Sphinx writes the same epoch into the
+  OPF metadata, so it follows. `htmlzip`: `-X` removes the extra attribute
+  fields, but zip has no flag for the stored mtimes, so the archive's bytes
+  track the build container's clock even where its contents do not. None of
+  the three affects the SPEC 8.5.19 fragment cache, which keys on inputs.

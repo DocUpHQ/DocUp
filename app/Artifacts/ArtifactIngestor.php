@@ -136,7 +136,7 @@ final class ArtifactIngestor
             $paths = $this->validate($reader->entries(), $reader);
             $this->assertOutputContract($paths);
 
-            return $this->extract($reader, $paths, $buildId);
+            return $this->extract($reader, $this->canonicaliseOfflineLeaves($paths), $buildId);
         } finally {
             /*
              * Always. A rejected ingest otherwise leaves its decompressed
@@ -412,6 +412,74 @@ final class ArtifactIngestor
                 );
             }
         }
+    }
+
+    /**
+     * 🛑 §8.4.5's identifier-free leaf, applied to the three offline formats.
+     *
+     * > "It MUST be stored under an identifier-free leaf name, with the
+     * > `<project>-<version>.<ext>` download filename applied at serve time by
+     * > `Content-Disposition` and **never** written into the storage key —
+     * > §8.8.1 forbids any slug in a storage path, and a renamed project must
+     * > not strand its own downloads."
+     *
+     * Sphinx names its PDF after `project` in `conf.py`; mdBook, VitePress and
+     * a hand-written `build.commands` name theirs after whatever the author
+     * chose. Each of those is a user-supplied string, and §8.8.1 is categorical
+     * that none may appear in a storage key.
+     *
+     * 🛑 **Here, not in the preset.** `resources/toolchains/sphinx.yaml` also
+     * writes `document.pdf`, which makes the contract visible in a build log —
+     * but a preset cannot be the guarantee, because §8.4.4's `build.commands`
+     * discards the preset entirely and §8.4.3's `build.jobs` can replace the
+     * step. The contract applies to *anything* written to those directories, so
+     * it is enforced where everything written to them passes.
+     *
+     * 🛑 **The extension comes from the FORMAT, never from the uploaded name.**
+     * `pdf/payload.html` would otherwise become `pdf/document.html`, served
+     * with a content type taken from its own extension — which is the
+     * "HTML file renamed `.pdf`" case arriving from the other direction. With
+     * the extension fixed per format, the stored object's type is decided by
+     * the directory the build chose, and the serving path refuses to render it
+     * whatever its bytes say (see `DownloadController`).
+     *
+     * @param  array<string, ArchiveEntry>  $paths
+     * @return array<string, ArchiveEntry>
+     */
+    private function canonicaliseOfflineLeaves(array $paths): array
+    {
+        $canonical = [];
+
+        foreach ($paths as $path => $entry) {
+            $format = $this->formatOf($path);
+
+            $canonical[
+                $format !== null && in_array($format, self::SINGLE_FILE_FORMATS, true)
+                    ? self::offlineLeafFor($format)
+                    : $path
+            ] = $entry;
+        }
+
+        return $canonical;
+    }
+
+    /**
+     * The one stored path an offline format may occupy.
+     *
+     * §10.3's storage layout writes it out:
+     * `builds/<build_uuid>/{pdf,epub,htmlzip}/document.<ext>`.
+     *
+     * 🛑 `htmlzip` stores `.zip`, not `.htmlzip`. The directory names the
+     * format and the leaf names the media type, and they are different things:
+     * `application/zip` is what the extension allowlist knows and what a
+     * reader's operating system will open.
+     */
+    public static function offlineLeafFor(string $format): string
+    {
+        return $format.'/document.'.match ($format) {
+            'htmlzip' => 'zip',
+            default => $format,
+        };
     }
 
     /**

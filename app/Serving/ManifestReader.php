@@ -49,12 +49,20 @@ final class ManifestReader
     /**
      * The component mounts a version manifest names.
      *
+     * 🛑 `is_primary` is carried because §8.7.19 needs it: "only the
+     * **primary** component mount MAY emit `pdf`, `epub` and `htmlzip`."
+     * `Publisher` has written the flag into `mounts_json` since Phase 03 and
+     * this reader dropped it, so the downloads endpoint would have had to
+     * guess — and the guess available today, "the mount at the version root",
+     * is right only while there is exactly one mount. Reading the flag costs
+     * nothing and stops being a guess in Phase 13.
+     *
      * @param  string  $manifestId  raw 16 bytes
-     * @return list<array{mount_path: string, build_id: string|null}>
+     * @return list<array{mount_path: string, build_id: string|null, is_primary: bool}>
      */
     public function mounts(string $manifestId): array
     {
-        /** @var list<array{mount_path: string, build_id: string|null}> */
+        /** @var list<array{mount_path: string, build_id: string|null, is_primary: bool}> */
         return Cache::rememberForever(
             'manifest:mounts:'.bin2hex($manifestId),
             fn (): array => $this->loadMounts($manifestId),
@@ -99,7 +107,7 @@ final class ManifestReader
 
     /**
      * @param  string  $manifestId  raw 16 bytes
-     * @return list<array{mount_path: string, build_id: string|null}>
+     * @return list<array{mount_path: string, build_id: string|null, is_primary: bool}>
      */
     private function loadMounts(string $manifestId): array
     {
@@ -143,6 +151,16 @@ final class ManifestReader
             $mounts[] = [
                 'mount_path' => $path,
                 'build_id' => is_string($build) ? $build : null,
+
+                /*
+                 * 🛑 Absent means NOT primary, never "probably". A manifest
+                 * written before Phase 03 added the flag, or one whose JSON a
+                 * restore truncated, must not make an arbitrary mount the one
+                 * that emits downloads — §8.7.19's whole purpose is that the
+                 * answer be unambiguous. A version with no primary mount has
+                 * no downloads, which is a 404 the operator can act on.
+                 */
+                'is_primary' => ($mount['is_primary'] ?? false) === true,
             ];
         }
 
