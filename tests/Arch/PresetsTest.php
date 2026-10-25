@@ -138,6 +138,16 @@ arch()->preset()->laravel()
         // would separate the identifiers from the code that produces them
         // and the schemes from the thing that distinguishes them.
         'App\Webhooks',
+        // Phase 13, and the argument is unchanged for a ninth namespace.
+        // `CompositionRejection`'s values are §8.1.11 public contract —
+        // `composition.min_access_ceiling_exceeded` reaches an operator's
+        // tooling — and `CompositionRefused` carries one, so a shared
+        // App\Exceptions would import the composition namespace into a
+        // namespace everything else depends on. phpstan-strict.neon also
+        // raises app/Composition to level 9, on §8.7.7's own words about a
+        // declassification primitive, so moving either would take it OUT of
+        // the namespace the higher bar covers.
+        'App\Composition',
     ]);
 
 arch()->preset()->strict()

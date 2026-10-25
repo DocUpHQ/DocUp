@@ -39,6 +39,7 @@ use App\Models\BuildRequest;
 use App\Models\BuildSource;
 use App\Models\BuildStep;
 use App\Models\Component;
+use App\Models\ComponentMount;
 use App\Models\ComponentSource;
 use App\Models\ProjectVersion;
 use App\Models\Repository;
@@ -257,14 +258,83 @@ final class BuildPipeline
             return null;
         }
 
+        /*
+         * 🛑 §8.7.9: "satisfied from an existing successful build with the
+         * same key. This is what makes one repository feeding many projects
+         * build **once**."
+         *
+         * Before the build row, because the whole point is that no build
+         * row is created. A second project mounting a component another
+         * project already built reaches here, finds that build, publishes
+         * it, and starts no container at all — which is the difference
+         * between a monorepo feeding forty projects being affordable and
+         * not.
+         *
+         * Distinct from §8.5.2's `unchanged` immediately above, and the two
+         * are easy to confuse: `unchanged` says "this version's published
+         * build already has these inputs, so do nothing"; this says "some
+         * build somewhere already has these inputs, so publish THAT one
+         * here". The first produces no publish and the second produces one.
+         */
+        $reusable = $this->reusableBuildFor($version, $component, $source, $plan);
+
+        if ($reusable instanceof Build) {
+            return $this->publishReused($request, $version, $reusable);
+        }
+
         $build = $this->openBuild($request, $version, $component, $source, $plan);
 
         if ($build === null) {
-            // The §10.3 `inflight` unique index refused: another build for
-            // this version is already queued or running. §8.5.4's fourth
-            // deduplication layer, enforced by the database rather than by a
-            // check that two jobs in one batch would both pass.
-            $request->settle('superseded', 'superseded.build_already_in_flight');
+            /*
+             * 🛑 Two different indexes can refuse here, and they mean
+             * different things.
+             *
+             * §10.3's `inflight` index: another build for THIS version is
+             * already queued or running — §8.5.4's fourth deduplication
+             * layer, enforced by the database rather than by a check that
+             * two jobs in one batch would both pass.
+             *
+             * §8.7.9's `content_key` index: another project's build of the
+             * SAME component, with the same inputs, got there first. That
+             * is not a supersession — nothing about this request is stale —
+             * and the race is a normal consequence of a monorepo push
+             * fanning out to three projects at once. So the reuse check is
+             * re-run: if that build has finished in the interval, this
+             * version publishes it, which is the outcome §8.7.9 asks for
+             * and the one a plain `superseded` would have silently denied.
+             */
+            $raced = $this->reusableBuildFor($version, $component, $source, $plan);
+
+            if ($raced instanceof Build) {
+                return $this->publishReused($request, $version, $raced);
+            }
+
+            /*
+             * Still running, or genuinely superseded. Settled with an
+             * identifier that says which, because "my project did not
+             * publish and another did" is a question an operator will ask
+             * and `superseded.build_already_in_flight` does not answer it.
+             *
+             * 🛑 **Owed, and stated rather than hidden:** this version is
+             * not published by the build it was waiting on. The next
+             * trigger — the §8.5.3 schedule, the next push, a manual build
+             * — finds that build published and reuses it in under a
+             * second. A pending-publish queue would close the gap and is
+             * P14's, where several mounts per version make it necessary
+             * anyway.
+             */
+            $concurrent = Build::query()
+                ->where('organisation_id', $version->organisation_id)
+                ->where('content_key', $this->contentKeyFor($version, $component, $source, $plan) ?? '')
+                ->whereIn('state', ['queued', 'running'])
+                ->exists();
+
+            $request->settle(
+                'superseded',
+                $concurrent
+                    ? 'superseded.identical_build_in_flight_elsewhere'
+                    : 'superseded.build_already_in_flight',
+            );
 
             return null;
         }
@@ -295,9 +365,9 @@ final class BuildPipeline
             // Recorded against the step that produced it, after the fact: the
             // work happened above, because its result decides whether there
             // is a build to record it against at all.
-            $this->stage($recorder, $steps, Stage::Plan, function () use ($build, $plan, $source, $repository, $component): void {
+            $this->stage($recorder, $steps, Stage::Plan, function () use ($build, $plan, $source, $repository, $component, $version): void {
                 $this->recordPlan($build, $plan, $source, $repository);
-                $this->resolveBaseEnvironment($component, $repository, $plan);
+                $this->resolveBaseEnvironment($component, $repository, $plan, $this->mountFor($version, $component));
             });
 
             $fetch = $this->stage($recorder, $steps, Stage::Fetch, fn (): RunOutcome => $this->fetch(
@@ -603,6 +673,140 @@ final class BuildPipeline
         ], JSON_THROW_ON_ERROR));
     }
 
+    /**
+     * §8.7.9's "existing successful build with the same key", or null.
+     *
+     * 🛑 `published` **or** `success_unpublished`. A build that succeeded and
+     * lost the §8.8.4 compare-and-swap is still a complete, validated
+     * artifact; refusing to reuse it would mean a second project rebuilding
+     * a component because a race it had nothing to do with went the other
+     * way. `failed` and `cancelled` are excluded for the obvious reason, and
+     * `running` because its bytes do not exist yet.
+     *
+     * Scoped to the organisation by the content key itself, not by a `where`
+     * — see {@see ContentKey} for why the organisation is inside the hash.
+     * The `where` is here as well, because a key collision across tenants
+     * would be a cross-tenant artifact disclosure and "the hash makes that
+     * impossible" is a claim this query should not have to rely on.
+     */
+    private function reusableBuildFor(
+        ProjectVersion $version,
+        Component $component,
+        ComponentSource $source,
+        BuildPlan $plan,
+    ): ?Build {
+        $key = $this->contentKeyFor($version, $component, $source, $plan);
+
+        if ($key === null) {
+            return null;
+        }
+
+        return Build::query()
+            ->where('organisation_id', $version->organisation_id)
+            ->where('content_key', $key)
+            ->whereIn('state', ['published', 'success_unpublished'])
+            ->orderBy('finished_at')
+            ->first();
+    }
+
+    /**
+     * §8.7.9's key for the build this request would produce.
+     *
+     * Null when the plan pinned no commit, which `resolvePlan()` does not
+     * produce — narrowed rather than asserted, because the consequence of a
+     * wrong key is two projects sharing bytes and the consequence of a null
+     * is one extra build.
+     */
+    private function contentKeyFor(
+        ProjectVersion $version,
+        Component $component,
+        ComponentSource $source,
+        BuildPlan $plan,
+    ): ?string {
+        /*
+         * 🛑 `orderedSources()` is a list of `sourceId:sha` STRINGS for the
+         * plan digest, not the rows — so the commit is read from `sources`
+         * directly. Phase 13 has exactly one source per build (§17 defers
+         * more than one component per version to P14); when P14 lifts that,
+         * this becomes the ordered set and the key covers all of them,
+         * which is why it is taken from the plan rather than from the
+         * `component_sources` row.
+         */
+        $commit = $plan->sources[0]['commit_sha'] ?? null;
+
+        if (! is_string($commit) || $commit === '') {
+            return null;
+        }
+
+        unset($source);
+
+        return ContentKey::compute(
+            organisationId: $version->organisation_id,
+            componentId: $component->id,
+            commitSha: $commit,
+            configDigest: $plan->configDigest,
+            envDigest: $plan->envDigest,
+            pipelineVersion: $plan->pipelineVersion,
+            mountPath: ContentKey::mountPathFor($this->mountFor($version, $component), $component),
+        );
+    }
+
+    /**
+     * This version's mount of this component, where one exists.
+     *
+     * 🛑 The MOUNT's `base_url_mode` is what decides both §8.7.9's key and
+     * §8.7.11's `$DOCUP_BASE_PATH`, so both read it through here. §8.7.11
+     * lets a mount override the component's default, and a key computed
+     * from the component's default while the container saw the mount's
+     * would be two answers to one question.
+     *
+     * Null is ordinary: a build can be triggered before the version is
+     * composed, and §8.7.20 keeps a published version serving when a mount
+     * is detached.
+     */
+    private function mountFor(ProjectVersion $version, Component $component): ?ComponentMount
+    {
+        return ComponentMount::query()
+            ->where('project_version_id', $version->id)
+            ->where('component_id', $component->id)
+            ->first();
+    }
+
+    /**
+     * Publish a reused build onto this version and settle the request.
+     *
+     * 🛑 The request settles `completed`, not `unchanged`. Something did
+     * happen: this version was not published and now is. `unchanged` is
+     * §8.5.2's "the inputs match what is ALREADY published here", and
+     * reporting a first publish as `unchanged` would tell an operator
+     * watching a new project that nothing had happened when their
+     * documentation had just gone live.
+     */
+    private function publishReused(BuildRequest $request, ProjectVersion $version, Build $reused): Build
+    {
+        $this->publisher->publishExistingBuild($version, $reused);
+
+        $request->forceFill([
+            'state' => 'completed',
+            'outcome_identifier' => 'completed.reused_existing_build',
+            'build_id' => $reused->id,
+        ])->save();
+
+        Audit::record(
+            action: 'build.reused',
+            actorType: ActorType::System,
+            organisationId: $version->organisation_id,
+            subjectType: 'build',
+            subjectId: $reused->id,
+            payload: [
+                'project_version' => Uuid::toText($version->id),
+                'content_key' => $reused->content_key,
+            ],
+        );
+
+        return $reused;
+    }
+
     /** Create the build row, or null when §10.3's `inflight` index refuses. */
     private function openBuild(
         BuildRequest $request,
@@ -622,7 +826,20 @@ final class BuildPipeline
                 'component_id' => $component->id,
                 'component_source_id' => $source->id,
                 'build_request_id' => $request->id,
-                'content_key' => hash('sha256', 'docup.build:'.bin2hex($buildId)),
+                /*
+                 * 🛑 §8.7.9's key, falling back to one derived from the
+                 * build id when the plan pinned no commit.
+                 *
+                 * The fallback is not a shortcut: `content_key` is `UNIQUE`
+                 * and `NOT NULL`, and a build that cannot be identified by
+                 * its inputs must still have a key that collides with
+                 * nothing. Deriving it from the build id gives exactly that
+                 * — a key no other build can ever match, so an
+                 * unidentifiable build is never reused rather than being
+                 * reused by accident.
+                 */
+                'content_key' => $this->contentKeyFor($version, $component, $source, $plan)
+                    ?? hash('sha256', 'docup.build:'.bin2hex($buildId)),
                 'plan_digest' => $plan->digestBytes(),
                 'env_digest' => $plan->envDigest,
                 'pipeline_version' => $plan->pipelineVersion,
@@ -1069,6 +1286,18 @@ final class BuildPipeline
                 $toolchain->configuration,
             ),
             publicEnv: $variables->public,
+
+            /*
+             * 🛑 §8.7.11's prefix, taken from the environment that was
+             * actually resolved for this build — the same value the
+             * container sees and the same one §8.7.9's content key uses.
+             *
+             * Reading it from `$this->baseEnvironment` rather than
+             * recomputing it is the point: three places deciding whether
+             * a prefix applies is two chances for the digest to describe a
+             * build that did not happen.
+             */
+            basePath: $this->baseEnvironment?->basePath,
         );
     }
 
@@ -1171,8 +1400,12 @@ final class BuildPipeline
      * and printed into build logs, and an operator's `https://x:TOKEN@host/…`
      * remote would be in both.
      */
-    private function resolveBaseEnvironment(Component $component, Repository $repository, BuildPlan $plan): void
-    {
+    private function resolveBaseEnvironment(
+        Component $component,
+        Repository $repository,
+        BuildPlan $plan,
+        ?ComponentMount $mount = null,
+    ): void {
         $this->baseEnvironment = new BuildEnvironment(
             productionDomain: is_string(config('docup.origins.docs')) ? config('docup.origins.docs') : '',
             componentKey: $component->key,
@@ -1180,6 +1413,19 @@ final class BuildPipeline
             refIdentifier: $plan->sources[0]['ref'],
             commitSha: $plan->sources[0]['commit_sha'],
             versionLabel: $plan->sources[0]['ref'],
+
+            /*
+             * 🛑 §8.7.11's `$DOCUP_BASE_PATH`, from the same function that
+             * decides whether the mount path enters §8.7.9's content key.
+             *
+             * One function for both, because the two must agree exactly: a
+             * build that saw the path and did not put it in the key would
+             * be shared across mounts it cannot serve, and a build that put
+             * it in the key and did not export it would be unshared for no
+             * benefit. `ContentKey::mountPathFor()` returning null means
+             * neither happens.
+             */
+            basePath: ContentKey::mountPathFor($mount, $component),
         );
     }
 

@@ -42,6 +42,9 @@ final readonly class BuildEnvironment
      * @param  string  $componentKey  the component's `key`, never a project slug
      * @param  string  $versionLabel  derived from the ref, never from a project
      * @param  string  $versionType  `branch`, `tag` or `external`
+     * @param  string|null  $basePath  🛑 §8.7.11's `$DOCUP_BASE_PATH`, and the
+     *                                 ONLY project-derived value permitted in a
+     *                                 container — see {@see byScope()}
      */
     public function __construct(
         public string $productionDomain,
@@ -51,6 +54,7 @@ final readonly class BuildEnvironment
         public string $commitSha,
         public string $versionLabel,
         public string $versionType = 'branch',
+        public ?string $basePath = null,
     ) {}
 
     /**
@@ -106,6 +110,35 @@ final readonly class BuildEnvironment
                 'DOCUP_GIT_COMMIT_HASH' => $this->commitSha,
                 'DOCUP_VERSION_NAME' => $this->versionLabel,
                 'DOCUP_VERSION_TYPE' => $this->versionType,
+
+                /*
+                 * 🛑 §8.7.11's `$DOCUP_BASE_PATH`, and the one
+                 * project-derived value §8.7.10 permits in a container.
+                 *
+                 * Read §8.7.10's list exactly: "project environment
+                 * variable, secret, branding value, canonical URL,
+                 * authentication context, **or mount path under
+                 * `base_url_mode='relative'`**". The mount path under
+                 * `injected` is deliberately absent from that list, and
+                 * §8.7.11 says why it is safe: `injected` "puts the mount
+                 * path in the content key", so a build that saw a mount
+                 * path is a build only that mount can ever be served from.
+                 * The project-agnostic invariant is not weakened; the
+                 * build simply stops being shared, which is the cost
+                 * §8.7.11 requires the dashboard to surface.
+                 *
+                 * In the COMPONENT scope rather than the project scope,
+                 * because `forContainer()` drops the project scope
+                 * entirely and this must reach the container. It is in the
+                 * scope whose contents are in the content key, which is
+                 * exactly the property that makes it safe.
+                 *
+                 * Absent, not empty, under `relative`: a generator reading
+                 * `${DOCUP_BASE_PATH:-}` must see nothing, and an empty
+                 * string is a value that some templates will happily
+                 * prepend as `/`.
+                 */
+                ...($this->basePath === null ? [] : ['DOCUP_BASE_PATH' => $this->basePath]),
             ],
 
             /*

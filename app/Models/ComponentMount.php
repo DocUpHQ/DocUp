@@ -33,6 +33,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string $project_version_id
  * @property string $component_id
  * @property string $mount_path
+ * @property string|null $base_url_mode §8.7.11; null takes the component's default
+ * @property bool $is_required
  * @property bool $is_primary
  * @property AccessLevel $min_access_snapshot
  */

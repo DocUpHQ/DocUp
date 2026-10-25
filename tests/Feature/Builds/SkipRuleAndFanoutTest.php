@@ -64,6 +64,8 @@ final class SkipRuleAndFanoutTest extends TestCase
 
     private RepositoryFanout $fanout;
 
+    private ?Component $shared = null;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -343,26 +345,34 @@ final class SkipRuleAndFanoutTest extends TestCase
 
         $project->forceFill(['default_version_id' => $version->id])->save();
 
-        $component = new Component;
-        $component->forceFill([
-            'id' => Uuid::v7(),
-            'organisation_id' => $this->organisation->id,
-            'key' => $name.'-'.bin2hex(random_bytes(3)),
-            'name' => ucfirst($name),
-            'min_access' => AccessLevel::Public->value,
-        ])->save();
-
-        $source = new ComponentSource;
-        $source->forceFill([
-            'id' => Uuid::v7(),
-            'organisation_id' => $this->organisation->id,
-            'component_id' => $component->id,
-            'repository_id' => $this->repository->id,
-            'source_path' => 'docs/'.$name,
-            'module' => 'ROOT',
-            'priority' => 0,
-            'state' => 'active',
-        ])->save();
+        /*
+         * 🛑 ONE shared component for both projects, and this changed in
+         * Phase 13.
+         *
+         * Phase 13 added path-filter gating on `component_sources` (§17:
+         * "path-filter rebuild gating"), which asks "did this push touch
+         * my subtree?" BEFORE Phase 11's skip rules ask "does this
+         * project want to build?". With a component each at `docs/alpha`
+         * and `docs/beta`, a push to `docs/alpha/**` stopped reaching
+         * project B at all — so this file stopped testing the skip rule
+         * it exists for, and the assertion on B's `skipped` row failed
+         * because there was no row.
+         *
+         * Rooting both at the repository root instead is refused by
+         * §10.2's `UNIQUE (repository_id, source_path_hash, module)`: one
+         * source per path per repository. Which leaves the setup that is
+         * both legal and more realistic — **two projects mounting one
+         * shared component**. Both see identical dirtiness, so their own
+         * rules are what distinguish them, which is exactly Phase 11's
+         * criterion: "a changed-paths rule fires project A and provably
+         * does not enqueue project B".
+         *
+         * The gate itself is `ComponentLifecycleTest`'s, where three
+         * sources at three subtrees prove one push reaches exactly the
+         * matching projects. The two mechanisms are different questions
+         * and both now have a file.
+         */
+        $component = $this->sharedComponent();
 
         $mount = new ComponentMount;
         $mount->forceFill([
@@ -379,6 +389,47 @@ final class SkipRuleAndFanoutTest extends TestCase
         ])->save();
 
         return [$project->refresh(), $version];
+    }
+
+    /**
+     * The one component both projects mount, created once.
+     *
+     * Memoised rather than created per project, because §10.2 gives a
+     * repository one source per path and because the scenario under test
+     * is two projects sharing one component — which is also §8.7.9's
+     * "build once" case, and is why Phase 13 made it expressible.
+     */
+    private function sharedComponent(): Component
+    {
+        if ($this->shared instanceof Component) {
+            return $this->shared;
+        }
+
+        $component = new Component;
+        $component->forceFill([
+            'id' => Uuid::v7(),
+            'organisation_id' => $this->organisation->id,
+            'key' => 'shared-'.bin2hex(random_bytes(3)),
+            'name' => 'Shared',
+            'min_access' => AccessLevel::Public->value,
+        ])->save();
+
+        $source = new ComponentSource;
+        $source->forceFill([
+            'id' => Uuid::v7(),
+            'organisation_id' => $this->organisation->id,
+            'component_id' => $component->id,
+            'repository_id' => $this->repository->id,
+
+            // The repository root, so every push makes it dirty and the
+            // skip rules are what decide.
+            'source_path' => '',
+            'module' => 'ROOT',
+            'priority' => 0,
+            'state' => 'active',
+        ])->save();
+
+        return $this->shared = $component;
     }
 
     /**
