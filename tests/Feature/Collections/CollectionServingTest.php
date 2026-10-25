@@ -460,6 +460,28 @@ final class CollectionServingTest extends TestCase
         }
     }
 
+    /**
+     * And the other unique index, which reports a different refusal.
+     *
+     * The two are told apart by the index name in MySQL's message, so this
+     * asserts the discrimination rather than merely that *something* was
+     * refused — a branch that always answered `alias_taken` would tell an
+     * operator to rename an alias that is not the problem.
+     */
+    public function test_a_project_cannot_join_one_collection_twice(): void
+    {
+        $member = $this->project('api-'.bin2hex(random_bytes(3)), AccessLevel::Public);
+
+        $this->collections->attach($this->collection, $member, 'guides');
+
+        try {
+            $this->collections->attach($this->collection, $member, 'handbook');
+            $this->fail('one project joined one collection twice');
+        } catch (CollectionRefused $refused) {
+            $this->assertSame(CollectionRejection::AlreadyMember, $refused->rejection);
+        }
+    }
+
     // ------------------------------------------------------- exit criterion 3
 
     /**

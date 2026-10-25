@@ -111,6 +111,12 @@ final readonly class CollectionIndex
      */
     private function rowsFor(Collection $collection): array
     {
+        /*
+         * An inner join on the mount, so a member with no
+         * `domain_mount_id` is absent. That is correct rather than
+         * incidental: an unmounted membership has no URL, and a reader-facing
+         * index entry whose link went nowhere would be worse than no entry.
+         */
         $members = DB::table('collection_projects')
             ->join('projects', 'projects.id', '=', 'collection_projects.project_id')
             ->join('domain_mounts', 'domain_mounts.id', '=', 'collection_projects.domain_mount_id')

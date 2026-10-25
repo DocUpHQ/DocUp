@@ -162,8 +162,17 @@ final readonly class Collections
                     'position' => $position,
                 ])->save();
             } catch (UniqueConstraintViolationException $collision) {
+                /*
+                 * 🛑 Matched on the INDEX name, not on the word `alias`. The
+                 * exception message carries the whole INSERT, whose column
+                 * list names `alias` on every violation — so a looser match
+                 * reported `collection.alias_taken` for a project joining
+                 * the same collection twice, and told an operator to rename
+                 * an alias that was not the problem. Caught by the test that
+                 * asserts the two refusals are told apart.
+                 */
                 throw CollectionRefused::of(
-                    str_contains($collision->getMessage(), 'alias')
+                    str_contains($collision->getMessage(), 'collection_projects_alias_unique')
                         ? CollectionRejection::AliasTaken
                         : CollectionRejection::AlreadyMember,
                     'refused by the database index',
