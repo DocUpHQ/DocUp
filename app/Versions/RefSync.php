@@ -201,6 +201,20 @@ final readonly class RefSync
             'listed' => true,
             'published' => false,
             'visibility' => self::bornVisibility($project),
+
+            /*
+             * 🛑 §8.8.7: "`publish_mode` MUST default to `auto` for
+             * channel-kind versions and `manual` for release-kind
+             * versions."
+             *
+             * Applied HERE because a column default cannot say two things,
+             * and this is where a version first learns its kind.
+             * {@see ProjectVersion::defaultPublishModeFor()} has existed
+             * since Phase 10 and nothing called it, so every tag-born
+             * version was created `auto` and §8.8.7's gate — which Phase
+             * 14 implements — would never have engaged on a real release.
+             */
+            'publish_mode' => ProjectVersion::defaultPublishModeFor($ref->kind->versionKind()),
         ])->save();
 
         Audit::record(
