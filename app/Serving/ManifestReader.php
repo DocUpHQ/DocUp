@@ -63,11 +63,7 @@ final class ManifestReader
      */
     public function mounts(string $manifestId): array
     {
-        /** @var list<array{mount_path: string, build_id: string|null, is_primary: bool}> */
-        return Cache::rememberForever(
-            'manifest:mounts:'.bin2hex($manifestId),
-            fn (): array => $this->loadMounts($manifestId),
-        );
+        return $this->composition($manifestId)['mounts'];
     }
 
     /**
@@ -117,10 +113,31 @@ final class ManifestReader
      */
     public function shadowRedirects(string $manifestId): array
     {
-        /** @var array<string, string> */
+        return $this->composition($manifestId)['shadow_redirects'];
+    }
+
+    /**
+     * 🛑 Both halves of `mounts_json`, cached together.
+     *
+     * One cache read, not two. Every document request asks for the mounts,
+     * and since Phase 14 it also asks for the shadow redirects — and the
+     * two come out of the same immutable column, so caching them apart
+     * would double the round trips on the hottest path in the product to
+     * re-read one document. §9.2's budgets are per request, and "one more
+     * small read" is how they go.
+     *
+     * @param  string  $manifestId  raw 16 bytes
+     * @return array{mounts: list<array{mount_path: string, build_id: string|null, is_primary: bool}>, shadow_redirects: array<string, string>}
+     */
+    private function composition(string $manifestId): array
+    {
+        /** @var array{mounts: list<array{mount_path: string, build_id: string|null, is_primary: bool}>, shadow_redirects: array<string, string>} */
         return Cache::rememberForever(
-            'manifest:shadow:'.bin2hex($manifestId),
-            fn (): array => $this->loadShadowRedirects($manifestId),
+            'manifest:composition:'.bin2hex($manifestId),
+            fn (): array => [
+                'mounts' => $this->loadMounts($manifestId),
+                'shadow_redirects' => $this->loadShadowRedirects($manifestId),
+            ],
         );
     }
 
