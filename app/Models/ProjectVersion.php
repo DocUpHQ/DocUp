@@ -48,6 +48,7 @@ use Illuminate\Support\Str;
  * @property bool $published
  * @property AccessLevel $visibility
  * @property string $publish_mode
+ * @property array<array-key, mixed>|null $layout_json §8.7.6 layout tree, per version
  * @property string|null $published_manifest_id
  * @property string|null $previous_manifest_id
  * @property Carbon|null $soft_landing_until
@@ -102,6 +103,7 @@ final class ProjectVersion extends Model
     {
         return [
             'active' => 'boolean',
+            'layout_json' => 'array',
             'listed' => 'boolean',
             'published' => 'boolean',
             'pinned' => 'boolean',

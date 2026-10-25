@@ -7,6 +7,8 @@ declare(strict_types=1);
 
 namespace App\Builds;
 
+use App\Composition\VersionLabel;
+
 /**
  * An operator-supplied regular expression, matched without trusting it.
  *
@@ -67,6 +69,32 @@ final readonly class SafePattern
     public static function matches(string $pattern, string $subject): bool
     {
         return @preg_match(self::compile($pattern), $subject) === 1;
+    }
+
+    /**
+     * The first capture group of a match, or null.
+     *
+     * §10.2's `version_label_strategy = 'regex'` asks an operator for a
+     * pattern whose job is to *extract* rather than to decide — "the version
+     * label is whatever this captures from the tag". Returning null for a
+     * pattern that does not match, that has no group, or that cannot
+     * compile keeps every failure in one branch, which is what
+     * {@see VersionLabel} treats as "this ref has no
+     * label".
+     *
+     * A whole-match fallback is deliberately **absent**. A pattern with no
+     * group would then label every matching ref with the ref itself, which
+     * reads as success and is how a branch ends up in a version ordering.
+     */
+    public static function firstGroup(string $pattern, string $subject): ?string
+    {
+        $matched = @preg_match(self::compile($pattern), $subject, $groups);
+
+        if ($matched !== 1 || ! isset($groups[1])) {
+            return null;
+        }
+
+        return $groups[1];
     }
 
     /** Whether any subject contains a match. */

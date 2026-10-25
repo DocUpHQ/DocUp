@@ -25,13 +25,25 @@ final class PublishOutcome
     /**
      * @param  bool  $published  whether this flip won the compare-and-swap
      * @param  Build|null  $build  null when a rollback target's build row has gone
+     * @param  ProjectVersionManifest|null  $manifest  null in one case only, and it
+     *                                                 is the case Phase 14 added: §8.8.7's approval gate
+     *                                                 refused to publish a `manual` version whose
+     *                                                 composition had drifted, so no revision was minted.
+     *                                                 Nothing was written and nothing changed, which is
+     *                                                 exactly what "no manifest" should mean.
      * @param  string|null  $previousManifestId  raw 16 bytes; what was being served
+     * @param  bool  $awaitingApproval  §8.8.7: the composition changed and a
+     *                                  human has to say yes. Distinct from losing the
+     *                                  §8.8.4 race, which also reports `published: false`
+     *                                  — the remedies differ and a caller must be able to
+     *                                  tell "somebody else won" from "you need an approval".
      */
     public function __construct(
         public readonly bool $published,
         public readonly ?Build $build,
-        public readonly ProjectVersionManifest $manifest,
+        public readonly ?ProjectVersionManifest $manifest,
         public readonly ?string $previousManifestId,
+        public readonly bool $awaitingApproval = false,
     ) {}
 
     /** §10.3's state for this outcome, which the build row already carries. */
@@ -65,10 +77,11 @@ final class PublishOutcome
                 'file_count' => $build->file_count,
                 'total_bytes' => $build->total_bytes,
             ],
-            'manifest' => [
+            'manifest' => $this->manifest === null ? null : [
                 'id' => Uuid::toText($this->manifest->id),
                 'revision' => $this->manifest->revision,
             ],
+            'awaiting_approval' => $this->awaitingApproval,
             'previous_manifest' => $this->previousManifestId === null
                 ? null
                 : Uuid::toText($this->previousManifestId),

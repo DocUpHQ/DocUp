@@ -43,6 +43,10 @@ final readonly class Mounts
      * Mount a component on a project version.
      *
      * @param  string  $mountPath  '' for the primary mount at the version root
+     * @param  SelectorKind  $selector  §8.7.5; the mount's version selector
+     * @param  string|null  $selectorValue  the ref, pattern, range or build id
+     * @param  MirrorFallback|null  $mirrorFallback  §8.7.5; required by `mirror_label`
+     * @param  bool  $shadowingOverride  🛑 §8.7.15's explicit audited override
      * @param  string|null  $actorId  raw 16 bytes, or null when the system did it
      *
      * @throws CompositionRefused
@@ -55,13 +59,17 @@ final readonly class Mounts
         bool $isRequired = true,
         ?string $baseUrlMode = null,
         ?string $actorId = null,
+        SelectorKind $selector = SelectorKind::LatestSuccess,
+        ?string $selectorValue = null,
+        ?MirrorFallback $mirrorFallback = null,
+        bool $shadowingOverride = false,
     ): ComponentMount {
         $project = $version->project;
 
         $this->assertCanonicalPath($mountPath);
         $this->assertGranted($component, $actorId);
         $this->assertWithinCeiling($component, $version, $project);
-        $this->assertRoomForAnotherMount($version, $component, $mountPath, $isPrimary);
+        $this->assertRoomForAnotherMount($version, $component, $mountPath, $isPrimary, $shadowingOverride);
 
         $mount = new ComponentMount;
 
@@ -73,10 +81,12 @@ final readonly class Mounts
                 'component_id' => $component->id,
                 'mount_path' => $mountPath,
                 'base_url_mode' => $baseUrlMode,
-                'selector_kind' => 'latest_success',
-                'selector_value' => null,
+                'selector_kind' => $selector->value,
+                'selector_value' => $selectorValue,
+                'mirror_fallback' => $mirrorFallback?->value,
                 'is_required' => $isRequired,
                 'is_primary' => $isPrimary,
+                'shadowing_override' => $shadowingOverride,
 
                 /*
                  * 🛑 §8.7.7's "denormalised into the published manifest".
@@ -111,6 +121,11 @@ final readonly class Mounts
                 'project_version' => Uuid::toText($version->id),
                 'mount_path' => $mountPath,
                 'min_access' => $component->min_access->value,
+                'selector_kind' => $selector->value,
+                // 🛑 §8.7.15's override is a weakening, so it is audited on
+                // change even though §20.4's registry is for installation-level
+                // flags and this one is per mount.
+                'shadowing_override' => $shadowingOverride,
             ],
         );
 
@@ -221,6 +236,7 @@ final readonly class Mounts
         Component $component,
         string $mountPath,
         bool $isPrimary,
+        bool $shadowingOverride,
     ): void {
         /** @var list<ComponentMount> $existing */
         $existing = array_values(
@@ -248,24 +264,31 @@ final readonly class Mounts
                     'a version has exactly one primary mount (§8.7.3)',
                 );
             }
-        }
 
-        /*
-         * 🛑 §17 Phase 13: "Explicitly not in scope: More than one component
-         * per project version (P14)."
-         *
-         * Refused rather than allowed-and-untested. The schema accommodates
-         * it and the resolver already reads a list of mounts, but §8.7.6's
-         * nav splicing, §8.7.14's collision policy and §8.7.15's shadowing
-         * refusal are all P14's — a second mount today would serve with
-         * none of them, which is a worse outcome than a clear refusal
-         * naming the phase that lifts it.
-         */
-        if ($existing !== []) {
-            throw CompositionRefused::of(
-                CompositionRejection::MultipleMountsNotYetSupported,
-                'more than one component per project version arrives in Phase 14 (§8.7.6, §8.7.14, §8.7.15)',
-            );
+            /*
+             * 🛑 §8.7.15: "A new mount path that is a prefix of, or
+             * prefixed by, an existing mount path in the same project
+             * version MUST be **refused by default**; on explicit audited
+             * override the system MUST auto-generate redirect rows for
+             * every shadowed path identified from the affected builds'
+             * file manifests."
+             *
+             * Phase 13 refused a second mount outright, naming this
+             * requirement and two others as the reason. All three ship
+             * together in this phase, which is why the blanket refusal is
+             * gone and this one is here instead.
+             *
+             * The override does NOT skip the work — it moves it to publish,
+             * where {@see CompositionCollisions} can see the actual file
+             * manifests and tell a shadowed path (which gets a redirect)
+             * from a genuine collision (which §8.7.14 still refuses).
+             */
+            if (! $shadowingOverride && MountShadowing::conflict($mountPath, $mount->mount_path)) {
+                throw CompositionRefused::of(
+                    CompositionRejection::MountPathShadows,
+                    '"'.$mountPath.'" and "'.$mount->mount_path.'" shadow one another',
+                );
+            }
         }
     }
 

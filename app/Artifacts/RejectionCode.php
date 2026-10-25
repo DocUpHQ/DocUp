@@ -134,6 +134,14 @@ enum RejectionCode: string
     case MultipleHtmlzipFiles = 'contract.multiple_htmlzip_files';
 
     /**
+     * §8.7.6's nav fragment is one document, like the three offline
+     * formats and for the same reason: the composition reads one path, and
+     * a build that wrote two would leave DocUp choosing which navigation a
+     * project gets.
+     */
+    case MultipleNavFiles = 'contract.multiple_nav_files';
+
+    /**
      * A top-level entry that is not one of §8.4.5's format directories.
      *
      * Refused rather than ignored. "anything written to
@@ -215,6 +223,7 @@ enum RejectionCode: string
             'pdf' => self::MultiplePdfFiles,
             'epub' => self::MultipleEpubFiles,
             'htmlzip' => self::MultipleHtmlzipFiles,
+            'nav' => self::MultipleNavFiles,
             default => throw new \ValueError("No multiple-files identifier for format [{$format}]."),
         };
     }
@@ -253,6 +262,7 @@ enum RejectionCode: string
             self::MultiplePdfFiles => 'The pdf output directory must contain exactly one file.',
             self::MultipleEpubFiles => 'The epub output directory must contain exactly one file.',
             self::MultipleHtmlzipFiles => 'The htmlzip output directory must contain exactly one file.',
+            self::MultipleNavFiles => 'The nav output directory must contain exactly one file.',
             self::UnknownOutputDirectory => 'The build output contains an entry outside html/, pdf/, epub/ '
                 .'and htmlzip/.',
             self::FileCountExceeded => 'The tree contains more files than this installation allows.',

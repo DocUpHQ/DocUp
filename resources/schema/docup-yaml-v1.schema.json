@@ -239,6 +239,19 @@
       "type": "string",
       "maxLength": 255,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9/_-]*$"
+    },
+
+    "nav": {
+      "description": "SPEC 8.7.6's nav fragment, as the repository declares it, and the first of the sources that requirement names — it takes precedence over the generator's own output. Hrefs are relative to the COMPONENT root, because the project prefixes its mount path onto every one of them when the fragment is spliced into the project's layout tree; an absolute or root-relative href is dropped during normalisation rather than prefixed into nonsense.",
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "description": "Either a single-pair map (`- Getting started: intro.html`, the form MkDocs uses), an explicit `{label, href, children}` object, or a bare path whose own text becomes the label.",
+        "type": ["object", "string"],
+        "maxLength": 512,
+        "minProperties": 1,
+        "maxProperties": 8
+      }
     }
   },
 

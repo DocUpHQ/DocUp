@@ -206,7 +206,16 @@ final class PublishPointerTest extends TestCase
         // The degenerate single-component manifest: one mount, at the root.
         $manifest = ProjectVersionManifest::query()->whereKey($version->published_manifest_id)->firstOrFail();
 
-        $this->assertSame('docup.version-manifest/1', $manifest->mounts_json['schema']);
+        /*
+         * 🛑 `/2` since Phase 14. The document gained the provenance
+         * §8.7.21 needs answerable from the manifest alone — component key,
+         * selector, resolved ref, commit — and §8.7.15's shadow redirects.
+         * Versioned in the payload rather than implied, because §8.1.11's
+         * stability promise means `/1` manifests written before this phase
+         * stay readable, and a reader that cannot tell which shape it has
+         * must guess.
+         */
+        $this->assertSame('docup.version-manifest/2', $manifest->mounts_json['schema']);
         $this->assertCount(1, $manifest->mounts_json['mounts']);
         $this->assertSame('', $manifest->mounts_json['mounts'][0]['mount_path']);
         $this->assertTrue($manifest->mounts_json['mounts'][0]['is_primary']);

@@ -16,6 +16,7 @@ use App\Builds\Sandbox\SandboxPolicy;
 use App\Builds\Stage;
 use App\Builds\Toolchain\ToolchainPlan;
 use App\Builds\Toolchain\ToolchainPresets;
+use App\Composition\Navigation\NavFragment;
 use App\Config\ConfigParser;
 use App\Config\HtmlContext;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -84,6 +85,113 @@ final class GeneratorConformanceTest extends TestCase
     public function test_an_offline_generator_builds_from_twelve_lines(string $toolchain): void
     {
         $this->assertGeneratorBuilds($toolchain);
+    }
+
+    /**
+     * 🛑 §8.7.6's nav fragment, lifted from "the generator's own
+     * output", in the real sandbox.
+     *
+     * > "Each build emits a normalised **nav fragment** with hrefs relative
+     * > to the component root, lifted from `.docup.yaml` `nav:` or the
+     * > generator's own output (MkDocs `nav`, Sphinx `-b json` toctree,
+     * > `SUMMARY.md`, `sidebars.js`)."
+     *
+     * Run here rather than as a unit test because the lifting happens
+     * **inside the build container**, in the preset's own step, against
+     * the generator's own configuration — so a unit test would be
+     * asserting a copy of the script rather than the script. The
+     * assertions are on the hrefs, not merely on the file's presence: an
+     * href that does not match what the generator actually wrote is a
+     * navigation tree in which every link 404s, which is worse than no
+     * fragment at all.
+     *
+     * @param  array<string, string>  $files  the fixture to build
+     * @param  list<string>  $expectedHrefs  every href the fragment must carry, sorted
+     */
+    #[DataProvider('navigationFixtures')]
+    public function test_a_generator_emits_a_nav_fragment_whose_hrefs_exist(
+        string $toolchain,
+        array $files,
+        array $expectedHrefs,
+    ): void {
+        $archive = $this->buildAndExport($toolchain, $files);
+
+        $bytes = $this->fileFromArchive($archive, 'nav/nav.json');
+
+        $this->assertIsString($bytes, $toolchain.' emitted no nav/nav.json');
+
+        $fragment = NavFragment::decode($bytes);
+
+        $this->assertFalse($fragment->isEmpty(), $toolchain.' emitted an empty fragment');
+
+        $hrefs = [];
+
+        foreach ($fragment->nodes as $node) {
+            // A section node carries a label and no href — MkDocs's
+            // `Guide:` with children, Sphinx's `:caption:`. Collecting its
+            // null as '' would make the two generators' fixtures differ by
+            // a value that is not an href.
+            if ($node->href !== null) {
+                $hrefs[] = $node->href;
+            }
+
+            foreach ($node->children as $child) {
+                if ($child->href !== null) {
+                    $hrefs[] = $child->href;
+                }
+            }
+        }
+
+        sort($hrefs, SORT_STRING);
+
+        $this->assertSame($expectedHrefs, $hrefs, $toolchain.' lifted the wrong hrefs');
+
+        /*
+         * 🛑 And every one of them is a page this build actually
+         * produced. A fragment is only useful if its links resolve, and
+         * the two generators spell their URLs differently — MkDocs under
+         * `use_directory_urls`, Sphinx under `dirhtml` — which is exactly
+         * where a lifted nav goes wrong.
+         */
+        foreach ($hrefs as $href) {
+            $this->assertTrue(
+                $this->archiveContains($archive, 'html/'.rtrim($href, '/').'/index.html')
+                    || $this->archiveContains($archive, 'html/'.$href),
+                $toolchain.' lifted an href the build did not produce: "'.$href.'"',
+            );
+        }
+    }
+
+    /** @return iterable<string, array{string, array<string, string>, list<string>}> */
+    public static function navigationFixtures(): iterable
+    {
+        yield 'mkdocs' => [
+            'mkdocs',
+            [
+                '.docup.yaml' => "version: 2\ntoolchain: mkdocs\nmkdocs:\n  configuration: mkdocs.yml\n",
+                'mkdocs.yml' => "site_name: Fixture\nnav:\n  - Home: index.md\n  - Guide:\n"
+                    ."    - Intro: guide/intro.md\n",
+                'docs/index.md' => "# Fixture\n\nBuilt by DocUp.\n",
+                'docs/guide/intro.md' => "# Intro\n\nA page.\n",
+            ],
+            // `index.md` is the component root under MkDocs's default
+            // `use_directory_urls`; `guide/intro.md` is `guide/intro/`.
+            ['', 'guide/intro/'],
+        ];
+
+        yield 'sphinx' => [
+            'sphinx',
+            [
+                '.docup.yaml' => "version: 2\ntoolchain: sphinx\nsphinx:\n"
+                    ."  builder: dirhtml\n  configuration: docs/conf.py\n",
+                'docs/conf.py' => "project = 'Fixture'\nextensions = []\nexclude_patterns = ['_build']\n",
+                'docs/index.rst' => "Fixture\n=======\n\n.. toctree::\n   :caption: Guide\n\n"
+                    ."   intro\n   Named <reference>\n",
+                'docs/intro.rst' => "Intro\n=====\n\nA page.\n",
+                'docs/reference.rst' => "Reference\n=========\n\nAnother page.\n",
+            ],
+            ['intro/', 'reference/'],
+        ];
     }
 
     /**
@@ -364,6 +472,47 @@ final class GeneratorConformanceTest extends TestCase
      */
     private function assertGeneratorBuilds(string $toolchain, ?array $files = null, array $alsoExpect = []): void
     {
+        $archive = $this->buildAndExport($toolchain, $files);
+
+        try {
+            /*
+             * \u{1F6D1} §8.4.5's whole contract in one assertion:
+             * "anything written to `$DOCUP_OUTPUT/{html,pdf,epub,htmlzip}/`
+             * is published; `html/index.html` is mandatory". Seven
+             * generators, one directory, one mandatory file — "This one
+             * contract is why ten unrelated generators work from twelve
+             * lines of YAML."
+             */
+            $this->assertTrue(
+                $this->archiveContains($archive, 'html/index.html'),
+                $toolchain.' produced no html/index.html in $DOCUP_OUTPUT (§8.4.5)',
+            );
+
+            // §8.4.5's offline formats, where the caller asked for them.
+            foreach ($alsoExpect as $path) {
+                $this->assertTrue(
+                    $this->archiveContains($archive, $path),
+                    $toolchain.' produced no '.$path.' in $DOCUP_OUTPUT (§8.4.5)',
+                );
+            }
+        } finally {
+            @unlink($archive);
+        }
+    }
+
+    /**
+     * Build one fixture in the real sandbox and export its output tree.
+     *
+     * Split out of {@see self::assertGeneratorBuilds()} so a caller can
+     * assert on the archive's **contents** rather than only on which paths
+     * it carries. The workspace is destroyed here; the archive lives in
+     * the spool and is the caller's to delete.
+     *
+     * @param  array<string, string>|null  $files  a fixture other than the toolchain's own
+     * @return string the exported archive's path
+     */
+    private function buildAndExport(string $toolchain, ?array $files = null): string
+    {
         $preset = ToolchainPresets::get($toolchain);
         $image = $this->imageReferenceFor($preset->image);
 
@@ -450,29 +599,9 @@ final class GeneratorConformanceTest extends TestCase
                 $toolchain.' produced no exportable output directory',
             );
 
-            /*
-             * 🛑 §8.4.5's whole contract in one assertion:
-             * "anything written to `$DOCUP_OUTPUT/{html,pdf,epub,htmlzip}/`
-             * is published; `html/index.html` is mandatory". Seven
-             * generators, one directory, one mandatory file — "This one
-             * contract is why ten unrelated generators work from twelve
-             * lines of YAML."
-             */
-            $this->assertTrue(
-                $this->archiveContains($archive, 'html/index.html'),
-                $toolchain.' produced no html/index.html in $DOCUP_OUTPUT (§8.4.5)',
-            );
-
-            // §8.4.5's offline formats, where the caller asked for them.
-            foreach ($alsoExpect as $path) {
-                $this->assertTrue(
-                    $this->archiveContains($archive, $path),
-                    $toolchain.' produced no '.$path.' in $DOCUP_OUTPUT (§8.4.5)',
-                );
-            }
+            return $archive;
         } finally {
             $driver->destroyWorkspace($volume);
-            @unlink(Spool::fromConfig()->output($buildId.'-build'));
         }
     }
 
@@ -558,6 +687,53 @@ final class GeneratorConformanceTest extends TestCase
         }
 
         return false;
+    }
+
+    /**
+     * One file's bytes out of an exported archive, or null.
+     *
+     * The companion to {@see self::archiveContains()}: the nav fragment's
+     * presence proves nothing on its own, because a preset that wrote an
+     * empty object would satisfy it.
+     */
+    private function fileFromArchive(string $archive, string $path): ?string
+    {
+        if (! is_file($archive)) {
+            return null;
+        }
+
+        $handle = fopen($archive, 'rb');
+
+        if ($handle === false) {
+            return null;
+        }
+
+        try {
+            while (($header = fread($handle, 512)) !== false && strlen($header) === 512) {
+                $name = rtrim(substr($header, 0, 100), "\0");
+
+                if ($name === '') {
+                    break;
+                }
+
+                $prefix = rtrim(substr($header, 345, 155), "\0");
+                $full = ltrim(($prefix === '' ? '' : $prefix.'/').$name, './');
+                $size = (int) octdec(trim(substr($header, 124, 12)) ?: '0');
+
+                if ($full === $path || str_ends_with($full, '/'.$path)) {
+                    // A header whose size field is absent or negative is a
+                    // malformed archive, not an empty file; both read as ''
+                    // here and the caller's `isEmpty()` check catches it.
+                    return $size > 0 ? (string) fread($handle, $size) : '';
+                }
+
+                fseek($handle, (int) (ceil($size / 512) * 512), SEEK_CUR);
+            }
+        } finally {
+            fclose($handle);
+        }
+
+        return null;
     }
 
     private function imageReferenceFor(string $key): string

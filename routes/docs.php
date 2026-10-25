@@ -5,6 +5,8 @@
 
 declare(strict_types=1);
 
+use App\Http\Controllers\Serving\CompositionController;
+use App\Http\Controllers\Serving\CrossReferenceController;
 use App\Http\Controllers\Serving\DocumentController;
 use App\Http\Controllers\Serving\DownloadController;
 use App\Http\Controllers\Serving\ProvenanceController;
@@ -105,6 +107,47 @@ foreach ($apexes as $index => $apex) {
                 ->where('version', '[a-z0-9][a-z0-9._-]{0,79}')
                 ->where('format', implode('|', OfflineFormat::values()))
                 ->name('docs.downloads.'.$index);
+
+            /*
+             * 🛑 SPEC 8.7.16's cross-component reference namespace.
+             *
+             * Two routes rather than one optional parameter, because
+             * `/_/x/{component}` with no path is a real request — it names
+             * the component's own root — and Laravel's optional-parameter
+             * form would make the trailing slash decide which of the two it
+             * was.
+             *
+             * The component pattern is SPEC 10.2's `components.key` shape.
+             * Constrained at the router as well as looked up in the
+             * manifest, for the reason the downloads route gives: the
+             * pattern means a traversal never reaches PHP, and the manifest
+             * lookup means one that does cannot name a storage path.
+             */
+            Route::get('/_/x/{component}/{docupXrefPath}', CrossReferenceController::class)
+                ->where('docupHostLabel', '[a-z0-9]([a-z0-9-]*[a-z0-9])?')
+                ->where('component', '[a-z0-9][a-z0-9._-]{0,99}')
+                /*
+                 * A leading underscore is allowed because SPEC 8.7.16's own
+                 * directly-served map is `_xref.json`. Traversal is still
+                 * impossible: `..` never reaches here, because
+                 * RejectNonCanonicalPath runs first and SPEC 8.9.6 puts it
+                 * before everything.
+                 */
+                ->where('docupXrefPath', '[A-Za-z0-9_][A-Za-z0-9._/-]{0,511}')
+                ->name('docs.xref.'.$index);
+
+            Route::get('/_/x/{component}', CrossReferenceController::class)
+                ->where('docupHostLabel', '[a-z0-9]([a-z0-9-]*[a-z0-9])?')
+                ->where('component', '[a-z0-9][a-z0-9._-]{0,99}')
+                ->name('docs.xref.root.'.$index);
+
+            /*
+             * SPEC 8.7.21's `/_/composition` — the auditor's answer to "what
+             * was on this URL on 2026-03-04?".
+             */
+            Route::get('/_/composition', CompositionController::class)
+                ->where('docupHostLabel', '[a-z0-9]([a-z0-9-]*[a-z0-9])?')
+                ->name('docs.composition.'.$index);
 
             /*
              * One route for every documentation path. SPEC 7.3's grammar is the

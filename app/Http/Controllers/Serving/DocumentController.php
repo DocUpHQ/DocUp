@@ -81,6 +81,24 @@ final class DocumentController
             return $this->refuse(RejectionReason::NothingPublished, 'version.not_servable');
         }
 
+        /*
+         * 🛑 §8.7.15's generated redirects, consulted BEFORE the mount is
+         * matched, and §8.11.1's fixed order is why: "implicit redirects"
+         * come before the "existence probe". A shadowed path is one the
+         * deeper mount does not serve — the planner only records those —
+         * so this can never shadow a real page, and consulting it after the
+         * file lookup would turn a redirect into a 404 for every reader
+         * whose bookmark the override was meant to protect.
+         */
+        $shadow = $this->manifests->shadowRedirects($version->publishedManifestId)[$route->remainder] ?? null;
+
+        if (is_string($shadow)) {
+            return $this->redirect(
+                substr($path, 0, strlen($path) - strlen($route->remainder)).$shadow,
+                'composition.shadowed_path',
+            );
+        }
+
         $mounts = $this->manifests->mounts($version->publishedManifestId);
         $match = $this->resolver->resolveMount($mounts, $route->remainder);
 

@@ -130,6 +130,25 @@ final class VersionSyncTest extends TestCase
         $this->assertSame('v2.0.0', $after->created[0]->slug);
         $this->assertSame('release', $after->created[0]->kind, 'a tag is a release, a branch is a channel');
 
+        /*
+         * 🛑 §8.8.7: "`publish_mode` MUST default to `auto` for channel-kind
+         * versions and `manual` for release-kind versions."
+         *
+         * Asserted at **birth**, because that is the only moment a version
+         * learns its kind and a column default cannot say two things.
+         * `ProjectVersion::defaultPublishModeFor()` existed from Phase 10 and
+         * nothing called it, so every tag-born version was created `auto` and
+         * §8.8.7's drift gate would never have engaged on a real release.
+         * Found while implementing the gate in Phase 14.
+         */
+        $this->assertSame('manual', $after->created[0]->publish_mode, 'a release does not republish itself');
+
+        foreach ($before->created as $born) {
+            if ($born->kind === 'channel') {
+                $this->assertSame('auto', $born->publish_mode, 'a channel tracks a branch and moves on its own');
+            }
+        }
+
         $outcome = $this->channels->reconcile($this->reload($this->project), $this->versions(), 'main');
 
         $this->assertSame('v2.0.0', $outcome->stable?->slug);

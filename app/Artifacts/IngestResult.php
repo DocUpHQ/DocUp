@@ -30,6 +30,8 @@ final class IngestResult
      * @param  string  $contentSha256  digest of the canonical manifest bytes
      * @param  InjectionCoverage  $coverage  §8.15.3's per-build record, which the
      *                                       caller persists and may have to warn about
+     * @param  CrossReferences  $references  §8.7.16's outgoing `/_/x/…` set,
+     *                                       collected during the same pass that injects
      */
     public function __construct(
         public readonly string $buildId,
@@ -41,6 +43,7 @@ final class IngestResult
         public readonly int $totalBytes,
         public readonly string $contentSha256,
         public readonly InjectionCoverage $coverage,
+        public readonly CrossReferences $references = new CrossReferences,
     ) {}
 
     /**

@@ -7,6 +7,8 @@ declare(strict_types=1);
 
 namespace App\Config;
 
+use App\Composition\Navigation\NavFragment;
+
 /**
  * A validated `.docup.yaml`, read through accessors rather than by index.
  *
@@ -240,6 +242,28 @@ final readonly class DocupConfig
         $path = $this->raw['suggested_mount_path'] ?? null;
 
         return is_string($path) ? $path : null;
+    }
+
+    /**
+     * 🛑 §8.7.6's nav fragment, as the repository declared it.
+     *
+     * > "Each build emits a normalised **nav fragment** with hrefs relative
+     * > to the component root, lifted from `.docup.yaml` `nav:` or the
+     * > generator's own output"
+     *
+     * Returned **raw**. Normalisation is
+     * {@see NavFragment::normalise()}'s job and
+     * it is a trust boundary, not a tidy-up — so this method does not do
+     * half of it. A caller that got a partly normalised tree from here
+     * would be the second place deciding what an href may be.
+     *
+     * @return array<array-key, mixed>
+     */
+    public function nav(): array
+    {
+        $nav = $this->raw['nav'] ?? null;
+
+        return is_array($nav) ? $nav : [];
     }
 
     /**

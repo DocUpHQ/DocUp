@@ -14,12 +14,19 @@ use App\Builds\BuildPlan;
 use App\Builds\Provenance;
 use App\Builds\PublishSource;
 use App\Builds\RunnerArtifact;
+use App\Composition\CompositionPlan;
+use App\Composition\CompositionPlanner;
+use App\Composition\DriftGate;
 use App\Composition\Mounts;
+use App\Composition\Navigation\NavNode;
 use App\Models\Build;
 use App\Models\BuildOutput;
 use App\Models\Component;
 use App\Models\ComponentMount;
+use App\Models\DriftEvent;
 use App\Models\ManifestBuild;
+use App\Models\ManifestLinkIssue;
+use App\Models\MountResolution;
 use App\Models\Project;
 use App\Models\ProjectVersion;
 use App\Models\ProjectVersionManifest;
@@ -64,6 +71,17 @@ final class Publisher
          * be omitted by constructing the publisher without it.
          */
         private readonly Mounts $mounts = new Mounts,
+
+        /*
+         * §8.7's whole composition, resolved in one place. Defaulted for the
+         * same reason `Mounts` is: there are several construction sites, two
+         * of them tests, and a publisher built without a planner would
+         * silently publish an unresolved composition.
+         */
+        private readonly CompositionPlanner $planner = new CompositionPlanner,
+
+        /* §8.8.7's gate and §8.8.8's record, defaulted for the same reason. */
+        private readonly DriftGate $drift = new DriftGate,
     ) {}
 
     /**
@@ -541,6 +559,16 @@ final class Publisher
                 'chrome_documents' => $result->coverage->documents(),
                 'chrome_injected' => $result->coverage->injected(),
                 'chrome_coverage' => $result->coverage->toArray(),
+
+                /*
+                 * 🛑 §8.7.16's references, as the ingest pass found them.
+                 * Null rather than an empty document when a build makes
+                 * none, so the common case costs a byte and the composition
+                 * planner's `is_array()` check is the whole of its guard.
+                 */
+                'cross_references' => $result->references->isEmpty()
+                    ? null
+                    : $result->references->toArray(),
             ])->save();
 
             foreach ($result->outputs as $output) {
@@ -650,7 +678,44 @@ final class Publisher
                 throw new \RuntimeException('The version disappeared while publishing.');
             }
 
-            $target = $manifest ?? $this->mintManifest($locked, $build);
+            /*
+             * 🛑 §8.8.7's approval gate, before the compare-and-swap.
+             *
+             * > "`publish_mode` MUST default to `auto` for channel-kind
+             * > versions and `manual` for release-kind versions."
+             *
+             * The composition is resolved first, because the gate's question
+             * is "would this change what is being served" and only the
+             * resolved plan can answer it. On a `manual` version with a
+             * change, nothing flips: §8.8.8's drift event records exactly
+             * what would have changed and the build settles as
+             * `success_unpublished` — which is the state §8.8.4 already
+             * gives a build whose bytes are valid and simply are not the
+             * ones being served.
+             *
+             * Skipped entirely for a rollback, which supplies `$manifest`:
+             * returning to a revision this version has already served is not
+             * drift, and asking a human to approve the undo of the thing
+             * they are undoing would be the gate at its most theatrical.
+             */
+            $plan = $manifest instanceof ProjectVersionManifest
+                ? null
+                : $this->planner->plan($locked, $build);
+
+            $approved = null;
+
+            if ($plan instanceof CompositionPlan) {
+                $approved = $this->drift->approvedPending($locked);
+                $gated = $approved instanceof DriftEvent
+                    ? null
+                    : $this->gateOnDrift($locked, $plan, $build, $expectedManifestId, $actorId);
+
+                if ($gated instanceof PublishOutcome) {
+                    return $gated;
+                }
+            }
+
+            $target = $manifest ?? $this->mintManifest($locked, $build, $plan);
 
             /*
              * The compare-and-swap. `<=>` rather than `=` because the expected
@@ -733,6 +798,33 @@ final class Publisher
                 actorId: $actorId,
             );
 
+            /*
+             * §8.8.8's other half: an automatic publication is recorded too,
+             * so §18.25's assumption stays falsifiable whichever way
+             * operators use the gate.
+             */
+            if ($plan instanceof CompositionPlan) {
+                if ($approved instanceof DriftEvent) {
+                    // The approval is spent: it names the revision it let
+                    // through, so the next change needs its own.
+                    $this->drift->settle($approved, $target->id);
+                } elseif ($expectedManifestId !== null) {
+                    /*
+                     * 🛑 Only a publication that REPLACED something can
+                     * have drifted. A first publication has nothing to
+                     * compare against, so every mount would read as
+                     * changed-from-nothing — a row that says only "this
+                     * version was published", which `version_pointer_events`
+                     * already says and says better.
+                     */
+                    $changes = $this->drift->changes($locked, $plan);
+
+                    if ($changes !== []) {
+                        $this->drift->record($locked, $changes, 'auto', $target->id, $actorId);
+                    }
+                }
+            }
+
             $event = new VersionPointerEvent;
             $event->forceFill([
                 'organisation_id' => $locked->organisation_id,
@@ -784,8 +876,57 @@ final class Publisher
      * data change, while replacing a build pointer with a manifest pointer is
      * the un-retrofittable one.
      */
-    private function mintManifest(ProjectVersion $version, ?Build $build): ProjectVersionManifest
-    {
+    /**
+     * 🛑 §8.8.7's gate, answered: publish, or record and stop.
+     *
+     * Returns a non-published outcome when the version is `manual` and the
+     * composition has changed; null when the publish may proceed.
+     */
+    private function gateOnDrift(
+        ProjectVersion $locked,
+        CompositionPlan $plan,
+        ?Build $build,
+        ?string $expectedManifestId,
+        ?string $actorId,
+    ): ?PublishOutcome {
+        if ($this->drift->permitsAutomaticPublication($locked)) {
+            return null;
+        }
+
+        /*
+         * 🛑 The first publication of a version is never drift. There is
+         * nothing to drift from, and gating it would leave a release-kind
+         * version unable to publish at all without approving a change from
+         * nothing to something.
+         */
+        if ($expectedManifestId === null) {
+            return null;
+        }
+
+        $changes = $this->drift->changes($locked, $plan);
+
+        if ($changes === []) {
+            return null;
+        }
+
+        $this->drift->record($locked, $changes, 'pending', null, $actorId);
+
+        $build?->forceFill(['state' => 'success_unpublished', 'finished_at' => now()])->save();
+
+        return new PublishOutcome(
+            published: false,
+            build: $build,
+            manifest: null,
+            previousManifestId: $expectedManifestId,
+            awaitingApproval: true,
+        );
+    }
+
+    private function mintManifest(
+        ProjectVersion $version,
+        ?Build $build,
+        ?CompositionPlan $plan = null,
+    ): ProjectVersionManifest {
         $highest = ProjectVersionManifest::query()
             ->where('project_version_id', $version->id)
             ->max('revision');
@@ -796,52 +937,185 @@ final class Publisher
         // would collide with the next publish on the unique index.
         $revision = 1 + (is_numeric($highest) ? (int) $highest : 0);
 
-        $mounts = [];
+        /*
+         * 🛑 Phase 14: the composition is **resolved**, not assumed.
+         *
+         * Until this phase every mount pointed at the build that had just
+         * finished, which was true because a version had one mount. With
+         * several, each mount runs its own §8.7.5 selector — and the planner
+         * is also where §8.7.14's collisions are refused, §8.7.6's navigation
+         * is spliced and §8.7.16's cross-reference map is built, because all
+         * four are answers about the same list of mounts and computing them
+         * apart is how they come to disagree.
+         *
+         * A refusal here propagates out of `flip()`'s transaction, so a
+         * composition that cannot publish leaves the live one serving
+         * untouched — §8.7.20's first sentence, obtained by doing the work
+         * inside the transaction rather than by remembering to undo it.
+         */
+        $plan ??= $this->planner->plan($version, $build);
 
-        /** @var list<ComponentMount> $rows */
-        $rows = ComponentMount::query()
-            ->where('project_version_id', $version->id)
-            ->orderBy('mount_path')
-            ->get()
-            ->all();
-
-        foreach ($rows as $mount) {
-            /*
-             * Every mount resolves to the build just produced, because Phase 03
-             * has exactly one component per project. Phase 13 resolves each
-             * mount's own selector (`latest_success`, `ref`, `pinned_build`) and
-             * records the resolution as the append-only row §8.8.8 requires.
-             */
-            $mounts[] = [
-                'mount_path' => $mount->mount_path,
-                'component_id' => Uuid::toText($mount->component_id),
-                'build_id' => $build === null ? null : Uuid::toText($build->id),
-                'is_primary' => $mount->is_primary,
-                'min_access' => $mount->min_access_snapshot->value,
-            ];
-        }
-
-        return DB::transaction(function () use ($version, $build, $revision, $mounts): ProjectVersionManifest {
+        return DB::transaction(function () use ($version, $build, $revision, $plan): ProjectVersionManifest {
             $manifest = new ProjectVersionManifest;
             $manifest->forceFill([
                 'organisation_id' => $version->organisation_id,
                 'project_version_id' => $version->id,
                 'revision' => $revision,
-                'mounts_json' => ['schema' => 'docup.version-manifest/1', 'mounts' => $mounts],
+                'mounts_json' => [
+                    'schema' => 'docup.version-manifest/2',
+                    'mounts' => $plan->toManifestMounts(),
+
+                    /*
+                     * §8.7.15's generated redirects live in the manifest
+                     * rather than in `redirect_rules`, and the reason is
+                     * rollback. A shadowed path exists because of THIS
+                     * composition; returning to the previous manifest must
+                     * take the redirects with it, and a project-scoped rule
+                     * table would leave them behind, pointing at a mount
+                     * that is no longer there.
+                     */
+                    'shadow_redirects' => $plan->shadowRedirects,
+                    'shadow_overflow' => $plan->shadowOverflow,
+                ],
+                'nav_json' => [
+                    'schema' => 'docup.version-nav/1',
+                    'nodes' => array_map(
+                        static fn (NavNode $node): array => $node->toArray(),
+                        $plan->nav,
+                    ),
+                ],
+                'xref_json' => ['schema' => 'docup.xref-map/1', 'components' => $plan->xref],
             ])->save();
 
-            if ($build !== null) {
-                $link = new ManifestBuild;
-                $link->forceFill([
-                    'organisation_id' => $version->organisation_id,
-                    'manifest_id' => $manifest->id,
-                    'component_id' => $build->component_id,
-                    'build_id' => $build->id,
-                ])->save();
-            }
+            $this->recordManifestBuilds($manifest, $plan, $build);
+            $this->recordLinkIssues($manifest, $plan);
+            $this->recordResolutions($manifest, $version, $plan);
 
             return $manifest;
         });
+    }
+
+    /**
+     * `manifest_builds`, one row per mount that resolved (§10.4).
+     *
+     * 🛑 One per **component**, which is what makes §8.7.21's "which commit
+     * of which repository produced any URL" answerable by a join rather than
+     * by parsing the manifest document. The document is the serving path's
+     * copy; these rows are the auditor's index, and §8.8.9's sweep reads them
+     * to learn which builds a manifest still needs.
+     */
+    private function recordManifestBuilds(
+        ProjectVersionManifest $manifest,
+        CompositionPlan $plan,
+        ?Build $build,
+    ): void {
+        /*
+         * 🛑 Keyed by COMPONENT, because `UNIQUE (manifest_id,
+         * component_id)` is. Keyed by build id this guard looked right and
+         * let a second row through whenever the build passed to `flip()`
+         * was a different build of a component a mount had already
+         * resolved — which is every republication of a version whose
+         * contributor has built since.
+         */
+        $recorded = [];
+
+        foreach ($plan->mounts as $mount) {
+            $resolved = $mount->resolution->build;
+
+            if (! $resolved instanceof Build || isset($recorded[$resolved->component_id])) {
+                continue;
+            }
+
+            $recorded[$resolved->component_id] = true;
+
+            $link = new ManifestBuild;
+            $link->forceFill([
+                'organisation_id' => $manifest->organisation_id,
+                'manifest_id' => $manifest->id,
+                'component_id' => $resolved->component_id,
+                'build_id' => $resolved->id,
+            ])->save();
+        }
+
+        /*
+         * A version with no mounts at all still records the build it
+         * published, which is the degenerate case a direct upload reaches
+         * before Phase 03's mount exists. Guarded on `$recorded` so the
+         * composed case does not write a duplicate.
+         */
+        if ($build instanceof Build && ! isset($recorded[$build->component_id])) {
+            $link = new ManifestBuild;
+            $link->forceFill([
+                'organisation_id' => $manifest->organisation_id,
+                'manifest_id' => $manifest->id,
+                'component_id' => $build->component_id,
+                'build_id' => $build->id,
+            ])->save();
+        }
+    }
+
+    /**
+     * 🛑 §8.7.16's link issues, written beside a manifest that publishes
+     * anyway.
+     *
+     * > "Unresolved references MUST be recorded as publish-time link issues
+     * > that **never fail a build and never block a publish**."
+     *
+     * So this runs after the manifest row exists and throws nothing. The rows
+     * carry no uniqueness to violate, deliberately: a second identical issue
+     * is cheaper than a publish that fails on recording one.
+     */
+    private function recordLinkIssues(ProjectVersionManifest $manifest, CompositionPlan $plan): void
+    {
+        foreach ($plan->linkIssues as $issue) {
+            $row = new ManifestLinkIssue;
+            $row->forceFill([
+                'organisation_id' => $manifest->organisation_id,
+                'manifest_id' => $manifest->id,
+                'component_id' => $issue['component_id'],
+                'source_path' => $issue['source_path'],
+                'target_component_key' => $issue['target_component_key'],
+                'target_path' => $issue['target_path'],
+                'kind' => $issue['kind'],
+            ])->save();
+        }
+    }
+
+    /**
+     * 🛑 §8.8.8: "Every selector resolution MUST be recorded as an
+     * append-only row."
+     *
+     * Every one, including the resolutions that changed nothing and the ones
+     * that resolved to nothing. A table that recorded only the interesting
+     * cases could not answer "what did this mount resolve to on 4 March",
+     * because the absence of a row would mean both "unchanged" and "not
+     * asked".
+     */
+    private function recordResolutions(
+        ProjectVersionManifest $manifest,
+        ProjectVersion $version,
+        CompositionPlan $plan,
+    ): void {
+        foreach ($plan->mounts as $mount) {
+            $resolution = $mount->resolution;
+
+            $row = new MountResolution;
+            $row->forceFill([
+                'organisation_id' => $manifest->organisation_id,
+                'project_version_id' => $version->id,
+                'component_mount_id' => $mount->mount->id,
+                'component_id' => $mount->component->id,
+                'selector_kind' => $resolution->kind->value,
+                'selector_value' => $resolution->value,
+                'mirror_fallback' => $resolution->fallback?->value,
+                'resolved_label' => $resolution->label,
+                'resolved_ref' => $resolution->ref,
+                'resolved_commit_sha' => $resolution->commitSha,
+                'build_id' => $resolution->build?->id,
+                'outcome' => $resolution->outcome->value,
+                'manifest_id' => $manifest->id,
+            ])->save();
+        }
     }
 
     /**
