@@ -51,6 +51,12 @@ parameters:
         # the requirement itself: a type error in the ceiling comparison is
         # a security bug, not a crash.
         - app/Composition
+        # Phase 16. §8.12.8 says composition "MUST NEVER widen access,
+        # **without exception**", and `App\Collections\MountExposure` is the
+        # write-time half of that refusal — §9.4's criterion again, stated by
+        # the requirement: a type error in the narrowing comparison publishes
+        # a private project at a collection URL.
+        - app/Collections
         - app/Support
         - app/Concerns
         - app/Models

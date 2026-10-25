@@ -12,6 +12,7 @@ use App\Builds\BuildEnvironment;
 use App\Builds\Toolchain\ToolchainPresets;
 use App\Logging\RedactSecrets;
 use App\Source\SourceRejection;
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 /**
@@ -1296,6 +1297,45 @@ final class ArchitectureTest extends TestCase
             ['_/webhook/{integration}'],
             $declarations,
             'SPEC 8.19.3 forbids an unsigned generic endpoint; exactly one signed route may exist',
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.12.8: a collection holds no policy of its own.
+     *
+     * > "There is no opt-in to inherited parent access: `reader_policies` is
+     * > keyed on `project_id` and a collection holds no policy of its own
+     * > (SPEC 10.1, SPEC 10.6), so a widening inheritance flag would have
+     * > nothing to inherit from and would exist only as a way to defeat this
+     * > requirement."
+     *
+     * Asserted against the live schema rather than against the migration,
+     * because the column somebody adds "to make the index easier to query"
+     * arrives in a later migration and would be invisible to a test that
+     * read only the one that created the table. SPEC 8.2.5 says the same
+     * thing from the other side: a collection "is never a separate
+     * authorisation primitive", and a primitive is exactly what a
+     * visibility column here would make it.
+     */
+    public function test_no_collection_table_carries_an_access_column(): void
+    {
+        $forbidden = ['visibility', 'min_access', 'mount_exposure', 'exposure', 'access_level', 'inherit_access'];
+        $offenders = [];
+
+        foreach (['collections', 'collection_projects'] as $table) {
+            foreach (Schema::getColumnListing($table) as $column) {
+                if (in_array($column, $forbidden, true)) {
+                    $offenders[] = $table.'.'.$column;
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            '🛑 SPEC 8.12.8: a collection holds no policy of its own; effective access is the '
+                .'intersection over each member project and the mount it is served through: '
+                .implode(', ', $offenders),
         );
     }
 }

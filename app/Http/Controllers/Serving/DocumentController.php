@@ -11,13 +11,19 @@ use App\Artifacts\ContentTypes;
 use App\Http\Middleware\RejectNonCanonicalPath;
 use App\Serving\ArtifactHandoff;
 use App\Serving\CachePolicy;
+use App\Serving\CanonicalLocations;
 use App\Serving\FileKind;
+use App\Serving\Hreflang;
 use App\Serving\ManifestReader;
 use App\Serving\Negotiation;
 use App\Serving\RejectionReason;
 use App\Serving\Resolver;
 use App\Serving\RouteKind;
 use App\Serving\RoutingSnapshotLoader;
+use App\Serving\SnapshotMount;
+use App\Serving\SnapshotVersion;
+use App\Serving\TranslationNotice;
+use App\Serving\Translations;
 use App\Support\Uuid;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -48,11 +54,25 @@ use Symfony\Component\HttpFoundation\Response;
  */
 final class DocumentController
 {
+    /**
+     * Where §8.6.13's banner is carried.
+     *
+     * 🛑 The `X-DocUp-` prefix is the family §7.4 strips from every inbound
+     * request before Laravel sees it, so a reader cannot send this header and
+     * nothing downstream can mistake theirs for ours. §8.15's addons runtime
+     * reads it in Phase 28; until then it is what makes the refusal visible
+     * from outside, which is the only way §8.6.13 can be checked in
+     * production.
+     */
+    public const NOTICE_HEADER = 'X-DocUp-Notice';
+
     public function __construct(
         private readonly RoutingSnapshotLoader $snapshots,
         private readonly Resolver $resolver,
         private readonly ManifestReader $manifests,
         private readonly ArtifactHandoff $handoff,
+        private readonly Translations $translations,
+        private readonly CanonicalLocations $canonical,
     ) {}
 
     public function __invoke(Request $request): Response
@@ -67,6 +87,19 @@ final class DocumentController
         }
 
         if ($route->kind === RouteKind::Rejected) {
+            /*
+             * 🛑 §8.6.13's first case: the language itself is absent. The
+             * banner is built before the generic refusal, because the
+             * refusal's whole virtue is that it is cheap and adding a branch
+             * inside it would make every 404 pay for this one.
+             */
+            if ($route->reason === RejectionReason::LanguageNotFound && $route->mount !== null) {
+                return $this->refuseUntranslated(
+                    $this->languageAbsentNotice($route->mount, $route->language),
+                    $route->matchedRule,
+                );
+            }
+
             return $this->refuse($route->reason ?? RejectionReason::HostNotFound, $route->matchedRule);
         }
 
@@ -118,6 +151,19 @@ final class DocumentController
         }
 
         if ($file->kind === FileKind::Rejected) {
+            /*
+             * 🛑 §8.6.13's second case, and the one the requirement is
+             * actually about: the language exists, this page is not in it.
+             * "never a silent fallback to another language" — so the answer
+             * is still a 404 and the only thing that changes is that the
+             * reader is told where the page does live.
+             */
+            $notice = $this->untranslatedNotice($mount, $version, $route->remainder);
+
+            if ($notice !== null) {
+                return $this->refuseUntranslated($notice, 'file.no_match');
+            }
+
             return $this->refuse($file->reason ?? RejectionReason::FileNotFound, 'file.no_match');
         }
 
@@ -201,7 +247,121 @@ final class DocumentController
             $headers['Content-Encoding'] = $encoding;
         }
 
+        /*
+         * §8.11.6's `hreflang`, "generated across versions, mounts **and**
+         * domains". On the document rather than in it: 🛑 nothing rewrites
+         * documentation on the serving path (§4.3/6, §8.9.8), so the
+         * annotation is a header — the same choice §8.11.9 makes for
+         * `rel=canonical`. Phase 20's sitemap carries the same set.
+         */
+        $alternates = Hreflang::header(
+            $this->alternatesFor($mount, $version, $route->remainder, $file->key),
+        );
+
+        if ($alternates !== null) {
+            $headers['Link'] = $alternates;
+        }
+
         return $this->handoff->respond($storageKey, $headers);
+    }
+
+    /**
+     * §8.11.6's alternate set for the document being served.
+     *
+     * 🛑 **Gated three ways, and each gate is a cost argument.** Most
+     * projects have one language, so the common path must not pay for this
+     * at all: a project whose scheme carries no language in the URL has no
+     * alternates by construction; a version with no `translation_group_id`
+     * is not a translation of anything (§8.6.12); and a stylesheet is not a
+     * page. Only past all three does this read a sibling's file manifest —
+     * one cached read per language, on an HTML response.
+     *
+     * @return list<array{hreflang: string, href: string}>
+     */
+    private function alternatesFor(
+        SnapshotMount $mount,
+        SnapshotVersion $version,
+        string $within,
+        string $resolvedKey,
+    ): array {
+        if ($mount->versioningScheme() !== 'lang_and_version' || $version->translationGroupId === null) {
+            return [];
+        }
+
+        if (! str_ends_with($resolvedKey, '.html')) {
+            return [];
+        }
+
+        $location = $this->canonical->for($mount->project->id, $mount->project->routingEpoch);
+
+        if ($location === null) {
+            // §8.10.3's canonical mount is gone or cannot serve. An alternate
+            // set anchored on a host that serves nothing is worse than none.
+            return [];
+        }
+
+        return Hreflang::alternates(
+            $this->translations->pagesFor($mount->project, $version, $within, $location),
+            $location->origin,
+            $mount->project->defaultVersion()?->language,
+        );
+    }
+
+    /**
+     * 🛑 §8.6.13's banner for a page that exists in another language.
+     *
+     * Returns null when there is nothing to say — an ungrouped version, a
+     * page that exists nowhere, or a project with one language — and the
+     * caller then answers with the ordinary cheap 404. The banner is for the
+     * case where a fallback would have been *tempting*, which is exactly the
+     * case §8.6.13 forbids.
+     */
+    private function untranslatedNotice(
+        SnapshotMount $mount,
+        SnapshotVersion $version,
+        string $within,
+    ): ?TranslationNotice {
+        if ($mount->versioningScheme() !== 'lang_and_version' || $version->translationGroupId === null) {
+            return null;
+        }
+
+        $location = $this->canonical->for($mount->project->id, $mount->project->routingEpoch);
+
+        if ($location === null) {
+            return null;
+        }
+
+        $elsewhere = [];
+
+        foreach ($this->translations->pagesFor($mount->project, $version, $within, $location) as $page) {
+            if ($page['language'] === $version->language) {
+                /*
+                 * The page exists in the language being served, yet the file
+                 * lookup missed. That is a disagreement between two readings
+                 * of one manifest, not a translation gap, and reporting it as
+                 * one would hide it — so this falls through to the plain 404.
+                 */
+                return null;
+            }
+
+            $elsewhere[] = ['language' => $page['language'], 'href' => $location->origin.$page['path']];
+        }
+
+        return $elsewhere === []
+            ? null
+            : new TranslationNotice(TranslationNotice::PAGE_UNTRANSLATED, $version->language, $elsewhere);
+    }
+
+    /** §8.6.13's banner for a language the project does not publish at all. */
+    private function languageAbsentNotice(SnapshotMount $mount, string $language): TranslationNotice
+    {
+        $location = $this->canonical->for($mount->project->id, $mount->project->routingEpoch);
+
+        return new TranslationNotice(
+            TranslationNotice::LANGUAGE_ABSENT,
+            $language,
+            $location === null ? [] : $this->translations->languageRoots($mount->project, $location),
+        );
     }
 
     /**
@@ -320,6 +480,32 @@ final class DocumentController
     {
         return response('', $reason->status(), [
             RejectNonCanonicalPath::RESOLVER_HEADER => $rule.':'.$reason->value,
+            'Cache-Control' => 'private, no-store',
+            'CDN-Cache-Control' => 'private, no-store',
+            'X-Content-Type-Options' => 'nosniff',
+        ]);
+    }
+
+    /**
+     * 🛑 §8.6.13: "404 plus a notification banner, never a silent fallback".
+     *
+     * Still a 404 — the status is the requirement and the banner is the
+     * courtesy. The body is the one exception to {@see self::refuse()}'s
+     * empty-body rule and it is a few hundred static bytes, because a reader
+     * who followed a link into an untranslated page otherwise sees a blank
+     * page and has no way to learn that the English one exists.
+     *
+     * 🛑 **No `Vary: Accept-Language`.** §8.6.13 is explicit that locale
+     * negotiation is URL-only, and the header "would destroy edge
+     * cacheability" — the language came from the path, so the response does
+     * not vary on anything the reader sent.
+     */
+    private function refuseUntranslated(TranslationNotice $notice, string $rule): Response
+    {
+        return response($notice->body(), 404, [
+            RejectNonCanonicalPath::RESOLVER_HEADER => $rule.':'.RejectionReason::FileNotFound->value,
+            self::NOTICE_HEADER => $notice->header(),
+            'Content-Type' => 'text/html; charset=utf-8',
             'Cache-Control' => 'private, no-store',
             'CDN-Cache-Control' => 'private, no-store',
             'X-Content-Type-Options' => 'nosniff',

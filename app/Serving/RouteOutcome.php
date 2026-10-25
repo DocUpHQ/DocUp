@@ -67,6 +67,35 @@ final class RouteOutcome
     }
 
     /**
+     * A rejection that still knows which mount and language it was about.
+     *
+     * 🛑 §8.6.13 needs this: "A missing page in a non-default language MUST
+     * return 404 plus a notification banner." A banner naming the languages
+     * the project *does* publish cannot be built from a rejection that
+     * dropped which project and which language were asked for — and a caller
+     * re-deriving them from the path would be a second reading of §7.3's
+     * grammar, which §17.4 froze precisely to prevent.
+     *
+     * The resolver's **decision** is unchanged by this: same rule, same
+     * reason, same status. It reports two facts it had already computed
+     * rather than discarding them, so the freeze is untouched.
+     */
+    public static function rejectedIn(
+        string $matchedRule,
+        RejectionReason $reason,
+        SnapshotMount $mount,
+        string $language,
+    ): self {
+        return new self(
+            kind: RouteKind::Rejected,
+            matchedRule: $matchedRule,
+            reason: $reason,
+            mount: $mount,
+            language: $language,
+        );
+    }
+
+    /**
      * The resolution cache key (§8.9.10).
      *
      * 🛑 The epoch is **in the key** rather than purged. §8.9.10: "A failed CDN

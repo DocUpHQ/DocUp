@@ -120,19 +120,33 @@ final class RoutingSnapshotLoader
      */
     private static function isServable(object $row): bool
     {
-        if ($row->state === 'suspended') {
+        return self::canServe($row->kind, $row->state, $row->verified_at);
+    }
+
+    /**
+     * The same question, for a caller holding columns rather than a row.
+     *
+     * 🛑 Public so {@see CanonicalLocations} can ask it. §8.11.6's `hreflang`
+     * alternates and §8.11.9's canonical link both name a host this loader
+     * may never be asked about — they are the one case where the canonical
+     * mount is somewhere else — and a second copy of §8.10.6's predicate is
+     * how one of them starts publishing a host the other refuses to serve.
+     */
+    public static function canServe(string $kind, string $state, ?string $verifiedAt): bool
+    {
+        if ($state === 'suspended') {
             return false;
         }
 
-        $needsProof = in_array($row->kind, ['custom', 'apex'], true);
+        $needsProof = in_array($kind, ['custom', 'apex'], true);
 
-        if ($needsProof && $row->verified_at === null) {
+        if ($needsProof && $verifiedAt === null) {
             return false;
         }
 
         // `pending` is pre-proof. An installation-owned host may serve while
         // pending, because its proof is ownership of the apex.
-        return ! ($needsProof && $row->state === 'pending');
+        return ! ($needsProof && $state === 'pending');
     }
 
     /**
@@ -236,7 +250,8 @@ final class RoutingSnapshotLoader
          *     visibility: string,
          *     published_manifest_id: string|null,
          *     previous_manifest_id: string|null,
-         *     soft_landing_until: string|null
+         *     soft_landing_until: string|null,
+         *     translation_group_id: string|null
          * }> $versionRows
          */
         $versionRows = DB::table('project_versions')
@@ -252,6 +267,11 @@ final class RoutingSnapshotLoader
                 'published_manifest_id',
                 'previous_manifest_id',
                 'soft_landing_until',
+                // §8.6.12's group, loaded with the version rather than
+                // queried when a switcher asks: §8.9.1 wants resolution with
+                // no database queries, and the language switcher is rendered
+                // from the same snapshot the document was resolved against.
+                'translation_group_id',
             ])
             ->whereIn('project_id', $projectIds)
             ->whereNull('deleted_at')
@@ -298,6 +318,9 @@ final class RoutingSnapshotLoader
                 softLandingExpiresAt: $row->soft_landing_until === null
                     ? null
                     : (strtotime((string) $row->soft_landing_until) ?: null),
+                translationGroupId: $row->translation_group_id === null
+                    ? null
+                    : (string) $row->translation_group_id,
             );
         }
 
