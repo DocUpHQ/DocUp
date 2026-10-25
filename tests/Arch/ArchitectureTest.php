@@ -1189,4 +1189,113 @@ final class ArchitectureTest extends TestCase
             'only ToolchainPresets may load a preset (SPEC 11.4): '.implode(', ', $offenders),
         );
     }
+
+    /**
+     * 🛑 SPEC 11.1: "one shared raw-body verifier", and SPEC 8.19.3's
+     * constant-time comparison with it.
+     *
+     * The webhook endpoint is the application's **only unauthenticated
+     * write path**, so a second place computing an HMAC over a request body
+     * is a second place for an authentication bypass to live — and the one
+     * most likely to be written in a hurry, by someone adding "just a
+     * simple trigger for our CI".
+     *
+     * The rule is narrow on purpose: `hash_hmac` is legitimate elsewhere
+     * (SPEC 8.19.4's outgoing signatures, SPEC 8.12's tokens). What may not
+     * happen twice is a webhook signature comparison, which is why the
+     * allowlist is one file.
+     */
+    public function test_only_the_raw_body_verifier_compares_a_webhook_signature(): void
+    {
+        $allowed = ['app/Webhooks/RawBodyVerifier.php'];
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            if (! str_starts_with($relative, 'app/Webhooks/') || in_array($relative, $allowed, true)) {
+                continue;
+            }
+
+            $code = $this->code($file);
+
+            if (str_contains($code, 'hash_hmac') || str_contains($code, 'hash_equals')) {
+                $offenders[] = $relative;
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'SPEC 11.1: one shared raw-body verifier, and these compute their own: '.implode(', ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.19.3: one call site for signature verification.
+     *
+     * In the spirit of SPEC 4.3/7's single `ArtifactIngestor`: every
+     * delivery goes through `WebhookIngestor`, which is where the body cap,
+     * the replay ledger, the repository cross-check and the audit event
+     * live. A controller calling `SignatureScheme::verify()` directly would
+     * have a verified signature and none of the four.
+     */
+    public function test_only_the_ingestor_verifies_a_delivery(): void
+    {
+        $allowed = ['app/Webhooks/WebhookIngestor.php', 'app/Webhooks/SignatureScheme.php'];
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            if (! str_starts_with($relative, 'app/') || in_array($relative, $allowed, true)) {
+                continue;
+            }
+
+            if (str_contains($this->code($file), '->verify(')) {
+                $offenders[] = $relative;
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'SPEC 8.19.3: WebhookIngestor is the one call site: '.implode(', ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.19.3: "An **unsigned** generic webhook endpoint MUST NOT
+     * exist — Read the Docs ships one and it is a build-trigger oracle."
+     *
+     * `WebhookRouteTest` asserts this over the live route table, which is
+     * the stronger check. This one reads the route FILES, and catches the
+     * case the route table cannot: a route registered behind a condition —
+     * an environment check, a config flag, a `local`-only group — that the
+     * test suite does not satisfy and production does.
+     */
+    public function test_no_route_file_declares_a_second_webhook_endpoint(): void
+    {
+        $declarations = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            if (! str_starts_with($relative, 'routes/')) {
+                continue;
+            }
+
+            foreach (explode("\n", (string) file_get_contents($file)) as $line) {
+                if (preg_match('/Route::\w+\(\s*[\'"]([^\'"]*(?:webhook|hook)[^\'"]*)[\'"]/i', $line, $matches) === 1) {
+                    $declarations[] = $matches[1];
+                }
+            }
+        }
+
+        $this->assertSame(
+            ['_/webhook/{integration}'],
+            $declarations,
+            'SPEC 8.19.3 forbids an unsigned generic endpoint; exactly one signed route may exist',
+        );
+    }
 }

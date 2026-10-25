@@ -219,6 +219,65 @@ services:
       DOCUP_SANDBOX_EGRESS: ${DOCUP_SANDBOX_EGRESS:-allowlist}
       DOCUP_BUILDS_ENABLED: ${DOCUP_BUILDS_ENABLED:-true}
 
+  # --- the scheduler (SPEC 11.2 'app' zone) ---
+  #
+  # 🛑 Added in Phase 11, and it should have existed since Phase 02. Nothing
+  # in this stack ran `schedule:work`, so every `Schedule::command()` in
+  # routes/console.php was configuration with no process behind it: §8.22.1's
+  # daily signed audit anchor — whose whole value is that a missing day is a
+  # day that can be rewritten undetectably — and §8.22.6's MANDATORY hard
+  # purge, which is the product's stated erasure latency floor. Both were
+  # scheduled, reviewed, and never once executed in a deployment.
+  #
+  # Found while adding §8.5.3's per-version cron, which needs the same
+  # process. Recorded here rather than only in the build log because the
+  # failure mode is invisible: a scheduler that is absent looks exactly like
+  # one with nothing due.
+  #
+  # A separate service from `worker` rather than a flag on it, because the
+  # two scale differently: an operator running six workers for build
+  # throughput must not get six schedulers writing six audit anchors. The
+  # `onOneServer()` guards in routes/console.php need a cache lock to do
+  # that, and one scheduler needs no lock at all.
+  scheduler:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    networks: [app, data]
+    depends_on:
+      db: { condition: service_healthy }
+      cache: { condition: service_started }
+    command: ["php", "artisan", "schedule:work"]
+    # The same override, for the same reason the worker needs it: the
+    # FrankenPHP base image's HEALTHCHECK probes Caddy's admin API, and this
+    # container serves no HTTP. `schedule:list` proves the application boots
+    # and that the schedule is readable, which is what this process is for.
+    healthcheck:
+      test: ["CMD", "php", "artisan", "schedule:list"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    volumes:
+      - .:/app
+      - artifacts:/var/lib/docup/artifacts
+    working_dir: /app
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      APP_KEY: ${APP_KEY}
+      DB_CONNECTION: mysql
+      DB_HOST: db
+      DB_DATABASE: ${DB_DATABASE:-docup}
+      DB_USERNAME: ${DB_USERNAME:-docup}
+      DB_PASSWORD: ${DB_PASSWORD:-docup}
+      REDIS_HOST: cache
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: database
+      DOCUP_APP_HOST: ${DOCUP_APP_HOST}
+      DOCUP_DOCS_APEX: ${DOCUP_DOCS_APEX}
+      DOCUP_AUDIT_KEY: ${DOCUP_AUDIT_KEY}
+
   # --- the build runner (SPEC 8.5.13, SPEC 11.2 'runner' zone) ---
   #
   # 🛑 "No request-handling or queue-worker process MUST hold a

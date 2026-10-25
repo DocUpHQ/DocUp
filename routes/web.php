@@ -51,6 +51,15 @@ Route::prefix('_/health')->name('health.')->group(function (): void {
 */
 Route::get('_/schema/docup-yaml/v1.json', [SchemaController::class, 'show'])->name('schema.docup-yaml.v1');
 
+/*
+| §8.19.3's incoming provider webhooks are NOT here. This file is wrapped in
+| the `web` middleware group (see bootstrap/app.php), which validates a CSRF
+| token — and a provider has no session and cannot obtain one, so the route
+| lives in routes/api.php where it declares its own middleware. Said out
+| loud because "put it next to the other unauthenticated endpoints" is the
+| obvious move and it would have answered 419 to every genuine delivery.
+*/
+
 Route::get('/', fn () => redirect()->route('login'));
 
 /*

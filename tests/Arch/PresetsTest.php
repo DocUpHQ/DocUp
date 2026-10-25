@@ -123,6 +123,21 @@ arch()->preset()->laravel()
         // `version.slug_reserved` reaches an operator's tooling, which is
         // the kind of thing that belongs beside the code producing it.
         'App\Versions',
+        // Phase 11, and the argument is unchanged for a seventh namespace.
+        // `AutomationTrigger` and `AutomationAction` are §8.6.8's vocabulary
+        // and mean nothing outside it — `AutomationAction::isValidFor()`
+        // exists precisely to express §8.6.15's pairing of `delete_version`
+        // with ref disappearance, which is a fact about these two enums
+        // together and would read as nothing in a shared App\Enums.
+        'App\Automation',
+        // And App\Webhooks. `WebhookRejection`'s values are §8.1.11 public
+        // contract — `webhook.signature_invalid` reaches an operator's alert
+        // rule — and `SignatureScheme` carries the verification for all four
+        // of §11.1's schemes as methods on the enum, which is the "one
+        // adapter each" the requirement asks for. Moving either to App\Enums
+        // would separate the identifiers from the code that produces them
+        // and the schemes from the thing that distinguishes them.
+        'App\Webhooks',
     ]);
 
 arch()->preset()->strict()

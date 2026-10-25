@@ -161,6 +161,15 @@ final class SchemaConformanceTest extends TestCase
         $foreignIdentifierColumns = [
             'repositories.provider_repo_id',    // §18.27 / ADR 0009: the provider's own id
             'build_requests.delivery_id',       // §8.5.4: the provider's own webhook delivery id
+            // Phase 11, and the same column for the same reason one table
+            // along: §8.19.3's replay ledger is keyed on whatever the
+            // provider calls its delivery, and the five of §8.3.1 do not
+            // agree — GitHub sends a UUIDv4 string, Bitbucket a braced one,
+            // Gitea an opaque token. Storing it as BINARY(16) would mean
+            // parsing a foreign system's identifier before we are allowed
+            // to remember we have seen it, and failing to parse would mean
+            // failing to detect a replay.
+            'incoming_webhook_deliveries.delivery_id',
         ];
 
         $wrong = [];

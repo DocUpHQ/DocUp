@@ -36,6 +36,15 @@ parameters:
         # raising a gate for code a phase did not touch is how a phase ends
         # up either ignoring findings or growing a second scope.
         - app/Builds
+        # Phase 11, and §9.4's argument applies here more plainly than
+        # anywhere it has yet been applied. `app/Webhooks` is the
+        # application's ONLY unauthenticated write path: a type error in a
+        # signature comparison, a replay check or a provider payload is a
+        # security bug by construction, not a crash. `app/Automation` joins
+        # it because §8.6.15's `delete_version` is the one operation in
+        # DocUp that destroys reader-visible URLs.
+        - app/Webhooks
+        - app/Automation
         - app/Support
         - app/Concerns
         - app/Models

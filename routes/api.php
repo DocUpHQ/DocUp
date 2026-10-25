@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\BuildLogController;
 use App\Http\Controllers\Api\VersionPinController;
 use App\Http\Controllers\Api\VersionRollbackController;
 use App\Http\Controllers\Api\VersionUploadController;
+use App\Http\Controllers\WebhookController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -95,3 +96,36 @@ Route::prefix('api/v3')
         Route::get('builds/{build}', BuildController::class)->name('api.v3.builds.show');
         Route::get('builds/{build}/log', BuildLogController::class)->name('api.v3.builds.log');
     });
+
+/*
+|------------------------------------------------------------------------------
+| §8.19.3's incoming provider webhooks
+|------------------------------------------------------------------------------
+| 🛑 **One route, and it names an integration.** The id is the only thing the
+| URL carries, and it proves nothing on its own: `WebhookIngestor` unseals
+| that integration's secret and verifies the HMAC over the raw body before
+| anything else happens. An unknown integration and a bad signature answer
+| the same 401, so the URL cannot be used to enumerate which integrations
+| exist.
+|
+| 🛑 **There is no unsigned endpoint, generic or otherwise.** §8.19.3: "An
+| **unsigned** generic webhook endpoint MUST NOT exist — Read the Docs ships
+| one and it is a build-trigger oracle." A *signed* generic integration DOES
+| exist — §8.5.3 lists "generic webhook" among the eight trigger kinds — and
+| it arrives on this same route carrying `X-DocUp-Signature`.
+| `tests/Feature/Webhooks/WebhookRouteTest.php` asserts the absence by
+| walking the route table, because an absence is the one thing a test of the
+| routes that DO exist cannot prove.
+|
+| Here rather than in routes/web.php because that file is wrapped in the
+| `web` group, whose CSRF validation would answer 419 to every genuine
+| delivery — a provider has no session and cannot obtain a token.
+|
+| No `api.token`: the signature IS the credential, and a bearer token the
+| provider does not have would make the endpoint unreachable. The throttle
+| is §9.4.5's "webhook ingestion per integration" limiter.
+*/
+Route::post('_/webhook/{integration}', WebhookController::class)
+    ->middleware('throttle:webhooks')
+    ->whereUuid('integration')
+    ->name('webhook.deliver');

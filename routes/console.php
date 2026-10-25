@@ -59,3 +59,57 @@ Schedule::command('docup:purge')
     ->timezone('UTC')
     ->withoutOverlapping()
     ->onOneServer();
+
+/*
+| 🛑 §8.5.3's native per-version cron schedules, ticked every minute.
+|
+| The minute granularity is the schedules' own: an operator writing a
+| quarter-hourly expression means every fifteen minutes, and a scheduler
+| that looked once an hour would turn that into once an hour without saying
+| so.
+|
+| The command itself is cheap when nothing is due — one indexed query on
+| `(enabled, next_run_at)` — so the cost of the granularity is a query a
+| minute, which is what `withoutOverlapping` then bounds if a tick ever
+| takes longer than one.
+|
+| 🛑 §8.22.13's DST semantics live in `App\Automation\CronSchedule`, NOT
+| here. Laravel's own `->timezone()` would apply to this tick, which runs
+| every minute in every timezone; the schedules' timezones are per row.
+*/
+Schedule::command('docup:schedules:run')
+    ->everyMinute()
+    ->withoutOverlapping()
+    ->onOneServer();
+
+/*
+| §8.5.3's `ls-remote` poll, for repositories with no working webhook.
+|
+| 🛑 Every five minutes rather than at the configured interval, because the
+| command picks its own batch by oldest-checked-first: a tick that finds
+| nothing eligible costs one indexed query, and a tick that finds 4,000
+| repositories still only advertises `batch_size` of them. Putting the
+| interval in the cron expression instead would make `DOCUP_POLL_BATCH_SIZE`
+| and `DOCUP_POLL_INTERVAL_MINUTES` interact in a way neither documents.
+*/
+Schedule::command('docup:repositories:poll')
+    ->everyFiveMinutes()
+    ->withoutOverlapping()
+    ->onOneServer();
+
+/*
+| §20's 30-day retention on incoming webhook deliveries.
+|
+| 🛑 This is what bounds §8.19.3's weaker replay guarantee, so it is
+| scheduled for the same reason §8.22.6's purge is: the number in the
+| documentation only means something if something runs. See
+| `App\Webhooks\DeliveryLedger` for exactly how weak the bound is.
+|
+| 03:30 UTC, after the hard purge, so the two do not contend for the same
+| tables in a large installation.
+*/
+Schedule::command('docup:webhooks:prune')
+    ->dailyAt('03:30')
+    ->timezone('UTC')
+    ->withoutOverlapping()
+    ->onOneServer();
