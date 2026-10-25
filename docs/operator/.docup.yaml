@@ -1,0 +1,10 @@
+version: 2
+toolchain: mkdocs
+mkdocs:
+  configuration: mkdocs.yml
+  fail_on_warning: true
+nav:
+  - Operating DocUp: index.html
+  - Installing: installing.html
+  - Composition modes: composition.html
+  - Running it: operations.html

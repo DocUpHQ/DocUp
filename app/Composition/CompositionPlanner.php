@@ -436,6 +436,65 @@ final readonly class CompositionPlanner
                     $issues[] = $this->issue($mount, $reference, 'path_not_found');
                 }
             }
+
+            $issues = array_merge($issues, $this->navIssues($mount));
+        }
+
+        return $issues;
+    }
+
+    /**
+     * 🛑 Nav entries whose href names nothing the build produced (§8.7.6).
+     *
+     * **Found by dogfooding (§17 Phase 17), and it was silent.** §8.7.6
+     * offers two sources for a fragment — "`.docup.yaml` `nav:` ... or the
+     * generator's own output" — as if they were interchangeable, and they
+     * are not: the generator's extractor emits the URLs the build actually
+     * wrote, while a hand-written `nav:` is whatever the author believed
+     * them to be. Under MkDocs' default `use_directory_urls: true` an author
+     * who writes `installing.html` gets a navigation every entry of which
+     * 404s, with no warning anywhere — the fragment is valid, the splice
+     * succeeds and the manifest publishes.
+     *
+     * The file manifest is already in hand at this point (§8.4.18), so the
+     * check is free. Recorded as a link issue rather than refused, for the
+     * same reason a cross-component miss is: one bad href in one guide must
+     * not stop a whole manual publishing, and the remedy belongs to the
+     * repository that wrote it.
+     *
+     * The target component is the mount's own, because that is what makes
+     * the row readable: "`docup-operator` claims a page `docup-operator`
+     * does not have".
+     *
+     * @return list<array{component_id: string, source_path: string, target_component_key: string, target_path: string, kind: string}>
+     */
+    private function navIssues(ResolvedMount $mount): array
+    {
+        $build = $mount->resolution->build;
+
+        if (! $build instanceof Build || ! is_array($build->nav_json) || $build->nav_json === []) {
+            /*
+             * Only a DECLARED fragment is checked. The generator's own
+             * output names paths the same build produced, so an href that
+             * missed there would be a bug in the extractor rather than in a
+             * repository — and reporting it to the author as their typo
+             * would send them looking in the wrong file.
+             */
+            return [];
+        }
+
+        $issues = [];
+
+        foreach (NavFragment::normalise($build->nav_json)->hrefs() as $href) {
+            if ($href === '' || $this->targetExists($mount, $href)) {
+                continue;
+            }
+
+            $issues[] = $this->issue($mount, [
+                'component' => $mount->componentKey(),
+                'path' => $href,
+                'source' => '.docup.yaml nav:',
+            ], 'path_not_found');
         }
 
         return $issues;

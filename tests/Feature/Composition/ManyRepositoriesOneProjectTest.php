@@ -378,9 +378,65 @@ final class ManyRepositoriesOneProjectTest extends TestCase
     }
 
     /**
-     * 🛑 "A cross-component link resolves, and one repository's broken
+     * 🛑 A declared nav entry naming a page the build did not produce is
+     * recorded, not served silently.
+     *
+     * **Found by dogfooding in Phase 17**, and it was silent. §8.7.6 offers
+     * `.docup.yaml` `nav:` and the generator's own output as two sources of
+     * one fragment, and they are not interchangeable: the extractor emits
+     * the URLs the build wrote, while a hand-written `nav:` is whatever the
+     * author believed them to be. Under MkDocs' default
+     * `use_directory_urls: true` an author who writes `installing.html`
+     * publishes a navigation every entry of which 404s — fragment valid,
+     * splice successful, manifest published, nothing said.
+     *
+     * Recorded rather than refused, like every other link issue: one bad
+     * href in one guide must not stop a whole manual publishing.
+     */
+    public function test_a_declared_nav_entry_naming_a_missing_page_is_recorded(): void
+    {
+        $repository = $this->repository('https://github.com/docup/handbook.git', 'nav-'.bin2hex(random_bytes(3)));
+        $handbook = $this->makeComponent('handbook', AccessLevel::Public);
+
+        $this->components->attachSource($handbook, $repository, 'docs/handbook');
+
+        $version = $this->publicVersion('manual', tracking: 'main');
+        $this->mounts->attach($version, $handbook, '', isPrimary: true);
+
+        $this->buildFor($handbook, ['html/index.html'], nav: [
+            ['label' => 'Home', 'href' => 'index.html'],
+            // The shape MkDocs' own extractor would have emitted for the
+            // same page under directory URLs, and which this build — built
+            // with flat URLs — does not contain.
+            ['label' => 'Installing', 'href' => 'installing/'],
+        ]);
+
+        app(Publisher::class)->publishExistingBuild($version, $this->latestBuildOf($handbook));
+
+        /** @var ProjectVersionManifest $manifest */
+        $manifest = ProjectVersionManifest::query()
+            ->whereKey($version->fresh()?->getRawOriginal('published_manifest_id'))
+            ->firstOrFail();
+
+        $issues = ManifestLinkIssue::query()->where('manifest_id', $manifest->id)->get();
+
+        $this->assertCount(1, $issues, 'the good href is not an issue; the missing one is');
+
+        $issue = $issues->first();
+
+        $this->assertInstanceOf(ManifestLinkIssue::class, $issue);
+        $this->assertSame('path_not_found', $issue->kind);
+        $this->assertSame($handbook->key, $issue->target_component_key, 'a nav entry names its own component');
+        $this->assertSame('installing/', $issue->target_path);
+
+        // 🛑 And it published anyway.
+        $this->assertTrue($version->fresh()?->published === true);
+    }
+
+    /**
+     * 🛑 A cross-component link resolves, and one repository's broken
      * reference is recorded as a link issue that does **not** fail the
-     * other repository's build."
+     * other repository's build.
      */
     public function test_a_cross_component_link_resolves_and_a_broken_one_is_only_recorded(): void
     {

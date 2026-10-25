@@ -46,6 +46,26 @@ final readonly class NavNode
         );
     }
 
+    /**
+     * This node's href and every descendant's, depth first.
+     *
+     * A section node has none and contributes nothing — it is a heading,
+     * not a page, so there is nothing for a caller to check against a file
+     * manifest.
+     *
+     * @return list<string>
+     */
+    public function hrefs(): array
+    {
+        $hrefs = $this->href === null ? [] : [$this->href];
+
+        foreach ($this->children as $child) {
+            $hrefs = array_merge($hrefs, $child->hrefs());
+        }
+
+        return $hrefs;
+    }
+
     /** @return array<string, mixed> */
     public function toArray(): array
     {

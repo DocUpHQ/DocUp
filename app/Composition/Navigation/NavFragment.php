@@ -265,6 +265,27 @@ final readonly class NavFragment
         return self::normalise($decoded['nodes'] ?? []);
     }
 
+    /**
+     * Every href in the tree, depth first, with no prefix applied.
+     *
+     * Component-relative, which is what makes them checkable against the
+     * build's own file manifest — see {@see App\Composition\CompositionPlanner}'s
+     * `navIssues()` for why anything checks them at all. Section nodes carry
+     * no href and contribute nothing.
+     *
+     * @return list<string>
+     */
+    public function hrefs(): array
+    {
+        $hrefs = [];
+
+        foreach ($this->nodes as $node) {
+            $hrefs = array_merge($hrefs, $node->hrefs());
+        }
+
+        return $hrefs;
+    }
+
     /** Every node, with the mount's prefix applied to every href (§8.7.6). */
     public function withPrefix(string $prefix): self
     {
