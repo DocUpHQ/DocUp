@@ -123,20 +123,29 @@ final class VersionSlug
 
     public static function isReserved(string $slug): bool
     {
-        if (in_array($slug, self::RESERVED, true)) {
-            return true;
-        }
+        return in_array($slug, self::RESERVED, true) || self::isLanguageCodeShaped($slug);
+    }
 
-        /*
-         * 🛑 Any two- or three-letter sequence that could be a language code,
-         * not a list of the ones we currently ship. §8.6.12 makes language a
-         * version property and §8.6.9's `lang_and_version` puts it in a path
-         * segment; a version slugged `fr` is unreachable the day somebody
-         * adds a French translation, which is long after the slug was
-         * chosen. Refusing the shape rather than the membership means that
-         * day never comes.
-         */
-        return preg_match('/^[a-z]{2,3}(-[a-z0-9]{2,8})?$/', $slug) === 1;
+    /**
+     * 🛑 Could this segment be a language code?
+     *
+     * Any two- or three-letter sequence that could be one, not a list of the
+     * ones we currently ship. §8.6.12 makes language a version property and
+     * §8.6.9's `lang_and_version` puts it in a path segment; a version
+     * slugged `fr` is unreachable the day somebody adds a French
+     * translation, which is long after the slug was chosen. Refusing the
+     * shape rather than the membership means that day never comes.
+     *
+     * 🛑 Public because §8.2.6's collection alias occupies the same path
+     * position and needs the same answer — and two implementations of "is
+     * this a language code" would eventually disagree, which is how an alias
+     * named `ja` is accepted six months after a version slug by that name
+     * was refused. {@see App\Collections\CollectionAlias} calls this, and a
+     * test asserts it rather than trusting the comment.
+     */
+    public static function isLanguageCodeShaped(string $segment): bool
+    {
+        return preg_match('/^[a-z]{2,3}(-[a-z0-9]{2,8})?$/', $segment) === 1;
     }
 
     /**

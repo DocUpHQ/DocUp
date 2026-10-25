@@ -30,6 +30,7 @@ final class SnapshotVersion
      * @param  string|null  $publishedManifestId  raw 16 bytes, null when nothing is published
      * @param  string|null  $previousManifestId  raw 16 bytes; §8.8.6's soft landing
      * @param  int|null  $softLandingExpiresAt  unix seconds, or null
+     * @param  string|null  $translationGroupId  raw 16 bytes; §8.6.12's group, null when ungrouped
      */
     public function __construct(
         public readonly string $id,
@@ -42,6 +43,7 @@ final class SnapshotVersion
         public readonly ?string $publishedManifestId = null,
         public readonly ?string $previousManifestId = null,
         public readonly ?int $softLandingExpiresAt = null,
+        public readonly ?string $translationGroupId = null,
     ) {}
 
     /**

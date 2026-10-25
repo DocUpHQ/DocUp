@@ -399,7 +399,18 @@ final class Resolver
         }
 
         if ($scheme === 'lang_and_version' && ! $project->hasLanguage($language)) {
-            return RouteOutcome::rejected('language.no_match', RejectionReason::LanguageNotFound);
+            /*
+             * 🛑 Carrying the mount and the language, because §8.6.13 turns
+             * this rejection into a notification banner and a banner that
+             * cannot name the languages the project does publish is not one.
+             * The decision is unchanged — same rule, same reason, same 404.
+             */
+            return RouteOutcome::rejectedIn(
+                'language.no_match',
+                RejectionReason::LanguageNotFound,
+                $mount,
+                $language,
+            );
         }
 
         $version = $scheme === 'lang_and_version'
@@ -461,17 +472,17 @@ final class Resolver
 
     /**
      * The canonical path of a version root, for a redirect target.
+     *
+     * 🛑 Delegated to {@see VersionUrl} rather than built here, and the
+     * delegation is what keeps §17.4's freeze meaningful. Phase 16 needs the
+     * same construction outside the resolver — a language switcher and
+     * §8.11.6's `hreflang` alternates are lists of URLs for documents nobody
+     * requested — and the only way to have those without a second statement
+     * of §7.3 is for both to call one function.
      */
     private function versionPath(SnapshotMount $mount, string $scheme, SnapshotVersion $version): string
     {
-        $parts = array_filter([
-            $mount->pathPrefix,
-            $mount->project->urlPrefix ?? '',
-            $scheme === 'lang_and_version' ? $version->language : '',
-            $scheme === 'single_version' ? '' : $version->slug,
-        ], static fn (string $part): bool => $part !== '');
-
-        return '/'.($parts === [] ? '' : implode('/', $parts).'/');
+        return VersionUrl::root($mount, $scheme, $version);
     }
 
     /**

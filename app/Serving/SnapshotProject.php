@@ -87,6 +87,47 @@ final class SnapshotProject
     }
 
     /**
+     * 🛑 §8.6.12's translation group: the same documentation, other languages.
+     *
+     * > "Language MUST be a property of a project version with a
+     * > `translation_group_id`, **not** a sibling project."
+     *
+     * 🛑 **The group, never the slug.** `/en/v2/` and `/ja/v2/` are two rows
+     * sharing a slug by design (§10.4), and matching on the slug would be
+     * close enough right up to the moment a translator slugs the Japanese
+     * version `v2-ja` — which is what a translator does when the slug is
+     * user-visible. It would also be wrong in the other direction: two
+     * versions of one project can share a slug across languages without
+     * being translations of each other.
+     *
+     * Includes the version itself, because hreflang annotations are
+     * self-referential (§8.11.6) and a language switcher showing every
+     * language but the current one has to filter anyway. Unservable siblings
+     * are excluded: an alternate pointing at a version with nothing published
+     * is an annotated 404.
+     *
+     * @return list<SnapshotVersion>
+     */
+    public function translationsOf(SnapshotVersion $version): array
+    {
+        if ($version->translationGroupId === null) {
+            return $version->isServable() ? [$version] : [];
+        }
+
+        $group = [];
+
+        foreach ($this->versions as $candidate) {
+            if ($candidate->translationGroupId === $version->translationGroupId && $candidate->isServable()) {
+                $group[] = $candidate;
+            }
+        }
+
+        usort($group, static fn (SnapshotVersion $a, SnapshotVersion $b): int => strcmp($a->language, $b->language));
+
+        return $group;
+    }
+
+    /**
      * Whether this project has any version in a language.
      *
      * Used to tell `language.not_found` from `version.not_found`, which matters

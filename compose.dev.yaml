@@ -78,14 +78,13 @@ services:
       PMA_PASSWORD: ${DB_PASSWORD:-docup}
       UPLOAD_LIMIT: 64M
 
-  # The test schema's append-only guards (SPEC 8.22.1). Development only, for
-  # the same reason MailPit and phpMyAdmin are here and not in compose.yaml: a
-  # production installation has no docup_test schema.
+  # 🛑 No `db` override any more, and that is the fix rather than a tidy-up.
   #
-  # 🛑 The production file mounts ./deploy/mysql/init, which contains only
-  # 10-*.sql. This adds the 20-* script on top, so ordering still holds.
-  db:
-    volumes:
-      - db:/var/lib/mysql
-      - ./deploy/mysql/init/10-audit-append-only.sql:/docker-entrypoint-initdb.d/10-audit-append-only.sql:ro
-      - ./deploy/mysql/init/20-audit-append-only-test.sql:/docker-entrypoint-initdb.d/20-audit-append-only-test.sql:ro
+  # This file used to re-mount `deploy/mysql/init/10-*.sql` and `20-*.sql`
+  # individually into /docker-entrypoint-initdb.d. compose.yaml now mounts the
+  # whole directory at /opt/docup/mysql and lets the entrypoint wrapper apply
+  # every `.sql` in it in name order, so the 20-* test-schema guards arrive
+  # the same way the 10-* production ones do. Re-mounting them here would run
+  # each script twice, and would put them back in the directory the image
+  # executes directly — which is what aborted first initialisation on an empty
+  # schema and, from MySQL 8.4.13, killed the container outright.

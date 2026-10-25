@@ -106,15 +106,24 @@ services:
       - db:/var/lib/mysql
       # 🛑 SPEC 8.22.1: makes the audit log append-only to the application and
       # creates the separate maintenance principal. The MySQL image runs
-      # everything in this directory as root on FIRST initialisation, which is
-      # the only point at which the application's own user could not do it —
-      # a table-level REVOKE is inexpressible against a schema grant, and
-      # CREATE TRIGGER needs SUPER while binary logging is on.
+      # everything in /docker-entrypoint-initdb.d as root on FIRST
+      # initialisation, which is the only point at which the application's own
+      # user could not do it — a table-level REVOKE is inexpressible against a
+      # schema grant, and CREATE TRIGGER needs SUPER while binary logging is on.
       #
-      # On an existing installation this does nothing, because the directory is
-      # only read when the data volume is empty. Run the script by hand there;
-      # `docup:doctor` fails until it has been.
-      - ./deploy/mysql/init:/docker-entrypoint-initdb.d:ro
+      # 🛑 The `.sql` files are mounted OUT of that directory and applied by
+      # the wrapper, which runs them with `--force`. First initialisation
+      # happens against an EMPTY schema, so every statement naming a migrated
+      # table fails there — and from 8.4.13 the image turns that into a
+      # container that never starts. The wrapper is why the stack boots; it is
+      # not why the log is hardened. See the script for the whole argument.
+      #
+      # On an existing installation neither runs, because the directory is only
+      # read when the data volume is empty. Apply the script by hand there, and
+      # on a fresh stack once it has migrated; `docup:doctor` fails until it
+      # has been.
+      - ./deploy/mysql/init:/opt/docup/mysql:ro
+      - ./deploy/mysql/entrypoint:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${DB_ROOT_PASSWORD:-docup-root}"]
       interval: 5s

@@ -148,6 +148,17 @@ arch()->preset()->laravel()
         // declassification primitive, so moving either would take it OUT of
         // the namespace the higher bar covers.
         'App\Composition',
+        // Phase 16, and the argument is unchanged for a tenth namespace.
+        // `CollectionRejection`'s values are §8.1.11 public contract —
+        // `collection.alias_collides_with_version` reaches the Read the Docs
+        // importer's report and an operator's tooling — and
+        // `CollectionRefused` carries one, so a shared App\Exceptions would
+        // import the collections namespace into a namespace everything else
+        // depends on. phpstan-strict.neon also raises app/Collections to
+        // level 9, on §8.12.8's "MUST NEVER widen access, without
+        // exception", so moving either would take it OUT of the namespace
+        // the higher bar covers.
+        'App\Collections',
     ]);
 
 arch()->preset()->strict()
