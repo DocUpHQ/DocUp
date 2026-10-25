@@ -14,6 +14,7 @@ use App\Builds\BuildPlan;
 use App\Builds\Provenance;
 use App\Builds\PublishSource;
 use App\Builds\RunnerArtifact;
+use App\Composition\Mounts;
 use App\Models\Build;
 use App\Models\BuildOutput;
 use App\Models\Component;
@@ -55,6 +56,14 @@ final class Publisher
         private readonly ArtifactIngestor $ingestor,
         private readonly ArtifactStore $store,
         private readonly Quotas $quotas,
+
+        /*
+         * §8.7.3's publish-time half. Defaulted rather than injected so
+         * that every existing construction site — there are several, and
+         * two of them are tests — keeps working, and so the check cannot
+         * be omitted by constructing the publisher without it.
+         */
+        private readonly Mounts $mounts = new Mounts,
     ) {}
 
     /**
@@ -132,6 +141,25 @@ final class Publisher
         }
 
         $build = $this->recordBuild($version, $component, $buildId, $result, $chromeMode);
+
+        /*
+         * 🛑 §8.7.3's half that no index can enforce, checked here because
+         * the requirement says here: "the two halves the index cannot
+         * enforce — that **at least one** exists, and that it sits at
+         * `mount_path=''` — MUST be enforced at publish time, which fails
+         * closed when either does not hold."
+         *
+         * After `recordBuild()`, so the degenerate mount Phase 03 creates
+         * for an uncomposed version exists by now and a first publish is
+         * not refused for lacking a mount it was about to be given. Before
+         * `flip()`, so a version that genuinely cannot be composed never
+         * becomes the published one.
+         *
+         * It also re-runs §8.7.7's ceiling over every mount, which is the
+         * backstop for a project loosened or a component tightened since
+         * the mount was made.
+         */
+        $this->mounts->assertPublishable($version);
 
         return $this->flip(
             version: $version,
@@ -226,6 +254,50 @@ final class Publisher
             'total_bytes' => strlen($body),
             'content_sha256' => hash('sha256', $body),
         ])->save();
+    }
+
+    /**
+     * 🛑 §8.7.9's reuse: publish a build that already exists onto another
+     * project version.
+     *
+     * > "satisfied from an existing successful build with the same key. This
+     * > is what makes one repository feeding many projects build **once**."
+     *
+     * The bytes are already in the store under that build's prefix, already
+     * validated by the one `ArtifactIngestor`, already counted against the
+     * organisation's quota. So this writes one manifest revision and flips
+     * one pointer, and does **not**:
+     *
+     *   - **re-ingest.** There is no archive; §8.8.1 makes the artifact
+     *     immutable and write-once, so re-ingesting would refuse on the
+     *     existing key anyway — and ingesting the same bytes twice under two
+     *     build ids would be two copies of one artifact, which is the
+     *     storage cost this feature exists to avoid.
+     *   - **re-charge the quota.** §8.8.10 counts organisation artifact
+     *     bytes, and these bytes are already counted. A monorepo feeding
+     *     forty projects must not pay forty times for one artifact.
+     *   - **write provenance.** `provenance.json` already exists under that
+     *     prefix and describes the build that actually ran. Writing a second
+     *     one here would be a record of a build that did not happen, which
+     *     is exactly what §8.5.24's document is for refusing.
+     *
+     * The compare-and-swap, the soft landing and the audit event are
+     * `flip()`'s, unchanged — a reuse publish is a publish.
+     *
+     * @param  string|null  $actorId  raw 16 bytes, or null when the system did it
+     */
+    public function publishExistingBuild(
+        ProjectVersion $version,
+        Build $build,
+        ?string $actorId = null,
+    ): PublishOutcome {
+        return $this->flip(
+            version: $version,
+            build: $build,
+            expectedManifestId: $version->published_manifest_id,
+            reason: 'publish',
+            actorId: $actorId,
+        );
     }
 
     /**
@@ -325,6 +397,37 @@ final class Publisher
 
         if (! $project instanceof Project) {
             throw new \RuntimeException('A version without a project cannot be published.');
+        }
+
+        /*
+         * 🛑 Phase 13: an EXPLICIT mount wins, and the degenerate component
+         * is only created when there is none.
+         *
+         * §17 gives Phase 03 "exactly one degenerate component per project"
+         * and Phase 13 "the write-side behaviour that makes components
+         * first-class" — so from here on a version may already have been
+         * composed by `App\Composition\Mounts`, and creating a second
+         * component beside that mount would violate §8.7.3's
+         * `UNIQUE (project_version_id, mount_path_hash)` on the root. It
+         * did, which is how this was found.
+         *
+         * Read as a question about the VERSION rather than about the
+         * project, because that is what §8.7.2 scopes a mount to: two
+         * versions of one project may legitimately mount different
+         * components, and a project-level lookup would hand the second
+         * version the first version's answer.
+         */
+        $mounted = ComponentMount::query()
+            ->where('project_version_id', $version->id)
+            ->where('is_primary', true)
+            ->first();
+
+        if ($mounted instanceof ComponentMount) {
+            $component = $mounted->component;
+
+            if ($component instanceof Component) {
+                return $component;
+            }
         }
 
         $component = Component::query()->where('key', $project->slug)->first();

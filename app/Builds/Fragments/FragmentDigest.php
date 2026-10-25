@@ -42,8 +42,14 @@ final readonly class FragmentDigest
      * and for the sharper reason: a stale fragment is served, not rebuilt,
      * so without this a fix to the script renderer would never reach any
      * repository whose sources had not changed.
+     *
+     * 🛑 **2 since Phase 13**, because `base_path` joined the inputs. Every
+     * fragment digested under version 1 was computed without it, so a
+     * version-1 entry could satisfy a lookup that now means something
+     * narrower — which is the stale-fragment failure above, arriving
+     * through the fix for it. One bump invalidates the lot, once.
      */
-    public const FRAGMENT_VERSION = 1;
+    public const FRAGMENT_VERSION = 2;
 
     /**
      * @param  string  $sourceDigest  the pinned commit and the source path
@@ -57,6 +63,31 @@ final readonly class FragmentDigest
         public string $configDigest,
         public array $publicEnv,
         public int $fragmentVersion = self::FRAGMENT_VERSION,
+
+        /**
+         * 🛑 §8.7.11's `$DOCUP_BASE_PATH`, null under `relative`.
+         *
+         * **Phase 13, and this was nearly a disclosure.** §8.5.19 keys the
+         * fragment on source, environment, configuration and public
+         * variables — and `$DOCUP_BASE_PATH` is none of those, so when
+         * Phase 13 added it the digest did not change while the OUTPUT
+         * did: `injected` bakes the prefix into every href. Two mounts of
+         * one component at two prefixes would have had identical fragment
+         * digests and different bytes, and the second would have been
+         * served the first's.
+         *
+         * That is §8.5.19's own stated fear — "the digest is the content
+         * key" — reached from a direction the requirement predates,
+         * because `base_url_mode` is §8.7's and the fragment cache is
+         * §8.5's. Recorded as a proposed amendment to §8.5.19 in the Phase
+         * 13 build-log entry rather than taken silently: the requirement
+         * lists four inputs and this is a fifth.
+         *
+         * Null and `''` are different, exactly as in {@see
+         * \App\Builds\ContentKey}: a component built `relative` and one
+         * built `injected` at the root produce different HTML.
+         */
+        public ?string $basePath = null,
     ) {}
 
     /**
@@ -76,6 +107,11 @@ final readonly class FragmentDigest
             'env_digest' => $this->envDigest,
             'config_digest' => $this->configDigest,
             'public_env' => $publicEnv,
+
+            // 🛑 §8.7.11's prefix. See the constructor for why this is a
+            // fifth input where §8.5.19 lists four.
+            'base_path' => $this->basePath,
+
             'fragment_version' => $this->fragmentVersion,
         ]));
     }

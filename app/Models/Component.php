@@ -35,8 +35,10 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  * @property-read string $id
  * @property string $organisation_id
  * @property string $key
+ * @property string|null $owner_team_id 🛑 §8.7.8; null means organisation-owned
  * @property string $name
  * @property AccessLevel $min_access
+ * @property string $default_base_url_mode §8.7.11; a mount may override it
  * @property string $state
  */
 #[Tenancy(TenancyPosture::OrganisationScoped)]

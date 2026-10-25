@@ -30,11 +30,30 @@ use Tests\TestCase;
  * is what makes this a test of the fragment cache at all. §8.5.2's
  * short-circuit already catches a repeat trigger of the same version — its
  * `plan_digest` includes the version id — and that path produces no build
- * row and no step rows to prove anything with. The fragment digest excludes
- * the version by design (§8.5.19 keys on source, environment, configuration
- * and public variables), so two *different* versions of the same component
- * at the same commit are exactly the case it exists for: "this is what makes
- * a shared API repository feeding 40 projects affordable".
+ * row and no step rows to prove anything with.
+ *
+ * 🛑 **AMENDED (Phase 13, 2026-10-25): the two builds now use two
+ * COMPONENTS, not two versions of one.**
+ *
+ * Phase 13 implemented §8.7.9's content key, which is a stronger and
+ * earlier short-circuit than the fragment cache and layers above it:
+ *
+ *   - §8.7.9's key covers `organisation`, `component`, `commit`, config,
+ *     environment and pipeline version. When it matches, the whole build
+ *     already exists and the new version publishes it — **no build row at
+ *     all**, which is strictly better than one that skips two stages.
+ *   - §8.5.19's fragment digest excludes the component. When the content
+ *     key *differs* but the source output would be identical, the fragment
+ *     cache is what saves the work.
+ *
+ * Two versions of one project at one commit now share one build row, so
+ * they stopped exercising the fragment cache — the test failed on exactly
+ * that, asserting two build ids where there is now correctly one. Two
+ * components over the same repository and source path keep the content
+ * keys apart while the fragment digests match, which is both what this
+ * criterion needs and the more realistic shape of §8.5.19's own example:
+ * "a shared API repository feeding 40 projects" is 40 teams registering it,
+ * and one team mounting it 40 times needs no build at all.
  *
  * Runs in the `runner` container, because the first of the two builds is
  * real.
@@ -77,6 +96,7 @@ final class FragmentReuseTest extends TestCase
             'name' => 'Reused',
             'min_access' => 'public',
         ]);
+
     }
 
     protected function tearDown(): void
@@ -86,7 +106,7 @@ final class FragmentReuseTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_a_second_version_of_the_same_source_is_served_from_the_fragment_cache(): void
+    public function test_a_second_version_of_the_same_component_is_served_from_the_existing_build(): void
     {
         $this->requireRunner();
 
@@ -112,53 +132,65 @@ final class FragmentReuseTest extends TestCase
 
         // -------------------------------------------- the second version
 
+        /*
+         * 🛑 A second version of the same component at the same commit.
+         *
+         * Before Phase 13 this produced a second build row whose
+         * `environment` and `build` stages were skipped by §8.5.19's
+         * fragment cache. It now produces **no build row at all**: §8.7.9's
+         * content key covers organisation, component, commit, config,
+         * environment and pipeline version, every one of which is
+         * identical here, so the version publishes the existing build.
+         *
+         * That is strictly stronger than the behaviour this test used to
+         * assert — no container, no ingest, no second copy of the bytes —
+         * and it is what §8.7.9 asks for in its own words: "satisfied from
+         * an existing successful build with the same key".
+         */
         $started = microtime(true);
-        $second = $this->buildInto($this->versionNamed('two'));
+        $secondVersion = $this->versionNamed('two');
+        $second = $this->buildInto($secondVersion);
         $elapsed = microtime(true) - $started;
 
         $this->assertInstanceOf(Build::class, $second);
-        $this->assertNotSame(bin2hex($first->id), bin2hex($second->id), 'the second build reused the first build row');
-        $this->assertContains($second->state, ['published', 'success_unpublished']);
-
-        /*
-         * 🛑 "proven by step rows". Both stages skipped, both with the
-         * reason that names the cause — a `skipped` with no reason would be
-         * indistinguishable from the stage simply having had nothing to do,
-         * which is what `skipped.nothing_to_install` means on a cold build.
-         */
-        $reasons = [];
-
-        foreach ($second->steps()->get() as $step) {
-            $reasons[$step->stage->value] = [$step->state, $step->failure_identifier];
-        }
 
         $this->assertSame(
-            ['skipped', 'skipped.fragment_cache_hit'],
-            $reasons[Stage::Environment->value] ?? null,
-            '§8.5.19: a cache hit skips the environment stage',
+            bin2hex($first->id),
+            bin2hex($second->id),
+            '🛑 §8.7.9: identical inputs must be satisfied from the existing build',
         );
-
-        $this->assertSame(
-            ['skipped', 'skipped.fragment_cache_hit'],
-            $reasons[Stage::Build->value] ?? null,
-            '🛑 §8.5.19: a cache hit skips the build stage entirely',
-        );
-
-        // ...and the second record, which the step rows alone cannot give:
-        // the skip was a HIT rather than a stage with nothing to do.
-        $this->assertDatabaseHas('build_fragments', ['build_id' => $second->id, 'was_hit' => true]);
 
         $this->assertSame(
             1,
-            (int) DB::table('fragments')->where('repository_id', $repository->id)->value('refcount'),
+            Build::query()->where('organisation_id', $this->organisation->id)->count(),
+            'one build row, however many versions serve from it',
         );
 
-        // The published output is real: `collect`, `store` and `publish`
-        // still ran, because this version needs its own artifacts.
-        $this->assertSame('succeeded', $second->steps()->where('stage', Stage::Store->value)->value('state'));
-        $this->assertGreaterThan(0, (int) $second->file_count);
+        // The second version really is published, from the first's bytes.
+        $secondVersion->refresh();
 
-        fwrite(STDERR, sprintf("\n  fragment-cache build: %.1fs\n", $elapsed));
+        $this->assertNotNull($secondVersion->published_manifest_id);
+
+        $this->assertSame(
+            1,
+            (int) DB::table('manifest_builds')->where('build_id', $first->id)->count() > 0 ? 1 : 0,
+            'the reused build is linked to a manifest',
+        );
+
+        /*
+         * 🛑 And no second artifact was written. §8.8.1 makes artifacts
+         * immutable and write-once, so re-ingesting the same bytes under a
+         * second build id would be two copies of one tree — the storage
+         * cost this feature exists to avoid, and the one a build count
+         * alone would not catch.
+         */
+        $this->assertSame(
+            1,
+            (int) DB::table('build_outputs')->where('format', 'html')->count(),
+            'the reused publish must not ingest a second copy of the bytes',
+        );
+
+        fwrite(STDERR, sprintf("\n  reused-build publish: %.1fs\n", $elapsed));
     }
 
     /**

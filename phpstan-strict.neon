@@ -45,6 +45,12 @@ parameters:
         # DocUp that destroys reader-visible URLs.
         - app/Webhooks
         - app/Automation
+        # Phase 13. §8.7.7 calls an unchecked component mount "a
+        # declassification primitive in a product whose headline feature is
+        # per-project authentication", which is §9.4's criterion stated by
+        # the requirement itself: a type error in the ceiling comparison is
+        # a security bug, not a crash.
+        - app/Composition
         - app/Support
         - app/Concerns
         - app/Models

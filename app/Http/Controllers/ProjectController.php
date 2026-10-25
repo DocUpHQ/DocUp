@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers;
 
 use App\Auth\Capability;
+use App\Composition\CompositionSummary;
 use App\Http\Middleware\ResolveOrganisation;
 use App\Models\Organisation;
 use App\Models\Project;
@@ -79,6 +80,19 @@ final class ProjectController
                 'visibility' => $project->visibility->value,
                 'inherits_organisation_roles' => $project->inherit_organisation_roles,
             ],
+
+            /*
+             * 🛑 §8.7.11's dashboard warning: "`injected` ... MUST surface
+             * the resulting loss of cross-project build reuse in the
+             * dashboard."
+             *
+             * Carried as data with the warning already decided, so the
+             * template renders a string rather than reimplementing the
+             * rule — a `v-if="mode === 'injected'"` in a `.vue` file is a
+             * second place that knows what `injected` costs, and the two
+             * would eventually disagree.
+             */
+            'composition' => (new CompositionSummary)->forProject($project),
         ]);
     }
 }

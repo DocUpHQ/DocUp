@@ -154,6 +154,136 @@ final class GeneratorConformanceTest extends TestCase
     }
 
     /**
+     * 🛑 Phase 13's exit criterion: "Sparse and blobless checkout is
+     * verified by **working-tree file count** and fails loudly rather than
+     * degrading to a full clone."
+     *
+     * The failing half is the test below; this is the succeeding half, and
+     * the criterion names how to measure it. A sparse checkout that
+     * silently did nothing produces a working tree that builds perfectly
+     * and contains the whole repository — identical to a correct one from
+     * every angle except the file count, which is precisely why the
+     * criterion asks for that number.
+     *
+     * Measured against the SAME commit fetched twice: once narrowed to one
+     * directory, once in full. Comparing to a constant would make the test
+     * depend on somebody else's repository not growing.
+     */
+    public function test_a_sparse_checkout_narrows_the_working_tree(): void
+    {
+        $this->requireBuildImages(['docup/fetch:1']);
+
+        $driver = new DockerRunnerDriver;
+
+        $full = $this->fileCountAfterFetch($driver, sparse: []);
+        $narrowed = $this->fileCountAfterFetch($driver, sparse: ['docs']);
+
+        $this->assertGreaterThan(0, $narrowed, 'the narrowed checkout materialised nothing at all');
+
+        $this->assertLessThan(
+            $full,
+            $narrowed,
+            '🛑 §8.4.11: a sparse checkout that did not narrow is a silent fall back to a full clone '
+                ."(full: {$full} files, sparse: {$narrowed})",
+        );
+    }
+
+    /**
+     * Fetch once and count the files in the working tree.
+     *
+     * 🛑 Counted by **exporting the tree**, not by running `find` in the
+     * fetch image. The fetch image has an `ENTRYPOINT` and its arguments
+     * are a clone URL and a ref, so a `['/bin/sh', '-c', …]` command is
+     * read as a repository to clone — which is what it did, and is a
+     * useful reminder that `RunSpecification::$command` means something
+     * different per image.
+     *
+     * `exportDirectory()` is the seam the runner already uses after a
+     * build stage: a throwaway `busybox` with no network and no
+     * capabilities, running `tar` rather than a shell. Counting its
+     * entries measures the same thing with nothing new trusted.
+     *
+     * `.git` is excluded: §8.5.7 removes it before the build sees the
+     * tree, and its object count is what `--filter=blob:none` changes, so
+     * counting it would measure the blobless half while claiming to
+     * measure the sparse one.
+     *
+     * @param  list<string>  $sparse
+     */
+    private function fileCountAfterFetch(DockerRunnerDriver $driver, array $sparse): int
+    {
+        $buildId = bin2hex(random_bytes(16));
+        $volume = $driver->createWorkspace($buildId);
+        $archive = Spool::fromConfig()->output($buildId.'-tree');
+
+        try {
+            $probe = $driver->run($this->fetchSpec($buildId, $volume, 'probe', []), credential: '');
+
+            $this->assertTrue($probe->succeeded(), 'the probe pass failed: '.$this->tail($probe->log));
+
+            $checkout = $driver->run($this->fetchSpec($buildId, $volume, 'checkout', $sparse), credential: '');
+
+            $this->assertTrue(
+                $checkout->succeeded(),
+                'the checkout pass failed: '.$this->tail($checkout->log),
+            );
+
+            $this->assertTrue(
+                $driver->exportDirectory($volume, '/workspace/source', $archive),
+                'the working tree could not be exported',
+            );
+
+            return $this->countFilesInArchive($archive);
+        } finally {
+            $driver->destroyWorkspace($volume);
+            @unlink($archive);
+        }
+    }
+
+    /**
+     * Regular files in a tar, excluding `.git`.
+     *
+     * Walks the headers the way {@see archiveContains()} does rather than
+     * shelling out, so the count does not depend on a `tar` binary being
+     * present wherever the suite runs.
+     */
+    private function countFilesInArchive(string $archive): int
+    {
+        $handle = fopen($archive, 'rb');
+
+        if ($handle === false) {
+            return 0;
+        }
+
+        $count = 0;
+
+        try {
+            while (($header = fread($handle, 512)) !== false && strlen($header) === 512) {
+                $name = rtrim(substr($header, 0, 100), "\0");
+
+                if ($name === '') {
+                    break;
+                }
+
+                $size = (int) octdec(trim(substr($header, 124, 12)) ?: '0');
+                $type = substr($header, 156, 1);
+
+                // '0' and "\0" are both "regular file" in ustar; everything
+                // else is a directory, a link or an extended header.
+                if (($type === '0' || $type === "\0") && ! str_contains($name, '.git/')) {
+                    $count++;
+                }
+
+                fseek($handle, (int) (ceil($size / 512) * 512), SEEK_CUR);
+            }
+        } finally {
+            fclose($handle);
+        }
+
+        return $count;
+    }
+
+    /**
      * 🛑 §8.4.11: "MUST fail loudly rather than silently falling back to a
      * full clone."
      *

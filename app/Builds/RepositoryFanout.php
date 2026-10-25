@@ -9,6 +9,7 @@ namespace App\Builds;
 
 use App\Automation\AutomationEngine;
 use App\Automation\BuildRequestSink;
+use App\Composition\SourceDirtiness;
 use App\Models\BuildRequest;
 use App\Models\ComponentMount;
 use App\Models\ComponentSource;
@@ -54,6 +55,7 @@ final readonly class RepositoryFanout implements BuildRequestSink
         private AutomationEngine $automation,
         private SkipRuleEvaluator $skipRules = new SkipRuleEvaluator,
         private BuildTrigger $trigger = new BuildTrigger,
+        private SourceDirtiness $dirtiness = new SourceDirtiness,
     ) {}
 
     /**
@@ -163,16 +165,50 @@ final readonly class RepositoryFanout implements BuildRequestSink
 
     /**
      * Every project with a version mounting a component sourced from this
-     * repository.
+     * repository — narrowed to the ones this push could have changed.
      *
+     * 🛑 §17 Phase 13's "path-filter rebuild gating", and its exit
+     * criterion: "One push triggers exactly the matching projects, asserted
+     * on enqueued jobs."
+     *
+     * The narrowing happens HERE, on the component sources, rather than in
+     * `SkipRuleEvaluator`. The two are different questions and both run:
+     * this one asks "did the push touch this component's subtree?", which
+     * is a fact about `component_sources.source_path`; Phase 11's asks
+     * "does this project want to build at all?", which is a fact about the
+     * project's own rules. A monorepo needs the first — it is what makes
+     * three components in one repository three independent build triggers —
+     * and no per-project rule can express it, because the same project may
+     * mount two components from the same repository.
+     *
+     * 🛑 §18.15 is the assumption this rests on, and its pre-decided
+     * consequence if it fails is "default to rebuilding every component in
+     * a repository on push". {@see SourceDirtiness} is written so that is
+     * the behaviour whenever the evidence is incomplete.
+     *
+     * @param  PushEvent|null  $event  null means every source is in scope
      * @return list<Project>
      */
-    public function consumingProjects(Repository $repository): array
+    public function consumingProjects(Repository $repository, ?PushEvent $event = null): array
     {
-        $componentIds = ComponentSource::query()
-            ->where('repository_id', $repository->id)
-            ->where('state', 'active')
-            ->pluck('component_id');
+        /** @var list<ComponentSource> $sources */
+        $sources = array_values(
+            ComponentSource::query()
+                ->where('repository_id', $repository->id)
+                ->where('state', 'active')
+                ->get()
+                ->all(),
+        );
+
+        $componentIds = [];
+
+        foreach ($sources as $source) {
+            if ($this->dirtiness->isDirty($source, $event)) {
+                $componentIds[] = $source->component_id;
+            }
+        }
+
+        $componentIds = collect(array_values(array_unique($componentIds)));
 
         if ($componentIds->isEmpty()) {
             return [];
@@ -219,7 +255,7 @@ final readonly class RepositoryFanout implements BuildRequestSink
         $skipped = [];
         $syncs = [];
 
-        foreach ($this->consumingProjects($repository) as $project) {
+        foreach ($this->consumingProjects($repository, $event) as $project) {
             // Captured before the sync, because the sync overwrites the
             // very column the poll compares against.
             $snapshot = $beforeSync === null ? [] : $beforeSync($project);

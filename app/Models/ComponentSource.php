@@ -9,6 +9,7 @@ namespace App\Models;
 
 use App\Auth\Tenancy;
 use App\Auth\TenancyPosture;
+use App\Composition\SourceDirtiness;
 use App\Concerns\BelongsToOrganisation;
 use App\Concerns\HasUuidKey;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -39,6 +40,14 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  * @property string $module
  * @property int $priority
  * @property string $state
+ *
+ * 🛑 `path_filters` is typed as untrusted rather than as `list<string>`,
+ * and deliberately: it is operator-supplied JSON reaching us through
+ * §8.19.1's API, so its contents are whatever was written. The runtime
+ * checks in {@see SourceDirtiness::globsFor()} are the
+ * ones that matter, and a tighter annotation here would tell the analyser
+ * to stop checking them.
+ * @property array<array-key, mixed>|null $path_filters
  */
 #[Tenancy(TenancyPosture::OrganisationScoped)]
 #[Fillable(['source_path', 'module', 'priority', 'path_filters', 'ref_include_patterns', 'ref_exclude_patterns'])]
