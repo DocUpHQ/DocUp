@@ -31,6 +31,15 @@ services:
       cache: { condition: service_started }
     ports:
       - "${DOCUP_HTTP_PORT:-8080}:80"
+      # 🛑 SPEC 8.10.16: no per-domain configuration and no reload, so this is
+      # the only line a new custom domain needs — the listener answers whatever
+      # SNI arrives and SPEC 8.10.11's permission endpoint decides.
+      #
+      # 🛑 SPEC 8.10.18's ACME challenge is answered on **port 80**, not here,
+      # because an HTTP-01 validation reaches a name that has no certificate
+      # yet. Publishing 443 without 80 would make every public issuance fail
+      # with a validation error at the CA and nothing logged on this side.
+      - "${DOCUP_HTTPS_PORT:-8443}:443"
     volumes:
       - .:/app
       - ./deploy/Caddyfile:/etc/frankenphp/Caddyfile:ro
@@ -64,6 +73,18 @@ services:
       # a file the edge cannot see.
       DOCUP_ARTIFACT_ROOT: /var/lib/docup/artifacts
       DOCUP_EDGE_DRIVER: ${DOCUP_EDGE_DRIVER:-caddy-intercept}
+      # 🛑 SPEC 8.10.12 makes HTTPS on a served hostname a validation error and
+      # App\Tls\PermissionEndpoint refuses to boot on one. Passed explicitly
+      # rather than left to the config default so that an operator who needs to
+      # change it edits one place and gets the refusal if they get it wrong —
+      # the deadlock it prevents produces no log line anywhere.
+      DOCUP_TLS_PERMISSION_ENDPOINT: ${DOCUP_TLS_PERMISSION_ENDPOINT:-http://127.0.0.1/_/edge/tls-permission}
+      DOCUP_TLS_CERTIFICATE_ENDPOINT: ${DOCUP_TLS_CERTIFICATE_ENDPOINT:-http://127.0.0.1/_/edge/certificate}
+      # SPEC 8.10.11's live-DNS target, and SPEC 8.10.8's A/AAAA advice. Empty
+      # by default and that is honest: DocUp cannot discover its own public
+      # address, so where this is unset the documentation apex is resolved
+      # instead — which is what every CNAME in SPEC 8.10.8 points at anyway.
+      DOCUP_INGRESS_ADDRESSES: ${DOCUP_INGRESS_ADDRESSES:-}
       # 🛑 SPEC 8.5.11's declaration. Read here as well as in the runner
       # because BuildServiceProvider refuses a production boot without it,
       # and an installation whose dashboard boots while its runner refuses

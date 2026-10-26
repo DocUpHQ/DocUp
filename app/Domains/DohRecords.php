@@ -34,6 +34,10 @@ final readonly class DohRecords implements DnsRecords
 
     private const TYPE_CNAME = 5;
 
+    private const TYPE_A = 1;
+
+    private const TYPE_AAAA = 28;
+
     public function __construct(
         private HardenedEgressClient $client,
         private string $endpoint,
@@ -82,6 +86,62 @@ final readonly class DohRecords implements DnsRecords
         // configured target is not, and two spellings of one name must
         // compare equal.
         return $answers === [] ? '' : rtrim(strtolower($answers[0]), '.');
+    }
+
+    public function addresses(string $name): ?array
+    {
+        $v4 = $this->query($name, self::TYPE_A);
+        $v6 = $this->query($name, self::TYPE_AAAA);
+
+        /*
+         * 🛑 Both queries must have been answered before this is an answer.
+         *
+         * A host with only AAAA records answers the A query with an empty
+         * list and the AAAA query with addresses; a resolver that was down
+         * for the AAAA query would then look like a host with no IPv6 — and
+         * §8.10.11's permission check would refuse a hostname that is
+         * correctly configured. Null for either is null for the pair, which
+         * {@see AgreeingResolvers} reads as "did not answer" rather than as
+         * "does not point here".
+         */
+        if ($v4 === null || $v6 === null) {
+            return null;
+        }
+
+        $addresses = [];
+
+        foreach ([...$v4, ...$v6] as $address) {
+            $normalised = self::normaliseAddress($address);
+
+            if ($normalised !== null && ! in_array($normalised, $addresses, true)) {
+                $addresses[] = $normalised;
+            }
+        }
+
+        return $addresses;
+    }
+
+    /**
+     * 🛑 Parsed and re-emitted, never compared as the provider spelled it.
+     *
+     * Two DoH providers may return `2001:db8::1` and `2001:0db8:0:0:0:0:0:1`
+     * for one address, and a string comparison would call a correctly
+     * pointed host misconfigured. `inet_pton` then `inet_ntop` gives one
+     * spelling per address, and refuses anything that is not an address at
+     * all — which is also the validation this value needs, since it came
+     * from a remote JSON document.
+     */
+    private static function normaliseAddress(string $address): ?string
+    {
+        $packed = @inet_pton(trim($address));
+
+        if ($packed === false) {
+            return null;
+        }
+
+        $printable = @inet_ntop($packed);
+
+        return is_string($printable) ? $printable : null;
     }
 
     /**

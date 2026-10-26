@@ -137,3 +137,34 @@ Schedule::command('docup:domains:verify --purge')
     ->timezone('UTC')
     ->withoutOverlapping()
     ->onOneServer();
+
+/*
+|------------------------------------------------------------------------------
+| §8.10.17's TLS handshake prober
+|------------------------------------------------------------------------------
+| 🛑 "A scheduled outbound TLS handshake prober MUST run against every active
+| domain at least every six hours, recording expiry, issuer and error,
+| **because the proxy never calls the permission endpoint back on issuance
+| failure**. Without it there is no issuance-failure observability at all."
+|
+| That is not a monitoring nicety. §8.10.11's permission endpoint is one-way:
+| the proxy asks whether it may issue, DocUp says yes, and nothing ever comes
+| back. A refusal from the CA — rate limited, DNS moved, a CAA record, an
+| outage — is recorded in the proxy's log and nowhere else, so every table and
+| every screen in DocUp shows a healthy domain while every reader gets a TLS
+| error. This job is the only thing that closes the loop.
+|
+| Every six hours rather than daily, because that is the floor the requirement
+| sets. §18.20 predicted the interval would have to shorten as lifetimes fall,
+| and the 2026-10-26 re-read says not yet: at the 64-day lifetime arriving
+| 2027-02-10, two-thirds-of-life renewal still leaves 21 days of slack, and six
+| hours is one per cent of it. config/tls.php carries the reasoning and the
+| date the claim was checked.
+|
+| Offset to :30 so it does not start in the same minute as the daily jobs above.
+*/
+Schedule::command('docup:tls:probe')
+    ->cron('30 */6 * * *')
+    ->timezone('UTC')
+    ->withoutOverlapping()
+    ->onOneServer();

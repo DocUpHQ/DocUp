@@ -23,7 +23,16 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         /*
          * 🛑 `using:` rather than `web:` + `then:`, because the ORDER matters
-         * and Laravel has no route priority — only registration order.
+         * and registration order is most of what decides matching.
+         *
+         * 🛑 **Most, not all** — Phase 19 measured the exception and this
+         * comment used to state the rule too strongly. A route that
+         * declares a **domain** is matched ahead of every route that does
+         * not, whatever order they were registered in; order governs only
+         * among routes that are alike in that respect. The documentation
+         * groups below are all domain-scoped, so order decides between
+         * them; `routes/edge.php` had to be given a wildcard domain of its
+         * own before being required first meant anything at all.
          *
          * The documentation routes are domain-scoped (SPEC 8.1.4) and must be
          * registered FIRST. With the dashboard first, its unconstrained `/` and
@@ -42,6 +51,23 @@ return Application::configure(basePath: dirname(__DIR__))
          * SPEC 8.21.2's bearer authentication is ours, not the framework's.
          */
         using: function (): void {
+            /*
+             * 🛑 §8.10.18: "`/.well-known/acme-challenge/*` MUST be matched
+             * **before** the documentation catch-all, the canonical redirect
+             * and the HTTPS redirect." And §20.2's `/_/edge/*` pair, which
+             * the proxy calls during a TLS handshake.
+             *
+             * 🛑 **This line is necessary and not sufficient**, and Phase 19
+             * measured why. Registration order governs only among routes
+             * that are alike: a route declaring a **domain** is matched
+             * ahead of every route that does not, whatever order they were
+             * registered in. So `routes/edge.php` declares a wildcard domain
+             * of its own — the comment at the top of that file sets out
+             * both silent failures that follow from omitting it — and this
+             * `require` is what puts it first within that bucket.
+             */
+            require __DIR__.'/../routes/edge.php';
+
             require __DIR__.'/../routes/docs.php';
 
             Route::middleware('web')->group(__DIR__.'/../routes/web.php');

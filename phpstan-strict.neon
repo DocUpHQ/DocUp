@@ -63,6 +63,13 @@ parameters:
         # requirement: a type error here serves one tenant's readers another
         # tenant's site.
         - app/Domains
+        # Phase 19. §8.10.11's permission endpoint is the only thing between
+        # an unauthenticated TLS handshake and a certificate authority, and
+        # §8.10.14's store hands private keys to the edge — §9.4's criterion
+        # stated twice over: a type error that made a denial look like a
+        # grant spends the installation's issuance budget, and one in the
+        # store's AAD serves a hostname a key that is not its own.
+        - app/Tls
         - app/Support
         - app/Concerns
         - app/Models

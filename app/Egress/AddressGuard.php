@@ -39,9 +39,22 @@ final readonly class AddressGuard
      *                                      that exercise the redirect and byte-cap controls
      *                                      against a real loopback server. Nothing in `app/`
      *                                      passes false, and an architecture test says so.
+     * @param  bool  $permitPrivateAddress  🛑 §8.10.14, Phase 19. True only for a
+     *                                      hostname the operator named in
+     *                                      `egress.internal_destinations`, and it waives
+     *                                      exactly two classes — private and unique-local.
+     *                                      Loopback, link-local, metadata, unspecified and
+     *                                      reserved stay refused, so declaring a hostname
+     *                                      cannot be used to reach 169.254.169.254 by
+     *                                      pointing it there. This is deliberately NOT
+     *                                      `$enforceAddressPolicy` under another name: that
+     *                                      one stands the whole policy down for everything.
      */
-    public function inspect(string $host, bool $enforceAddressPolicy = true): HostInspection
-    {
+    public function inspect(
+        string $host,
+        bool $enforceAddressPolicy = true,
+        bool $permitPrivateAddress = false,
+    ): HostInspection {
         $host = $this->unbracket($host);
 
         /*
@@ -51,6 +64,13 @@ final readonly class AddressGuard
         if (@inet_pton($host) !== false) {
             $class = $this->classifier->classify($host);
 
+            /*
+             * 🛑 An IP literal is never covered by the internal-destination
+             * list, whatever it says: that list holds hostnames, and a
+             * literal has no name to have been declared under. An operator
+             * who means an address gives it a name in their own DNS, which
+             * is also the only way the rebind check has anything to compare.
+             */
             if ($enforceAddressPolicy && ! $class->isRoutable()) {
                 return HostInspection::refused($class->rejection(), [$host], null, $host, $class);
             }
@@ -65,7 +85,7 @@ final readonly class AddressGuard
         }
 
         if ($enforceAddressPolicy) {
-            $offender = $this->firstOffender($first);
+            $offender = $this->firstOffender($first, $permitPrivateAddress);
 
             if ($offender !== null) {
                 [$address, $class] = $offender;
@@ -79,7 +99,7 @@ final readonly class AddressGuard
                 );
             }
 
-            $rebind = $this->detectRebind($host, $first);
+            $rebind = $this->detectRebind($host, $first, $permitPrivateAddress);
 
             if ($rebind !== null) {
                 return $rebind;
@@ -107,7 +127,7 @@ final readonly class AddressGuard
      * the attack into a refusal with its own identifier, instead of a request
      * that quietly succeeded against the address we had already validated.
      */
-    private function detectRebind(string $host, ResolvedHost $first): ?HostInspection
+    private function detectRebind(string $host, ResolvedHost $first, bool $permitPrivateAddress = false): ?HostInspection
     {
         $second = $this->resolver->resolve($host);
 
@@ -115,7 +135,7 @@ final readonly class AddressGuard
             return null;
         }
 
-        $offender = $this->firstOffender($second);
+        $offender = $this->firstOffender($second, $permitPrivateAddress);
 
         if ($offender === null) {
             return null;
@@ -143,14 +163,36 @@ final readonly class AddressGuard
      *
      * @return array{0: string, 1: AddressClass}|null
      */
-    private function firstOffender(ResolvedHost $resolved): ?array
+    private function firstOffender(ResolvedHost $resolved, bool $permitPrivateAddress = false): ?array
     {
         foreach ($resolved->addresses as $address) {
             $class = $this->classifier->classify($address);
 
-            if (! $class->isRoutable()) {
-                return [$address, $class];
+            if ($class->isRoutable()) {
+                continue;
             }
+
+            /*
+             * 🛑 §8.10.14's carve-out, and it is **two classes and no
+             * others**. An operator declaring `ca.internal` is saying "this
+             * is my own network", which is RFC 1918 and ULA. They are not
+             * saying "this may be loopback", which would reach services
+             * inside this very container, nor "this may be link-local",
+             * which is how 169.254.169.254 hands out cloud credentials. The
+             * `match` is exhaustive on purpose so a new class added to
+             * `AddressClass` has to be considered here rather than silently
+             * inheriting the waiver.
+             */
+            $waivable = match ($class) {
+                AddressClass::Private, AddressClass::UniqueLocal => true,
+                default => false,
+            };
+
+            if ($permitPrivateAddress && $waivable) {
+                continue;
+            }
+
+            return [$address, $class];
         }
 
         return null;

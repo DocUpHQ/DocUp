@@ -15,6 +15,7 @@ use App\Models\DomainTombstone;
 use App\Models\Project;
 use App\Support\Invalidation;
 use App\Support\Uuid;
+use App\Tls\PermittedHosts;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 
@@ -71,6 +72,16 @@ final readonly class Domains
         ])->save();
 
         $this->ledger->record($organisationId, $domain->id, $normalised, 'claimed', ['kind' => $domain->kind]);
+
+        /*
+         * §8.10.16 names **adding** among the operations that must take
+         * effect with no reload. A custom host is still pending here and so
+         * is not yet eligible for a certificate, but a default subdomain
+         * added for a new project is eligible immediately — and waiting for
+         * the set's TTL would leave it without HTTPS for a minute after
+         * creation.
+         */
+        PermittedHosts::invalidate();
 
         return $domain;
     }
@@ -408,6 +419,19 @@ final readonly class Domains
                 Invalidation::bumpRouting($projectId, 'domain', $domain->organisation_id);
             }
         }
+
+        /*
+         * 🛑 The same sentence of §8.10.16, on the TLS side. The routing
+         * epoch is per project, and a domain with no mount yet has no
+         * project to bump — which is exactly the state a newly verified
+         * domain is in when it first needs a certificate. So the permitted
+         * set is invalidated separately, and unconditionally.
+         *
+         * Without this line a domain verified at 10:00 could not be
+         * certified until the set's own TTL lapsed, and §19's exit criterion
+         * is "serves valid HTTPS within 60 seconds".
+         */
+        PermittedHosts::invalidate();
     }
 
     /**

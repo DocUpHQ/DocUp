@@ -171,6 +171,20 @@ arch()->preset()->laravel()
         // which a shared App\Enums would file as one. phpstan-strict.neon
         // also raises app/Domains to level 9.
         'App\Domains',
+        // Phase 19, and the argument is unchanged for a twelfth namespace.
+        // `CertificateRejection`'s values are §8.1.11 public contract —
+        // `certificate.budget_exhausted` and
+        // `certificate.permission_endpoint_deadlock` reach an operator's
+        // tooling and the attempts table's `reason` column — and
+        // `CertificateRefused` carries one, so a shared App\Exceptions would
+        // import the TLS namespace into a namespace everything else depends
+        // on. `CertificateSourceKind` and `PermissionVerdict` are §8.10.14's
+        // and §8.10.11's vocabulary and mean nothing outside them:
+        // `PermissionVerdict::Unresolvable` exists precisely to keep "the
+        // hostname points elsewhere" and "no resolver answered" as two
+        // ideas, which a shared App\Enums would file as one.
+        // phpstan-strict.neon also raises app/Tls to level 9.
+        'App\Tls',
     ]);
 
 arch()->preset()->strict()
@@ -210,6 +224,21 @@ arch()->preset()->strict()
          * the control, which is the thing the phase found wrong.
          */
         'App\Builds\Runner\Warden',
+        /*
+         * 🛑 Phase 19, same rule and a third genuine wait. RFC 8555 gives a
+         * client no way to be told that an authorization has been
+         * validated: the protocol's own model is "POST-as-GET the
+         * authorization again until its status changes", which is a poll,
+         * and a poll without a sleep is a hot loop against somebody else's
+         * certificate authority — the one place where burning a core also
+         * burns a rate budget.
+         *
+         * The client's poll is bounded (fifteen attempts, two seconds
+         * apart) and the sleep is injectable, so every test drives it
+         * without waiting. One named class, not the namespace: nothing else
+         * in App\Tls may sleep.
+         */
+        'App\Tls\Acme\AcmeClient',
         // The framework base controller is abstract and exists to be extended,
         // so the preset's final-class rule cannot apply to it.
         'App\Http\Controllers\Controller',

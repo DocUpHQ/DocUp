@@ -31,6 +31,9 @@ final class FakeDnsRecords implements DnsRecords
     /** @var array<string, string|null> */
     private array $cname = [];
 
+    /** @var array<string, list<string>|null> */
+    private array $addresses = [];
+
     public function __construct(private readonly string $label = 'fake') {}
 
     public function name(): string
@@ -54,11 +57,24 @@ final class FakeDnsRecords implements DnsRecords
         return $this;
     }
 
+    /**
+     * §8.10.11's live-DNS check. `null` is a resolver outage for this name.
+     *
+     * @param  list<string>|null  $addresses
+     */
+    public function withAddresses(string $name, ?array $addresses): self
+    {
+        $this->addresses[$name] = $addresses;
+
+        return $this;
+    }
+
     /** Answer nothing at all, for every name: a resolver outage. */
     public function down(): self
     {
         $this->txt = [];
         $this->cname = [];
+        $this->addresses = [];
 
         return $this;
     }
@@ -77,5 +93,17 @@ final class FakeDnsRecords implements DnsRecords
     public function cname(string $name): ?string
     {
         return array_key_exists($name, $this->cname) ? $this->cname[$name] : '';
+    }
+
+    public function addresses(string $name): ?array
+    {
+        /*
+         * An unscripted name resolves to nothing, for the reason `txt()`
+         * gives: "this name has no address" is the normal case in these
+         * tests — it is every bogus SNI in §19's 500-handshake criterion —
+         * and making the resolver appear down by default would turn each of
+         * them into an unresolvable check instead of a refused one.
+         */
+        return array_key_exists($name, $this->addresses) ? $this->addresses[$name] : [];
     }
 }
