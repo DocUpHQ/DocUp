@@ -57,6 +57,12 @@ parameters:
         # the requirement: a type error in the narrowing comparison publishes
         # a private project at a collection URL.
         - app/Collections
+        # Phase 18. §8.10.4 puts proof of control before "any byte served for
+        # a custom hostname" and §8.10.5's generated column is what stops a
+        # squatter blocking the owner — §9.4's criterion stated by the
+        # requirement: a type error here serves one tenant's readers another
+        # tenant's site.
+        - app/Domains
         - app/Support
         - app/Concerns
         - app/Models

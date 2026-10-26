@@ -159,6 +159,18 @@ arch()->preset()->laravel()
         // exception", so moving either would take it OUT of the namespace
         // the higher bar covers.
         'App\Collections',
+        // Phase 18, and the argument is unchanged for an eleventh namespace.
+        // `DomainRejection`'s values are §8.1.11 public contract —
+        // `domain.host_claimed` and `domain.tombstoned` reach an operator's
+        // tooling and the API's error bodies — and `DomainRefused` carries
+        // one, so a shared App\Exceptions would import the domains namespace
+        // into a namespace everything else depends on. `VerificationMethod`
+        // and `Outcome` are §8.10.4's and §8.10.6's vocabulary and mean
+        // nothing outside them: `Outcome::Unresolvable` exists precisely to
+        // keep "the record is gone" and "no resolver answered" as two ideas,
+        // which a shared App\Enums would file as one. phpstan-strict.neon
+        // also raises app/Domains to level 9.
+        'App\Domains',
     ]);
 
 arch()->preset()->strict()

@@ -169,3 +169,106 @@ foreach ($apexes as $index => $apex) {
                 ->name('docs.document.'.$index);
         });
 }
+
+/*
+|------------------------------------------------------------------------------
+| Custom domains (SPEC 8.10, Phase 18)
+|------------------------------------------------------------------------------
+| 🛑 The route table catching up, which Phase 04 said in as many words it had
+| not: "Custom domains are explicitly out of scope for Phase 04, which is why
+| only these two shapes are registered. Phase 18 brings domain claims and
+| verification, and the host matcher already offers the custom-domain candidate
+| first — the route table is what has not caught up, deliberately."
+|
+| 🛑 **Not a fallback, and not unconstrained.** A `Route::fallback()` would let
+| the dashboard's own unconstrained `/` and Fortify's `/login` match FIRST on a
+| custom documentation host — the exact leak bootstrap/app.php documents, where
+| a reader on an attacker-controlled origin is served the dashboard's sign-in
+| form. So this is a domain-scoped group like the two above, registered before
+| the dashboard, whose host pattern excludes the origins SPEC 8.1.4 keeps apart.
+|
+| Everything else about safety is the resolver's and it already holds: an
+| unknown host is SPEC 8.9.3's hard 404 with no fallback to a default project,
+| and an unverified or suspended one is refused by SPEC 8.10.6 before the mount
+| list is even read. This group adds reach, not trust.
+*/
+$reserved = array_values(array_filter(array_map(
+    static function (mixed $origin): ?string {
+        if (! is_string($origin) || $origin === '') {
+            return null;
+        }
+
+        $host = parse_url($origin, PHP_URL_HOST);
+
+        return is_string($host) ? $host : $origin;
+    },
+    [config('docup.origins.app'), config('docup.origins.assets')],
+), is_string(...)));
+
+/*
+ * A negative lookahead per reserved origin, then the hostname grammar. The
+ * two apex groups above are registered first and win on their own hosts, so
+ * they need no exclusion here; the dashboard and the asset host are NOT
+ * domain-scoped anywhere, which is precisely why they have to be excluded by
+ * name rather than by ordering.
+ */
+$exclusions = implode('', array_map(
+    static fn (string $host): string => '(?!'.preg_quote($host, '/').'$)',
+    $reserved,
+));
+
+/*
+ * 🛑 **At least two labels**, and that is a rule rather than a tidy-up. A
+ * public custom domain always has a registrable suffix, so it always has a
+ * dot; a single-label name — `localhost`, a container alias, an internal
+ * short name, the bare host an operator reaches a fresh installation on — is
+ * never one.
+ *
+ * Without this the group swallows every request whose Host is not one of the
+ * two origins named above, including the dashboard reached at `localhost`,
+ * which then 404s as an unknown documentation host. That is not a
+ * hypothetical: it is what the first version of this group did, and the whole
+ * dashboard and API surface of the suite went red at once.
+ */
+$label = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
+$multiLabel = $label.'(?:\.'.$label.')+';
+
+/*
+ * 🛑 The `where` goes BEFORE `group`, and that is not style. `group()`
+ * returns null, so a trailing `->where()` is called on nothing and silently
+ * does nothing — leaving Laravel's default host pattern, `[^.]++`, which
+ * matches a single label and therefore no real custom domain at all. The
+ * group then appears registered, answers nothing, and the two apex groups
+ * above go on working, so the mistake is invisible until somebody points a
+ * real hostname at the installation.
+ */
+Route::domain('{docupCustomHost}')
+    ->where(['docupCustomHost' => $exclusions.$multiLabel])
+    ->middleware([RejectNonCanonicalPath::class])
+    ->group(function (): void {
+        Route::get('/_/provenance/{build}', [ProvenanceController::class, 'show'])
+            ->where('build', '[0-9a-fA-F-]{36}')
+            ->name('docs.custom.provenance');
+
+        Route::get('/_/downloads/{language}/{version}/{format}', DownloadController::class)
+            ->where('language', '[a-z]{2,3}(-[a-z0-9]{2,8})?')
+            ->where('version', '[a-z0-9][a-z0-9._-]{0,79}')
+            ->where('format', implode('|', OfflineFormat::values()))
+            ->name('docs.custom.downloads');
+
+        Route::get('/_/x/{component}/{docupXrefPath}', CrossReferenceController::class)
+            ->where('component', '[a-z0-9][a-z0-9._-]{0,99}')
+            ->where('docupXrefPath', '[A-Za-z0-9_][A-Za-z0-9._/-]{0,511}')
+            ->name('docs.custom.xref');
+
+        Route::get('/_/x/{component}', CrossReferenceController::class)
+            ->where('component', '[a-z0-9][a-z0-9._-]{0,99}')
+            ->name('docs.custom.xref.root');
+
+        Route::get('/_/composition', CompositionController::class)
+            ->name('docs.custom.composition');
+
+        Route::get('/{docupPath?}', DocumentController::class)
+            ->where('docupPath', '.*')
+            ->name('docs.custom.document');
+    });

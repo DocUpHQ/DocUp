@@ -295,10 +295,14 @@ final class CollectionServingTest extends TestCase
     {
         $this->publishEverything();
 
-        $link = $this->getExactly("http://{$this->host}/en/v1/only-english.html")
+        $link = (string) $this->getExactly("http://{$this->host}/en/v1/only-english.html")
             ->headers->get('Link');
 
-        $this->assertNull($link, 'a page with no translation has no alternates');
+        // No alternates. The canonical link is still there — Phase 18 put
+        // §8.11.9 in the same header — and asserting the header is empty
+        // would now be asserting that the canonical link is missing.
+        $this->assertStringNotContainsString('hreflang', $link, 'a page with no translation has no alternates');
+        $this->assertStringContainsString('rel="canonical"', $link);
     }
 
     /**
@@ -345,7 +349,16 @@ final class CollectionServingTest extends TestCase
 
         Cache::flush();
 
-        $this->assertNull($this->getExactly("http://{$host}/en/v1/")->headers->get('Link'));
+        /*
+         * 🛑 No `hreflang`, rather than no `Link` at all. Phase 18 added
+         * §8.11.9's `rel=canonical` to the same header, so asserting the
+         * header is absent would now be asserting that the canonical link is
+         * missing — which is a different claim, and a wrong one.
+         */
+        $link = (string) $this->getExactly("http://{$host}/en/v1/")->headers->get('Link');
+
+        $this->assertStringNotContainsString('hreflang', $link);
+        $this->assertStringContainsString('rel="canonical"', $link);
     }
 
     // ------------------------------------------------------- exit criterion 2
