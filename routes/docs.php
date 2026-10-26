@@ -218,6 +218,22 @@ $exclusions = implode('', array_map(
 ));
 
 /*
+ * 🛑 **At least two labels**, and that is a rule rather than a tidy-up. A
+ * public custom domain always has a registrable suffix, so it always has a
+ * dot; a single-label name — `localhost`, a container alias, an internal
+ * short name, the bare host an operator reaches a fresh installation on — is
+ * never one.
+ *
+ * Without this the group swallows every request whose Host is not one of the
+ * two origins named above, including the dashboard reached at `localhost`,
+ * which then 404s as an unknown documentation host. That is not a
+ * hypothetical: it is what the first version of this group did, and the whole
+ * dashboard and API surface of the suite went red at once.
+ */
+$label = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
+$multiLabel = $label.'(?:\.'.$label.')+';
+
+/*
  * 🛑 The `where` goes BEFORE `group`, and that is not style. `group()`
  * returns null, so a trailing `->where()` is called on nothing and silently
  * does nothing — leaving Laravel's default host pattern, `[^.]++`, which
@@ -227,7 +243,7 @@ $exclusions = implode('', array_map(
  * real hostname at the installation.
  */
 Route::domain('{docupCustomHost}')
-    ->where(['docupCustomHost' => $exclusions.'[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?'])
+    ->where(['docupCustomHost' => $exclusions.$multiLabel])
     ->middleware([RejectNonCanonicalPath::class])
     ->group(function (): void {
         Route::get('/_/provenance/{build}', [ProvenanceController::class, 'show'])
