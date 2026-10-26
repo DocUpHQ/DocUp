@@ -113,3 +113,27 @@ Schedule::command('docup:webhooks:prune')
     ->timezone('UTC')
     ->withoutOverlapping()
     ->onOneServer();
+
+/*
+| 🛑 §8.10.6's daily re-verification.
+|
+| "Verified domains MUST be re-verified daily with exponential backoff against
+| at least two independent resolvers that must agree."
+|
+| Scheduled rather than offered, for the reason every other entry in this file
+| is: a hostname whose DNS was withdrawn keeps serving until something notices,
+| and the only thing that notices is this. Phase 11 found that nothing in the
+| compose file ever ran `schedule:work`, so §8.22.1's audit anchor had never
+| fired in a deployment — the same hole here is a hostname serving after its
+| owner stopped pointing at us.
+|
+| 04:00 UTC, after the purge and the webhook prune, so three daily jobs do not
+| contend. The `--purge` flag folds §8.10.6's 400-day retention into the same
+| run: it reads one table this job has just written and would otherwise be a
+| fourth entry doing one DELETE.
+*/
+Schedule::command('docup:domains:verify --purge')
+    ->dailyAt('04:00')
+    ->timezone('UTC')
+    ->withoutOverlapping()
+    ->onOneServer();

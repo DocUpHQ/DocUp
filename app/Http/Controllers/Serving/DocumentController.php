@@ -24,6 +24,7 @@ use App\Serving\SnapshotMount;
 use App\Serving\SnapshotVersion;
 use App\Serving\TranslationNotice;
 use App\Serving\Translations;
+use App\Serving\VersionUrl;
 use App\Support\Uuid;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -248,21 +249,67 @@ final class DocumentController
         }
 
         /*
-         * §8.11.6's `hreflang`, "generated across versions, mounts **and**
-         * domains". On the document rather than in it: 🛑 nothing rewrites
-         * documentation on the serving path (§4.3/6, §8.9.8), so the
-         * annotation is a header — the same choice §8.11.9 makes for
-         * `rel=canonical`. Phase 20's sitemap carries the same set.
+         * 🛑 §8.11.9's `rel=canonical` and §8.11.6's `hreflang`, in one
+         * `Link` header because RFC 8288 makes it one field.
+         *
+         * Both are headers rather than DOM edits for the same reason:
+         * nothing rewrites documentation on the serving path (§4.3/6,
+         * §8.9.8). And both exist to answer the same question for a crawler
+         * — §8.10.2 makes **every** verified domain answer 200 rather than
+         * redirect, which is what makes G6 real, and the only thing then
+         * keeping N hostnames from looking like N copies of a site is this
+         * header.
          */
-        $alternates = Hreflang::header(
-            $this->alternatesFor($mount, $version, $route->remainder, $file->key),
-        );
+        $links = array_filter([
+            $this->canonicalLink($mount, $version, $route->remainder, $file->key),
+            Hreflang::header($this->alternatesFor($mount, $version, $route->remainder, $file->key)),
+        ], is_string(...));
 
-        if ($alternates !== null) {
-            $headers['Link'] = $alternates;
+        if ($links !== []) {
+            $headers['Link'] = implode(', ', $links);
         }
 
         return $this->handoff->respond($storageKey, $headers);
+    }
+
+    /**
+     * 🛑 §8.11.9: "`rel=canonical` MUST be emitted as an HTTP `Link` header …
+     * For N domains serving identical content, canonical MUST always point at
+     * the project's canonical mount."
+     *
+     * Emitted on HTML only. A stylesheet has no canonical URL, and annotating
+     * one would be noise on every asset of every page.
+     *
+     * Returns null when the project has no canonical mount or that mount's
+     * host cannot serve: §8.10.3 puts exactly one canonical mount behind a
+     * unique index, and a canonical link pointing at a host that serves
+     * nothing is worse than none — a crawler drops the page that does work in
+     * favour of one that does not.
+     */
+    private function canonicalLink(
+        SnapshotMount $mount,
+        SnapshotVersion $version,
+        string $within,
+        string $resolvedKey,
+    ): ?string {
+        if (! str_ends_with($resolvedKey, '.html')) {
+            return null;
+        }
+
+        $location = $this->canonical->for($mount->project->id, $mount->project->routingEpoch);
+
+        if ($location === null) {
+            return null;
+        }
+
+        $url = $location->origin.VersionUrl::document(
+            $location->mountFor($mount->project),
+            $mount->versioningScheme(),
+            $version,
+            $within,
+        );
+
+        return '<'.$url.'>; rel="canonical"';
     }
 
     /**
