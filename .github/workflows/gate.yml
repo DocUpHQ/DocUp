@@ -743,6 +743,32 @@ jobs:
       - name: Start the stack and the certificate authority
         run: docker compose -f compose.yaml -f compose.tls.yaml up -d db cache pebble app
 
+      # 🛑 compose.tls.yaml points the application at `docup_test` so the suite
+      # and the running application share one database — EdgeHandshakeTest
+      # drives a real handshake, and the rows it writes must be visible to the
+      # FPM worker that answers the proxy's calls.
+      #
+      # The image creates `docup` and grants the `docup` user that one
+      # database, so `docup_test` has to be created and granted here. It
+      # worked locally only because the development database already had it
+      # from an earlier phase, which is exactly the kind of difference between
+      # a laptop and a clean runner that CI exists to find.
+      - name: Create the shared test database
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if docker compose -f compose.yaml -f compose.tls.yaml exec -T -e MYSQL_PWD=docup-root db \
+                 mysql -u root -e "CREATE DATABASE IF NOT EXISTS \`docup_test\`
+                                     DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+                                   GRANT ALL PRIVILEGES ON \`docup_test\`.* TO 'docup'@'%';
+                                   FLUSH PRIVILEGES;"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::could not create docup_test"
+          exit 1
+
       - name: Migrate
         run: |
           set -euo pipefail
