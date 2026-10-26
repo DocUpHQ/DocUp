@@ -7,6 +7,8 @@ declare(strict_types=1);
 
 namespace App\Domains;
 
+use App\Egress\HardenedEgressClient;
+
 /**
  * 🛑 §8.10.6's "two independent resolvers that must agree".
  *
@@ -30,6 +32,32 @@ final readonly class AgreeingResolvers
     public function __construct(private array $resolvers) {}
 
     /**
+     * The resolvers `config/domains.php` names.
+     *
+     * 🛑 One constructor for both callers. Phase 18 built this list inside
+     * `DomainVerifier::fromConfig()`; Phase 19's permission endpoint needs
+     * the same list for §8.10.11's live-DNS check, and two places that each
+     * read `domains.resolvers` is two places that can end up asking
+     * different resolvers — which would mean a hostname that verified
+     * against one pair and was refused a certificate by another.
+     */
+    public static function fromConfig(): self
+    {
+        $configured = config('domains.resolvers');
+
+        /** @var list<DnsRecords> $resolvers */
+        $resolvers = [];
+
+        foreach (is_array($configured) ? $configured : [] as $label => $endpoint) {
+            if (is_string($label) && is_string($endpoint) && $endpoint !== '') {
+                $resolvers[] = new DohRecords(app(HardenedEgressClient::class), $endpoint, $label);
+            }
+        }
+
+        return new self($resolvers);
+    }
+
+    /**
      * The TXT values both resolvers agree on.
      *
      * Agreement is on the **set**, not the order: DNS does not promise an
@@ -50,6 +78,23 @@ final readonly class AgreeingResolvers
 
             return $target === null ? null : ($target === '' ? [] : [$target]);
         });
+    }
+
+    /**
+     * The A and AAAA addresses both resolvers agree on (§8.10.11).
+     *
+     * 🛑 Agreement is required here for the reason it is required for a
+     * proof, and the attack is the same one a step later: a hostname that
+     * answers with the installation's ingress address to one resolver and
+     * with somebody else's to another is a name in the middle of being
+     * moved, and the thing not to do while that is true is obtain a
+     * certificate for it.
+     */
+    public function addresses(string $name): ResolverAnswer
+    {
+        return $this->agree(
+            static fn (DnsRecords $resolver): ?array => $resolver->addresses($name),
+        );
     }
 
     /**

@@ -12,6 +12,7 @@ use App\Providers\BuildServiceProvider;
 use App\Providers\FortifyServiceProvider;
 use App\Providers\SchemaServiceProvider;
 use App\Providers\SourceServiceProvider;
+use App\Providers\TlsServiceProvider;
 
 return [
     AppServiceProvider::class,
@@ -21,4 +22,5 @@ return [
     FortifyServiceProvider::class,
     SchemaServiceProvider::class,
     SourceServiceProvider::class,
+    TlsServiceProvider::class,
 ];

@@ -45,4 +45,26 @@ interface DnsRecords
      * Three states rather than two, for the reason `txt()` has them.
      */
     public function cname(string $name): ?string;
+
+    /**
+     * Every A and AAAA address this name resolves to, or null when the
+     * resolver could not answer at all.
+     *
+     * 🛑 Added in Phase 19 for §8.10.11, which gates on-demand issuance on a
+     * hostname that "**currently resolves in live DNS to an advertised
+     * ingress target**". That is the check which stops a tenant pointing a
+     * hostname at the installation, proving control, moving the DNS
+     * somewhere else, and keeping a certificate for a name they no longer
+     * direct — and it is a check Phase 18's TXT and CNAME lookups could not
+     * express, because a CNAME is only one of the three shapes §8.10.8
+     * documents.
+     *
+     * The three states carry the same meanings as `txt()`: a list is an
+     * answer, `[]` is "the name exists with no address", and null is "this
+     * resolver did not answer", which must never be read as "the name does
+     * not point here".
+     *
+     * @return list<string>|null
+     */
+    public function addresses(string $name): ?array;
 }

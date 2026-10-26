@@ -67,11 +67,34 @@ final readonly class HardenedEgressClient
     }
 
     /**
+     * A POST with an explicit body.
+     *
+     * 🛑 Added in Phase 19 for ACME, and deliberately here rather than in a
+     * second client. RFC 8555 is POST-only — even its reads are "POST-as-GET"
+     * with an empty payload — so an installation that had to speak to a
+     * certificate authority through a GET-only client would have grown a
+     * second outbound path, which §8.3.9 says is "not a duplication bug but
+     * an **unvalidated** one".
+     *
+     * Everything before the wire is unchanged: the same scheme allowlist, the
+     * same resolve-then-pin, the same redirect refusal, the same byte cap. A
+     * POST is a method, not an exemption.
+     *
      * @param  array<string, string>  $headers
      *
      * @throws EgressRefused
      */
-    public function request(string $method, string $url, array $headers = []): EgressResponse
+    public function post(string $url, string $body, array $headers = []): EgressResponse
+    {
+        return $this->request('POST', $url, $headers, $body);
+    }
+
+    /**
+     * @param  array<string, string>  $headers
+     *
+     * @throws EgressRefused
+     */
+    public function request(string $method, string $url, array $headers = [], ?string $body = null): EgressResponse
     {
         $parts = $this->parse($url);
 
@@ -114,7 +137,19 @@ final readonly class HardenedEgressClient
             throw new EgressRefused(EgressRejection::PortNotAllowed, $host, ['port' => $port]);
         }
 
-        $inspection = $this->guard->inspect($host, $this->options->enforceAddressPolicy);
+        $inspection = $this->guard->inspect(
+            $host,
+            $this->options->enforceAddressPolicy,
+            /*
+             * 🛑 §8.10.14, Phase 19. The operator named this exact hostname
+             * in `egress.internal_destinations`, so its private addresses
+             * are theirs; loopback, link-local and metadata stay refused.
+             * Empty by default, so for every installation that has not
+             * declared anything this argument is false and §8.3.9 is
+             * unchanged.
+             */
+            $this->options->permitsPrivateAddress($host),
+        );
 
         if ($inspection->rejection !== null) {
             throw new EgressRefused($inspection->rejection, $host, $inspection->context());
@@ -128,6 +163,7 @@ final readonly class HardenedEgressClient
             (string) $inspection->pinnedAddress,
             $headers,
             $this->options,
+            $body,
         );
 
         if ($response->status >= 300 && $response->status < 400 && $response->header('location') !== null) {

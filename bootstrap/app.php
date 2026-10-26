@@ -42,6 +42,23 @@ return Application::configure(basePath: dirname(__DIR__))
          * SPEC 8.21.2's bearer authentication is ours, not the framework's.
          */
         using: function (): void {
+            /*
+             * 🛑 §8.10.18: "`/.well-known/acme-challenge/*` MUST be matched
+             * **before** the documentation catch-all, the canonical redirect
+             * and the HTTPS redirect." And §20.2's `/_/edge/*` pair, which
+             * the proxy calls during a TLS handshake.
+             *
+             * 🛑 **This line is necessary and not sufficient**, and Phase 19
+             * measured why. Registration order governs only among routes
+             * that are alike: a route declaring a **domain** is matched
+             * ahead of every route that does not, whatever order they were
+             * registered in. So `routes/edge.php` declares a wildcard domain
+             * of its own — the comment at the top of that file sets out
+             * both silent failures that follow from omitting it — and this
+             * `require` is what puts it first within that bucket.
+             */
+            require __DIR__.'/../routes/edge.php';
+
             require __DIR__.'/../routes/docs.php';
 
             Route::middleware('web')->group(__DIR__.'/../routes/web.php');

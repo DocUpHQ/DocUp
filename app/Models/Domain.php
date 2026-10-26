@@ -40,6 +40,13 @@ use Illuminate\Support\Carbon;
  * @property int|null $hsts_max_age §8.10.19; null is off
  * @property bool $hsts_include_subdomains
  * @property bool $hsts_preload
+ * @property string $tls_mode 🛑 §8.10.21: `passthrough` is refused on a non-public project
+ * @property int $issuance_failures §8.10.13's circuit breaker, separate from `check_failures`
+ * @property Carbon|null $issuance_blocked_until
+ * @property Carbon|null $tls_last_probed_at §8.10.17
+ * @property Carbon|null $tls_not_after what the edge actually served
+ * @property string|null $tls_issuer
+ * @property string|null $tls_probe_error 🛑 the only issuance-failure observability there is
  * @property int $check_failures
  * @property Carbon|null $verified_at
  * @property Carbon|null $last_checked_at
@@ -66,6 +73,8 @@ final class Domain extends Model
         'hsts_include_subdomains' => false,
         'hsts_preload' => false,
         'check_failures' => 0,
+        'tls_mode' => 'managed',
+        'issuance_failures' => 0,
     ];
 
     /** @return array<string, string> */
@@ -76,6 +85,10 @@ final class Domain extends Model
             'hsts_include_subdomains' => 'boolean',
             'hsts_preload' => 'boolean',
             'check_failures' => 'integer',
+            'issuance_failures' => 'integer',
+            'issuance_blocked_until' => 'datetime:Y-m-d H:i:s.v',
+            'tls_last_probed_at' => 'datetime:Y-m-d H:i:s.v',
+            'tls_not_after' => 'datetime:Y-m-d H:i:s.v',
             'verified_at' => 'datetime:Y-m-d H:i:s.v',
             'last_checked_at' => 'datetime:Y-m-d H:i:s.v',
             'next_check_at' => 'datetime:Y-m-d H:i:s.v',

@@ -20,6 +20,14 @@ interface Transport
 {
     /**
      * @param  array<string, string>  $headers
+     * @param  string|null  $body  the request body, or null for a request that
+     *                             carries none. Added in Phase 19: ACME is a
+     *                             POST-only protocol (RFC 8555 §6.3 even reads
+     *                             GETs as POSTs with an empty payload), so a
+     *                             client that could only GET could not speak
+     *                             it — and §8.3.9's "one class, sole call
+     *                             site" means the answer is a body here, not a
+     *                             second client over there.
      *
      * @throws EgressRefused on timeout, byte cap or any transport failure
      */
@@ -31,5 +39,6 @@ interface Transport
         string $pinnedAddress,
         array $headers,
         EgressOptions $options,
+        ?string $body = null,
     ): EgressResponse;
 }

@@ -41,6 +41,7 @@ final class PinnedCurlTransport implements Transport
         string $pinnedAddress,
         array $headers,
         EgressOptions $options,
+        ?string $body = null,
     ): EgressResponse {
         $handle = curl_init();
 
@@ -48,7 +49,7 @@ final class PinnedCurlTransport implements Transport
             throw new EgressRefused(EgressRejection::TransportFailure, $host);
         }
 
-        $body = '';
+        $responseBody = '';
         $headerBytes = 0;
         $rawHeaders = [];
         $exceededBody = false;
@@ -118,14 +119,14 @@ final class PinnedCurlTransport implements Transport
              * `CURLOPT_MAXFILESIZE` is not a substitute either — it trusts
              * `Content-Length`, and a hostile server simply omits it.
              */
-            CURLOPT_WRITEFUNCTION => function (\CurlHandle $_, string $chunk) use (&$body, &$exceededBody, $options): int {
-                if (strlen($body) + strlen($chunk) > $options->maxResponseBytes) {
+            CURLOPT_WRITEFUNCTION => function (\CurlHandle $_, string $chunk) use (&$responseBody, &$exceededBody, $options): int {
+                if (strlen($responseBody) + strlen($chunk) > $options->maxResponseBytes) {
                     $exceededBody = true;
 
                     return 0;   // anything short of the chunk length aborts the transfer
                 }
 
-                $body .= $chunk;
+                $responseBody .= $chunk;
 
                 return strlen($chunk);
             },
@@ -144,6 +145,33 @@ final class PinnedCurlTransport implements Transport
                 return strlen($line);
             },
         ]);
+
+        if ($body !== null) {
+            /*
+             * 🛑 A separate call, NOT an entry spread into the array above,
+             * and the difference is a real defect that was caught by the
+             * first real ACME exchange.
+             *
+             * `...` unpacking **renumbers integer keys**. Every `CURLOPT_*`
+             * constant is an integer, so spreading `[CURLOPT_POSTFIELDS =>
+             * $body]` into an array literal does not set option 10015 — it
+             * appends the value under the next free sequential index, which
+             * cURL reads as some unrelated option. The symptom was
+             * `curl_setopt_array(): supplied argument is not a valid
+             * File-Handle resource`, which names nothing in this file.
+             *
+             * 🛑 And `CURLOPT_POSTFIELDS` takes a **string**. An array would
+             * make cURL choose `multipart/form-data` and invent a boundary;
+             * an ACME server answers that with `malformed`, and the caller
+             * has already set `Content-Type: application/jose+json` over
+             * bytes that are signed exactly as they are.
+             *
+             * An empty-string body is still a body: RFC 8555 §6.3's
+             * POST-as-GET sends `""` and a server distinguishes it from a
+             * POST with a payload, so the test is `!== null`.
+             */
+            curl_setopt($handle, CURLOPT_POSTFIELDS, $body);
+        }
 
         $ok = curl_exec($handle);
         $errno = curl_errno($handle);
@@ -177,7 +205,7 @@ final class PinnedCurlTransport implements Transport
             ]);
         }
 
-        return new EgressResponse($status, $this->parseHeaders($rawHeaders), $body, $pinnedAddress);
+        return new EgressResponse($status, $this->parseHeaders($rawHeaders), $responseBody, $pinnedAddress);
     }
 
     /**

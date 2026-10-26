@@ -68,4 +68,69 @@ return [
      */
     'enforce_address_policy' => true,
 
+    /*
+     *--------------------------------------------------------------------------
+     * Operator-declared internal destinations (SPEC 8.10.14; Phase 19)
+     *--------------------------------------------------------------------------
+     * 🛑 **Empty by default, and this is NOT `enforce_address_policy` under
+     * another name.** That flag stands the whole policy down for every host
+     * and exists only as a test affordance; this names specific hostnames and
+     * waives exactly one address class for them.
+     *
+     * Why it exists. SPEC 8.10.14 requires support for "an internal ACME
+     * directory (step-ca, Vault, ADCS) for air-gapped and corporate-PKI
+     * installations", and such a directory is by definition on a private
+     * address — which SPEC 8.3.9 refuses, with no exemption. The two
+     * requirements cannot both hold as written, so Phase 19 records the
+     * conflict as a proposed amendment to SPEC 8.3.9 and resolves it the
+     * narrowest way available:
+     *
+     *   - It is a list of **exact hostnames**, never a CIDR and never a
+     *     wildcard, so it cannot be widened by accident.
+     *   - It waives **only** the private and unique-local classes. Loopback,
+     *     link-local, the cloud metadata address, the unspecified address and
+     *     the reserved ranges stay refused for these hosts as for every other
+     *     — so an operator who writes `ca.internal` cannot reach
+     *     169.254.169.254 by pointing it there.
+     *   - It is configuration, not an environment variable that defaults
+     *     open, which is SPEC 20.4's invariant.
+     *
+     * 🛑 **A file, not an environment variable**, and the test directly
+     * above this file's own rules says why: "an egress control reachable
+     * from .env is a control that gets widened at 2am and never narrowed."
+     * `deploy/internal-destinations.conf` ships empty, is read at boot, and
+     * is the same operator-managed-file shape as
+     * `deploy/egress-allowlist.conf` for the build proxy and
+     * `deploy/header-allowlist.conf` for SPEC 8.10.22. Declaring internal
+     * infrastructure should take a deliberate edit and a restart.
+     *
+     * 🛑 SPEC 8.3.9's own wording scopes it to "every outbound request derived
+     * from **user-supplied configuration**". An ACME directory an operator put
+     * in that file is installation configuration, in the same class as
+     * `DB_HOST` — not something a tenant can set. That is the reading this
+     * list relies on, and the reason it is a list of hostnames rather than a
+     * switch.
+     */
+    'internal_destinations' => (static function (): array {
+        $path = base_path('deploy/internal-destinations.conf');
+
+        if (! is_file($path)) {
+            return [];
+        }
+
+        $hosts = [];
+
+        foreach (explode("\n", (string) file_get_contents($path)) as $line) {
+            $line = trim($line);
+
+            if ($line === '' || str_starts_with($line, '#')) {
+                continue;
+            }
+
+            $hosts[] = $line;
+        }
+
+        return $hosts;
+    })(),
+
 ];

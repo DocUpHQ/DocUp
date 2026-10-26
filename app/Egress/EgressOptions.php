@@ -38,6 +38,10 @@ final readonly class EgressOptions
     /**
      * @param  list<string>  $allowedSchemes
      * @param  list<int>  $allowedPorts
+     * @param  list<string>  $internalDestinations  exact hostnames the operator
+     *                                              has declared to be their own
+     *                                              infrastructure (§8.10.14); see
+     *                                              {@see self::permitsPrivateAddress()}
      */
     public function __construct(
         public array $allowedSchemes = ['https'],
@@ -45,6 +49,7 @@ final readonly class EgressOptions
         public int $timeoutSeconds = 5,
         public int $maxResponseBytes = 262144,
         public bool $enforceAddressPolicy = true,
+        public array $internalDestinations = [],
     ) {}
 
     /**
@@ -76,13 +81,42 @@ final readonly class EgressOptions
             }
         }
 
+        $internal = [];
+
+        foreach (is_array($config['internal_destinations'] ?? null) ? $config['internal_destinations'] : [] as $host) {
+            /*
+             * 🛑 Hostnames only. An IP literal here would be a CIDR with
+             * extra steps, and a name at least has to resolve — which means
+             * the loopback, link-local and metadata classes still apply to
+             * whatever it resolves to, because only the private classes are
+             * waived.
+             */
+            if (is_string($host) && $host !== '' && @inet_pton($host) === false) {
+                $internal[] = strtolower(trim($host, '.'));
+            }
+        }
+
         return new self(
             allowedSchemes: $schemes === [] ? ['https'] : $schemes,
             allowedPorts: $ports,
             timeoutSeconds: is_int($config['timeout_seconds'] ?? null) ? $config['timeout_seconds'] : 5,
             maxResponseBytes: is_int($config['max_response_bytes'] ?? null) ? $config['max_response_bytes'] : 262144,
             enforceAddressPolicy: ($config['enforce_address_policy'] ?? true) !== false,
+            internalDestinations: $internal,
         );
+    }
+
+    /**
+     * Whether this exact hostname may resolve to a private address.
+     *
+     * 🛑 **Exact**, not a suffix match. `ca.internal` does not admit
+     * `evil.ca.internal`, and an operator who wants both writes both — a
+     * suffix rule would let one declared name widen into a zone somebody
+     * else controls.
+     */
+    public function permitsPrivateAddress(string $host): bool
+    {
+        return in_array(strtolower(trim($host, '.')), $this->internalDestinations, true);
     }
 
     public function permitsScheme(string $scheme): bool

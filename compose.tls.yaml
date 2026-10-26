@@ -1,0 +1,114 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# ------------------------------------------------------------------------------
+# The TLS integration overlay (SPEC 8.10.14, SPEC 18.17) — NOT a production file.
+# ------------------------------------------------------------------------------
+#
+# Used as `docker compose -f compose.yaml -f compose.tls.yaml`. It adds one
+# service: a certificate authority this installation can actually talk to.
+#
+# 🛑 WHY A REAL CA AND NOT A FAKE ONE
+#
+# Two of Phase 19's exit criteria are claims about a protocol exchange and a
+# proxy's fallback behaviour:
+#
+#   - "An internal ACME directory issues for an air-gapped name."
+#   - SPEC 18.17: "The edge consults a database-backed certificate manager at
+#     handshake and falls back to on-demand ACME on a negative answer, rather
+#     than failing the handshake."
+#
+# Neither can be demonstrated against a stub. A stub asserts what we believe
+# RFC 8555 says; Pebble asserts what a server that implements it does — and
+# Pebble exists precisely to be stricter than Let's Encrypt about the details
+# clients get wrong. It rejects a proportion of nonces at random, which is how
+# a client with no `badNonce` retry is found before an operator finds it.
+#
+# 🛑 Pebble's validation is REAL here, not stubbed. `PEBBLE_VA_ALWAYS_VALID` is
+# deliberately NOT set: `deploy/pebble-config.json` moves the HTTP-01 port from
+# Pebble's default 5002 to 80, Docker's embedded DNS resolves the test hostname
+# to the app container, and Pebble fetches the challenge from DocUp's own
+# `/.well-known/acme-challenge/` route. That also exercises SPEC 8.10.18's
+# ordering end to end: if the challenge route were registered after the
+# documentation catch-all, this validation would fail.
+services:
+  pebble:
+    # 🛑 Pinned by digest, not by tag. Pebble publishes only `:latest`, and a
+    # moving tag in a test that exists to measure an open assumption (SPEC
+    # 18.17) would mean the measurement changed under the recorded answer.
+    # Resolved 2026-10-26; `docker inspect --format '{{index .RepoDigests 0}}'`
+    # after a pull is how to update it.
+    image: ghcr.io/letsencrypt/pebble@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199
+
+    command: -config /docup/pebble-config.json
+
+    volumes:
+      - ./deploy/pebble-config.json:/docup/pebble-config.json:ro
+
+    # 🛑 On the `app` network, which is where the application is. Not on
+    # `data`: a certificate authority has no business reaching the database,
+    # and SPEC 11.2 enforces the zones by network rather than by convention.
+    networks:
+      app:
+        aliases:
+          - pebble
+
+    healthcheck:
+      # The directory over its own TLS. `-k` because the CA that signed
+      # Pebble's own certificate is the thing under test and is installed
+      # into the app container, not into this one.
+      test: ["CMD", "wget", "--no-check-certificate", "-q", "-O", "-", "https://localhost:14000/dir"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  app:
+    networks:
+      app:
+        aliases:
+          # 🛑 The hostname the integration tests obtain a certificate for.
+          #
+          # Pebble resolves it through Docker's embedded DNS and fetches the
+          # HTTP-01 challenge from this container on port 80, so the
+          # validation is a real HTTP request to the real route rather than a
+          # flag that skips it.
+          - docup-acme.test
+      data: {}
+
+    environment:
+      # SPEC 8.10.14's internal ACME directory, which is what this overlay is
+      # standing up. `docup:tls:account --directory=` reads it.
+      DOCUP_ACME_DIRECTORY: https://pebble:14000/dir
+      DOCUP_ACME_CONTACT: tls@docup.test
+      DOCUP_ACME_KIND: internal
+
+      # SPEC 8.10.11's live-DNS check needs an ingress address to compare
+      # against, and inside a compose network the app's own address is it.
+      # The test sets this to whatever the container resolved to.
+      DOCUP_INGRESS_ADDRESSES: ${DOCUP_INGRESS_ADDRESSES:-}
+
+      # Turns every skip in tests/Feature/Tls into a failure: a skipped
+      # integration test is indistinguishable from a passing one in a log.
+      DOCUP_E2E: "1"
+
+      # 🛑 Which CA the PROXY uses for on-demand issuance (SPEC 18.17). Not
+      # the same as DOCUP_ACME_DIRECTORY above, which is the one the
+      # APPLICATION talks to — deploy/Caddyfile sets out the difference.
+      # Pointed at the same Pebble here so the fallback can be measured.
+      DOCUP_EDGE_ACME_DIRECTORY: https://pebble:14000/dir
+
+      # 🛑 The suite and the running application share ONE database here, and
+      # that is the whole reason this line exists.
+      #
+      # tests/Feature/Tls/EdgeHandshakeTest drives a real TLS handshake: the
+      # rows it writes must be visible to the FPM worker that answers the
+      # proxy's permission and certificate calls. phpunit.xml points the test
+      # process at `docup_test`, so without this the worker would read `docup`,
+      # find no certificate, and fall through to an ACME attempt for a
+      # hostname that does not resolve — a 45-second timeout whose cause is
+      # nowhere in the output.
+      #
+      # Safe only because this overlay is never production: compose.yaml's own
+      # default stays `docup`.
+      DB_DATABASE: docup_test

@@ -697,3 +697,120 @@ jobs:
           tail -200 /tmp/runner.log || true
           docker logs --tail 100 docup-proxy || true
           docker ps -a --filter label=docup.owner=build-runner || true
+
+  # 🛑 Phase 19's TLS automation, against a REAL certificate authority and the
+  # stack's own proxy.
+  #
+  # Two of the phase's exit criteria are claims about things nothing but a
+  # running system can answer: "an internal ACME directory issues for an
+  # air-gapped name", and SPEC 18.17's "the edge consults a database-backed
+  # certificate manager at handshake and falls back to on-demand ACME on a
+  # negative answer, rather than failing the handshake". A stub would assert
+  # what we believe RFC 8555 and Caddy do; Pebble and Caddy assert what they
+  # do — and they disagreed with the obvious implementation twice, over a
+  # missing User-Agent and over 404 versus 204.
+  #
+  # DOCUP_E2E=1 (set in compose.tls.yaml) turns every skip in tests/Feature/Tls
+  # into a failure, so this job cannot go green having exercised nothing.
+  tls:
+    name: TLS automation and certificate sources
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compose an environment
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          printf 'APP_KEY=base64:%s\n' "$(openssl rand -base64 32)" >> .env
+          printf 'APP_ENV=local\n' >> .env
+          printf 'DOCUP_AUDIT_KEY=%s\n' "$(openssl rand -hex 32)" >> .env
+          printf 'DOCUP_APP_HOST=docup.localhost\n' >> .env
+          printf 'DOCUP_DOCS_APEX=docup-docs.localhost\n' >> .env
+          printf 'DOCUP_PREVIEW_APEX=docup-previews.localhost\n' >> .env
+          printf 'DOCUP_ASSET_HOST=assets.docup-docs.localhost\n' >> .env
+
+      - name: Build the image
+        run: docker compose -f compose.yaml -f compose.tls.yaml build app
+
+      - name: Install dependencies
+        run: |
+          docker compose -f compose.yaml -f compose.tls.yaml run --rm --no-deps app \
+            composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Start the stack and the certificate authority
+        run: docker compose -f compose.yaml -f compose.tls.yaml up -d db cache pebble app
+
+      - name: Migrate
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if docker compose -f compose.yaml -f compose.tls.yaml exec -T app \
+                 php artisan migrate --force --no-interaction; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::migrations never succeeded"
+          exit 1
+
+      # 🛑 SPEC 8.22.1's triggers, applied where they can take effect — the
+      # same step the baseline and edge jobs run, for the same reason: the
+      # compose init scripts run against an empty schema.
+      - name: Harden the audit log
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml -f compose.tls.yaml exec -T \
+            -e MYSQL_PWD=docup-root db \
+            sh -c 'mysql -u root docup_test' < deploy/mysql/init/10-audit-append-only.sql
+
+      # 🛑 SPEC 8.10.11 gates issuance on the hostname "currently resolving in
+      # live DNS to an advertised ingress target". Inside a compose network the
+      # app's own address is that target, and it is discovered rather than
+      # guessed: SPEC 8.10.8 says DocUp cannot discover its own public address,
+      # and this is the one place where the test harness legitimately can.
+      - name: Advertise the ingress address and restart on it
+        run: |
+          set -euo pipefail
+          APP_IP="$(docker compose -f compose.yaml -f compose.tls.yaml exec -T app \
+            sh -c "getent hosts docup-acme.test | awk '{print \$1}'" | tr -d '\r')"
+          echo "app address: ${APP_IP}"
+          test -n "${APP_IP}"
+          echo "DOCUP_INGRESS_ADDRESSES=${APP_IP}" >> "$GITHUB_ENV"
+          DOCUP_INGRESS_ADDRESSES="${APP_IP}" \
+            docker compose -f compose.yaml -f compose.tls.yaml up -d app
+
+      - name: Trust the test certificate authority
+        run: bash deploy/tls-test-setup.sh
+
+      # 🛑 After the CA is installed, because Caddy reads the system trust
+      # store at start: without this the proxy cannot speak to Pebble and
+      # SPEC 18.17's fallback cannot be measured.
+      - name: Restart the edge so it trusts the CA
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml -f compose.tls.yaml restart app
+          for _ in $(seq 1 60); do
+            code="$(docker compose -f compose.yaml -f compose.tls.yaml exec -T app \
+              curl -s -o /dev/null -w '%{http_code}' http://localhost/_/health || echo 000)"
+            if [ "$code" = "200" ]; then echo "edge answered"; exit 0; fi
+            sleep 2
+          done
+          echo "::error::the edge never answered"
+          exit 1
+
+      - name: Phase 19 exit criteria
+        env:
+          NO_COLOR: '1'
+        run: |
+          set -o pipefail
+          docker compose -f compose.yaml -f compose.tls.yaml exec -T -e DOCUP_E2E=1 -e NO_COLOR=1 app \
+            ./vendor/bin/pest tests/Feature/Tls tests/Unit/Tls --colors=never 2>&1 | tee /tmp/tls.log
+
+      - name: Logs, on failure
+        if: failure()
+        run: |
+          docker compose -f compose.yaml -f compose.tls.yaml logs --tail 200 app || true
+          docker compose -f compose.yaml -f compose.tls.yaml logs --tail 100 pebble || true

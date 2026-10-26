@@ -7,7 +7,6 @@ declare(strict_types=1);
 
 namespace App\Domains;
 
-use App\Egress\HardenedEgressClient;
 use App\Models\Domain;
 use App\Models\DomainClaim;
 use App\Models\DomainVerificationEvent;
@@ -175,32 +174,18 @@ final readonly class DomainVerifier
         return new VerificationResult($passed, $method, $outcome, $detail);
     }
 
-    /** The resolvers a running installation uses, from configuration. */
+    /**
+     * The resolvers a running installation uses, from configuration.
+     *
+     * The list itself is `AgreeingResolvers`' to build, since Phase 19's
+     * permission endpoint needs the same one — two readers of
+     * `domains.resolvers` could end up asking different resolvers, which
+     * would mean a hostname that verified against one pair and was refused
+     * a certificate by another.
+     */
     public static function fromConfig(): self
     {
-        /** @var list<DnsRecords> $resolvers */
-        $resolvers = [];
-
-        foreach (self::configuredResolvers() as $label => $endpoint) {
-            $resolvers[] = new DohRecords(app(HardenedEgressClient::class), $endpoint, $label);
-        }
-
-        return new self(new AgreeingResolvers($resolvers));
-    }
-
-    /** @return array<string, string> */
-    private static function configuredResolvers(): array
-    {
-        $configured = config('domains.resolvers');
-        $resolvers = [];
-
-        foreach (is_array($configured) ? $configured : [] as $label => $endpoint) {
-            if (is_string($label) && is_string($endpoint) && $endpoint !== '') {
-                $resolvers[$label] = $endpoint;
-            }
-        }
-
-        return $resolvers;
+        return new self(AgreeingResolvers::fromConfig());
     }
 
     private static function configuredApex(): string

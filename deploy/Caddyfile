@@ -8,12 +8,150 @@
 # where nginx replaces the entire response header set and needs a
 # hand-maintained re-emission list to avoid serving private documentation
 # cacheable (SPEC 8.9.8, SPEC 9.3.2).
-
 {
+	# 🛑 SPEC 8.10.14: "The proxy admin API MUST stay **disabled** — it is
+	# root-equivalent on the edge." Whoever reaches Caddy's admin socket can
+	# load a new configuration, which means a new upstream, a new TLS policy
+	# and a new certificate for any name — without touching this file and
+	# without any record in the application. `config/tls.php` declares
+	# `admin_api_enabled => false` and TlsConfigurationTest asserts that this
+	# line and that constant agree, the way SPEC 8.10.22's header allowlist is
+	# asserted byte-identical.
+	#
+	# It is also why SPEC 8.10.14 serves uploaded and internal-PKI
+	# certificates from the database instead: with no admin API there is no
+	# way to push one, and with the database there is no need.
 	admin off
 	frankenphp
 	order php_server before file_server
 	order intercept before php_server
+
+	# 🛑 The redirect order is SPEC 8.11.1's and belongs to the application,
+	# not to the proxy: "ACME challenge escape → HTTP→HTTPS → host
+	# canonicalisation → path normalisation → domain-mount resolution → …".
+	# Caddy's implicit HTTP→HTTPS redirect would insert itself at the top of
+	# that list, ahead of SPEC 8.10.18's challenge escape, and it would do so
+	# for whatever hostnames it inferred rather than the ones DocUp serves.
+	#
+	# Today it infers none, because no site block names a hostname — this
+	# line is what keeps that true if a later Caddy changes the inference. The
+	# redirect itself is Phase 20's (SPEC 8.11.1), where it is one step of a
+	# documented order rather than an implicit one.
+	auto_https disable_redirects
+
+	# -----------------------------------------------------------------------
+	# SPEC 8.10.11's permission endpoint.
+	#
+	# 🛑 Caddy asks this URL before obtaining a certificate for an SNI value
+	# it does not already hold, and reads THE STATUS CODE AND NOTHING ELSE:
+	# 2xx authorises issuance, anything else cancels it and fails the
+	# handshake. Without this block, on-demand TLS would issue for any name
+	# that reached the listener — which is an unauthenticated path from a TLS
+	# handshake to a certificate authority, and the reason Caddy's own
+	# documentation says on-demand without `ask` is unsafe in production.
+	#
+	# 🛑 Plaintext, over loopback, to the same process. SPEC 8.10.12 makes
+	# HTTPS on a served hostname a VALIDATION ERROR: the proxy cannot complete
+	# a handshake for such a name before it has a certificate, and it cannot
+	# have one before this endpoint answers. App\Tls\PermissionEndpoint
+	# refuses that configuration at boot so it is never discovered at the
+	# first handshake, when nothing is logged anywhere.
+	#
+	# `interval` and `burst` are deliberately absent: Caddy removed them and
+	# now recommends against them. The rate limits are SPEC 8.10.11's, per
+	# hostname and global, enforced in App\Tls\IssuancePermission — per-IP
+	# would be meaningless here because every one of these requests comes
+	# from 127.0.0.1.
+	# -----------------------------------------------------------------------
+	on_demand_tls {
+		ask http://127.0.0.1/_/edge/tls-permission
+	}
+
+	# -----------------------------------------------------------------------
+	# Which certificate authority the PROXY uses for on-demand issuance.
+	#
+	# 🛑 Not the same thing as DOCUP_ACME_DIRECTORY, and the two are easy to
+	# confuse. That one is the directory the APPLICATION talks to when it holds
+	# the key itself (SPEC 8.10.14's database-served certificates). This one is
+	# the directory the PROXY talks to for the custom domains SPEC 8.10.11
+	# gates on demand — the path on which DocUp never sees a private key.
+	#
+	# An operator may legitimately need to change it, and an air-gapped
+	# installation MUST: SPEC 8.10.14 exists for "air-gapped and corporate-PKI
+	# installations", and such an installation cannot reach Let's Encrypt at
+	# all. Hard-wiring the public CA here would leave its on-demand path
+	# failing for ever, with the failure visible only through SPEC 8.10.17's
+	# prober.
+	#
+	# One URL and nothing else: a directive injected from the environment
+	# would be configuration injection into the edge, which is the thing
+	# `admin off` above exists to prevent.
+	acme_ca {$DOCUP_EDGE_ACME_DIRECTORY:https://acme-v02.api.letsencrypt.org/directory}
+}
+
+# -------------------------------------------------------------------------------
+# SPEC 8.10.16: "Adding, verifying, activating, suspending or removing a domain
+# MUST take effect with **no proxy restart, config render or reload** in the
+# default topology."
+#
+# 🛑 That requirement is why this file names NO hostname. There is no per-domain
+# block, no host list and nothing generated: the listener answers whatever SNI
+# arrives, the permission endpoint decides, and a domain verified at 10:00:00
+# serves HTTPS at 10:00:01 with this file untouched. A configuration that
+# enumerated hosts would need a render and a reload per domain, which is exactly
+# what the requirement forbids — and a reload drops in-flight connections.
+# -------------------------------------------------------------------------------
+:443 {
+	root /app/public
+
+	tls {
+		# 🛑 SPEC 8.10.14's database-served certificates, at handshake time.
+		#
+		# Caddy calls this with `?server_name=<sni>` and expects 200 with a PEM
+		# chain and key. A 404 means DocUp holds no certificate for the name —
+		# which is the COMMON case, because SPEC 8.10.11 has the proxy obtain
+		# most custom domains' certificates itself — and Caddy must then fall
+		# back to on-demand issuance rather than failing the handshake.
+		#
+		# 🛑 That fallback is SPEC 18.17, which was an open assumption until
+		# this phase: "The edge consults a database-backed certificate manager
+		# at handshake and falls back to on-demand ACME on a negative answer,
+		# rather than failing the handshake." tests/Feature/Tls/ record what a
+		# running Caddy actually did. If it had failed instead, the pre-decided
+		# consequence was two host-list-selected TLS policies and a debounced
+		# config update for BYO hosts — which would have cost SPEC 8.10.16.
+		get_certificate http http://127.0.0.1/_/edge/certificate
+
+		# `get_certificate` implies on_demand, but it is stated because the two
+		# halves are separate decisions: one says where a stored certificate
+		# comes from, the other says that an unknown name may acquire one.
+		on_demand
+	}
+
+	intercept {
+		@accel header X-Accel-Redirect *
+		handle_response @accel {
+			route {
+				rewrite * {resp.header.X-Accel-Redirect}
+				uri strip_prefix /_internal
+				root * /var/lib/docup/artifacts
+				header -X-Accel-Redirect
+				header -X-Powered-By
+				header X-Content-Type-Options nosniff
+				header >Vary {resp.header.Vary}
+				file_server
+			}
+		}
+	}
+
+	# SPEC 8.10.18, on the TLS listener too: matched before the documentation
+	# catch-all. Caddy answers its own ACME challenges below the route table,
+	# so what reaches here is DocUp's own (SPEC 8.10.14's internal directory),
+	# and routes/edge.php is required before routes/docs.php for the same
+	# reason this block is written before php_server.
+	encode zstd gzip
+
+	php_server
 }
 
 :80 {
@@ -73,12 +211,31 @@
 		}
 	}
 
-	# SPEC 8.10.18: the ACME challenge path is matched before everything else,
-	# including the documentation catch-all and any canonical redirect. Phase 19
-	# wires issuance; the ordering guarantee belongs here from the start.
-	handle /.well-known/acme-challenge/* {
-		respond 404
-	}
+	# 🛑 SPEC 8.10.18: "`/.well-known/acme-challenge/*` MUST be matched before
+	# the documentation catch-all, the canonical redirect and the HTTPS
+	# redirect."
+	#
+	# Phase 01 put a `respond 404` here to hold the ordering before there was
+	# anything to serve. Phase 19 removes it, because there now is: two
+	# different things answer this path and both must be able to.
+	#
+	#   1. Caddy's own HTTP-01 challenges, for the certificates IT obtains
+	#      under on_demand_tls. Those are handled by a route Caddy installs
+	#      ABOVE this site block, so they never reach here at all.
+	#   2. DocUp's own, for SPEC 8.10.14's internal ACME directory, where the
+	#      application is the ACME client. Those are served by
+	#      routes/edge.php, which bootstrap/app.php requires BEFORE
+	#      routes/docs.php — Laravel has no route priority, only registration
+	#      order, so that `require` is the ordering guarantee on the PHP side.
+	#
+	# A `respond 404` left here would have answered (2) with a 404 and the
+	# internal CA's validation would have failed, with the error appearing at
+	# the CA and nothing in any log here.
+	#
+	# 🛑 This block is still written before `php_server` on purpose. It no
+	# longer matches anything Caddy would otherwise take, but the ordering it
+	# documents is the requirement, and deleting it loses the one place the
+	# reason is written down.
 
 	encode zstd gzip
 
