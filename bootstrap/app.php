@@ -23,7 +23,16 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         /*
          * 🛑 `using:` rather than `web:` + `then:`, because the ORDER matters
-         * and Laravel has no route priority — only registration order.
+         * and registration order is most of what decides matching.
+         *
+         * 🛑 **Most, not all** — Phase 19 measured the exception and this
+         * comment used to state the rule too strongly. A route that
+         * declares a **domain** is matched ahead of every route that does
+         * not, whatever order they were registered in; order governs only
+         * among routes that are alike in that respect. The documentation
+         * groups below are all domain-scoped, so order decides between
+         * them; `routes/edge.php` had to be given a wildcard domain of its
+         * own before being required first meant anything at all.
          *
          * The documentation routes are domain-scoped (SPEC 8.1.4) and must be
          * registered FIRST. With the dashboard first, its unconstrained `/` and

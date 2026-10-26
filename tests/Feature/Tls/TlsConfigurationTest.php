@@ -22,6 +22,7 @@ use App\Tls\PermissionEndpoint;
 use App\Tls\RegisteredDomain;
 use App\Tls\WildcardZones;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Tests\TestCase;
@@ -177,31 +178,53 @@ final class TlsConfigurationTest extends TestCase
     }
 
     /**
-     * 🛑 §8.10.18: the challenge path is reachable, and reachable **before**
-     * the documentation catch-all.
+     * 🛑 §8.10.18: "`/.well-known/acme-challenge/*` MUST be matched **before**
+     * the documentation catch-all" — asserted on the **router**, not on the
+     * order of two `require` lines.
      *
-     * Laravel has no route priority, only registration order, so this is an
-     * assertion about `bootstrap/app.php` requiring `routes/edge.php` first.
-     * A challenge registered after the documentation routes is answered by
-     * §8.9.3's hard 404 and the CA's validation fails with nothing logged
-     * on this side.
+     * The weaker assertion was the first version of this test and it would
+     * have passed over the defect. Laravel matches a route that declares a
+     * **domain** ahead of every route that does not, whatever the
+     * registration order, so `routes/edge.php` being required first bought
+     * nothing until it declared a wildcard domain of its own.
+     *
+     * Three hosts, because the three failure modes differ:
+     *
+     *  - a multi-label documentation host, where the custom-domain group
+     *    would otherwise win and the CA would see §8.9.3's hard 404;
+     *  - **`127.0.0.1`**, which is multi-label too (the pattern accepts
+     *    digits) and is what the proxy actually calls — the case that would
+     *    have broken every on-demand issuance in production while every
+     *    test using `localhost` passed;
+     *  - `localhost`, single-label, which no documentation group claims.
      */
-    public function test_the_acme_challenge_path_is_registered_before_the_catch_all(): void
+    public function test_the_edge_routes_win_over_the_documentation_catch_all(): void
     {
-        $bootstrap = (string) file_get_contents(base_path('bootstrap/app.php'));
+        $cases = [
+            'docs.example.test' => ['/.well-known/acme-challenge/'.str_repeat('a', 43) => 'edge.acme.challenge'],
+            '127.0.0.1' => [
+                '/_/edge/tls-permission' => 'edge.tls.permission',
+                '/_/edge/certificate' => 'edge.tls.certificate',
+            ],
+            'localhost' => ['/.well-known/acme-challenge/'.str_repeat('b', 43) => 'edge.acme.challenge'],
+        ];
 
-        /*
-         * The `require` lines, not the first mention: the comment above
-         * them names both files, and matching that would assert the order
-         * of the prose rather than of the registration.
-         */
-        $edge = strpos($bootstrap, "require __DIR__.'/../routes/edge.php';");
-        $docs = strpos($bootstrap, "require __DIR__.'/../routes/docs.php';");
+        foreach ($cases as $host => $paths) {
+            foreach ($paths as $path => $expected) {
+                $route = app('router')->getRoutes()->match(Request::create('http://'.$host.$path, 'GET'));
 
-        $this->assertIsInt($edge, 'routes/edge.php is not required at all');
-        $this->assertIsInt($docs);
-        $this->assertLessThan($docs, $edge, '🛑 §8.10.18: before the documentation catch-all');
+                $this->assertSame(
+                    $expected,
+                    $route->getName(),
+                    '🛑 '.$host.$path.' must reach the edge route, not the documentation catch-all',
+                );
+            }
+        }
+    }
 
+    /** And an unpublished challenge token is an empty 404, never a guess. */
+    public function test_an_unpublished_challenge_token_is_an_empty_404(): void
+    {
         $response = $this->get('/.well-known/acme-challenge/'.str_repeat('a', 43));
 
         $this->assertSame(404, $response->getStatusCode(), 'an unpublished token is absent, not misrouted');

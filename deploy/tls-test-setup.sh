@@ -60,13 +60,14 @@ echo "==> fetching the issuance root, verified against that CA"
 echo "==> verifying the directory is reachable with verification ON"
 "${COMPOSE[@]}" exec -T app curl -fsS -o /dev/null https://pebble:14000/dir
 
-echo "==> declaring pebble an internal destination (SPEC 8.10.14)"
-# 🛑 Written to the container's copy only, never to the file in the repository.
+# 🛑 Pebble is NOT declared in deploy/internal-destinations.conf here, and
+# that is deliberate. It resolves to a private address, so reaching it needs
+# the §8.10.14 carve-out — but the shipped file must stay empty, and
 # `EgressConfigurationTest::test_the_shipped_destination_file_declares_nothing`
-# asserts the shipped file declares nothing, and it must keep passing: a test
-# environment that quietly edited the committed allowlist would be a test that
-# made the shipped default wrong.
-"${COMPOSE[@]}" exec -T app sh -c \
-  'printf "pebble\n" > /tmp/internal-destinations.conf && cat /tmp/internal-destinations.conf'
+# asserts that it does. A setup script that edited the committed allowlist
+# would make the shipped default wrong in order to test something else.
+#
+# `AcmeIssuanceTest::setUp()` sets the config value instead. Everything below
+# it is the real path: the real parse, the real AddressGuard, the real client.
 
 echo "==> done"
