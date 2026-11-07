@@ -9,7 +9,6 @@ namespace App\Console\Commands;
 
 use App\Audit\Audit;
 use App\Support\Uuid;
-use DateTimeZone;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -161,7 +160,7 @@ final class AuditAnchorCommand extends Command
              * ships 8.5.11). An explicit object is correct on every version and
              * depends on no library's coercion.
              */
-            $date = Carbon::createFromFormat('Y-m-d', $given, new DateTimeZone('UTC'));
+            $date = Carbon::createFromFormat('Y-m-d', $given, new \DateTimeZone('UTC'));
         } catch (\Throwable) {
             $date = null;
         }
