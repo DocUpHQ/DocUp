@@ -83,6 +83,13 @@ parameters:
         # put a hidden version in a sitemap would publish something §8.6
         # deliberately unadvertised.
         - app/Seo
+        # Phase 21. §9.4's criterion needs no restating here: §12.3 makes one
+        # function the sole decider of every reader request, so a type error in
+        # it is the disclosure the whole of §8.12 exists to prevent. It is also
+        # the namespace where level 9's value is highest, because the code is
+        # pure — there is no I/O for a type error to hide behind, and every
+        # finding is a finding about the logic.
+        - app/Access
         - app/Support
         - app/Concerns
         - app/Models

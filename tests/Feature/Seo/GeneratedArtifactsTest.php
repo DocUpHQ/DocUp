@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace Tests\Feature\Seo;
 
 use App\Auth\OrganisationContext;
+use App\Http\Middleware\RejectNonCanonicalPath;
 use App\Models\Domain;
 use App\Models\DomainMount;
 use App\Models\Organisation;
@@ -21,10 +22,13 @@ use App\Seo\Sitemap;
 use App\Seo\SitemapEntry;
 use App\Support\Uuid;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Testing\TestResponse;
+use Symfony\Component\HttpFoundation\Response;
 use Tests\TestCase;
 
 /**
@@ -432,5 +436,122 @@ final class GeneratedArtifactsTest extends TestCase
         ])->save();
 
         return $mount;
+    }
+
+    /**
+     * 🛑 All four generated files, over **HTTP**, on both host shapes.
+     *
+     * Added in Phase 21, which is the phase that found what its absence cost:
+     * `GeneratedFileController` declared the filename as a positional
+     * parameter, Laravel passes a route's **domain** parameters before its path
+     * parameters, and both groups registering these routes are domain-scoped —
+     * so every request for `robots.txt`, `sitemap.xml`, `llms.txt` or
+     * `llms-full.txt` received the hostname in `$docupGeneratedFile` and
+     * answered `generated.unknown_file`. On every host there had ever been.
+     *
+     * 🛑 **Phase 20's tests were all correct and none of them could have
+     * caught it**: they drove `GeneratedArtifacts` and the store directly and
+     * asserted the written bytes, which were right. §8.11.6 is a requirement
+     * about four *URLs*, and the only test that can check a URL is one that
+     * asks for it. The same gap, in the same shape, as Phase 19's finding that
+     * the ACME challenge path was swallowed by a domain route.
+     */
+    public function test_every_generated_file_is_served_over_http(): void
+    {
+        $custom = 'manual-'.bin2hex(random_bytes(3)).'.example.test';
+        $mount = $this->mount($custom, indexable: true);
+
+        $this->version('v2', listed: true, visibility: 'public');
+
+        app(GeneratedArtifacts::class)->regenerate($this->project);
+
+        foreach (GeneratedStore::FILES as $file) {
+            $response = $this->getExactly('http://'.$custom.'/'.$file);
+
+            $response->assertOk();
+            $response->assertHeader(RejectNonCanonicalPath::RESOLVER_HEADER, 'generated.store');
+        }
+
+        /*
+         * And on the default subdomain, which is the **other** domain-scoped
+         * group and the one whose extra `{docupHostLabel}` parameter made the
+         * positional read wrong. Two groups, two chances to get it wrong, so
+         * both are asserted.
+         */
+        $label = 'sub-'.bin2hex(random_bytes(3));
+        $apex = config('docup.origins.docs');
+        $subdomain = $label.'.'.(is_string($apex) && $apex !== '' ? $apex : 'docup-docs.test');
+
+        $default = new Domain;
+        $default->forceFill([
+            'id' => Uuid::v7(),
+            'organisation_id' => $this->organisation->id,
+            'host' => $subdomain,
+            'kind' => 'default_subdomain',
+            'state' => 'active',
+            'verified_at' => Carbon::now(),
+        ])->save();
+
+        $second = new DomainMount;
+        $second->forceFill([
+            'id' => Uuid::v7(),
+            'organisation_id' => $this->organisation->id,
+            'domain_id' => $default->id,
+            'project_id' => $this->project->id,
+            'path_prefix' => '',
+            'mode' => 'serve',
+        ])->save();
+
+        app(GeneratedArtifacts::class)->regenerate($this->project);
+
+        Cache::flush();
+
+        foreach (GeneratedStore::FILES as $file) {
+            $this->getExactly('http://'.$subdomain.'/'.$file)->assertOk();
+        }
+
+        $this->assertNotSame((string) $mount->id, (string) $second->id);
+    }
+
+    /**
+     * 🛑 And a documentation path that merely ends in one of the four names is
+     * still served from the build.
+     *
+     * §8.11.6's route pattern cannot be constrained to mount prefixes, because
+     * those are rows — so `/en/v2/sitemap.xml` matches the prefixed generated
+     * route and the controller has to delegate it. A 404 here would make those
+     * four filenames unservable from any build, for every project, for ever.
+     */
+    public function test_a_build_path_ending_in_a_generated_name_is_not_swallowed(): void
+    {
+        $custom = 'manual-'.bin2hex(random_bytes(3)).'.example.test';
+        $this->mount($custom, indexable: true);
+
+        $response = $this->getExactly('http://'.$custom.'/en/v2/sitemap.xml');
+
+        /*
+         * 404 because this fixture publishes no such file — but a 404 from the
+         * **document** path, not `generated.unknown_file`. The resolver header
+         * is what distinguishes "the build does not have it" from "the route
+         * never reached the right controller", which is exactly the confusion
+         * that hid the parameter defect.
+         */
+        $this->assertNotSame(
+            'generated.unknown_file',
+            $response->headers->get(RejectNonCanonicalPath::RESOLVER_HEADER),
+            'a documentation path must be delegated, not treated as a generated file',
+        );
+    }
+
+    /**
+     * A GET that preserves the path exactly, as the serving tests use.
+     *
+     * @return TestResponse<Response>
+     */
+    private function getExactly(string $url): TestResponse
+    {
+        return TestResponse::fromBaseResponse(
+            $this->app->handle(Request::create($url, 'GET')),
+        );
     }
 }

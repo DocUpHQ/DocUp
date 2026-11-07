@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace App\Seo;
 
+use App\Access\ReaderGate;
 use App\Auth\OrganisationContext;
 use App\Models\DomainMount;
 use App\Models\Project;
@@ -48,6 +49,7 @@ final readonly class GeneratedArtifacts
     public function __construct(
         private GeneratedStore $store,
         private ManifestReader $manifests,
+        private ReaderGate $gate,
     ) {}
 
     /**
@@ -69,11 +71,17 @@ final readonly class GeneratedArtifacts
             return [];
         }
 
-        $versions = $this->publishedVersions($project);
         $touched = [];
 
         foreach ($mounts as $mount) {
-            $this->writeMount($project, $mount, $versions);
+            /*
+             * 🛑 Per mount, not once for the project. A `mount_exposure`
+             * override narrows access for one domain (§8.10.1, §12.3), so the
+             * advertisable set is a property of the (project, mount) pair —
+             * computing it once would publish a sitemap on the narrowed domain
+             * listing everything the wide one serves.
+             */
+            $this->writeMount($project, $mount, $this->publishedVersions($project, $mount));
             $touched[] = (string) $mount->id;
         }
 
@@ -301,12 +309,24 @@ final readonly class GeneratedArtifacts
      * `listed=false` is deliberately unadvertised, `published=false` has no
      * bytes, and a non-public `visibility` is §12's.
      *
+     * 🛑 **And then §12.3 is asked, which is the authority** (§8.12.21: every
+     * derived surface "MUST be generated from the **authorised** view", naming
+     * sitemap, `robots.txt` and `llms.txt` among them).
+     *
+     * The four SQL conditions are a cheap pre-filter, not the decision. They
+     * cannot be: §8.2.10 makes `projects.visibility` dominate the version's, so
+     * a public version of a `members` project passes all four and must not be
+     * advertised — and a `mount_exposure` override narrows per domain, so the
+     * same version may be advertisable on one mount and not on another. Both
+     * facts live in the decision function, and asking it is how this generator
+     * avoids becoming a second one.
+     *
      * @return list<ProjectVersion>
      */
-    private function publishedVersions(Project $project): array
+    private function publishedVersions(Project $project, DomainMount $mount): array
     {
-        /** @var list<ProjectVersion> $versions */
-        $versions = ProjectVersion::query()
+        /** @var list<ProjectVersion> $candidates */
+        $candidates = ProjectVersion::query()
             ->where('project_id', $project->id)
             ->where('active', true)
             ->where('listed', true)
@@ -316,6 +336,24 @@ final readonly class GeneratedArtifacts
             ->orderBy('slug')
             ->get()
             ->all();
+
+        $versions = [];
+
+        foreach ($candidates as $version) {
+            $advertisable = $this->gate->anonymousMayRead(
+                projectId: (string) $project->id,
+                projectVisibility: $project->visibility->value,
+                versionVisibility: $version->visibility->value,
+                mountExposure: (string) $mount->mount_exposure,
+                versionSlug: (string) $version->slug,
+                authzEpoch: (int) $project->authz_epoch,
+                language: (string) $version->language,
+            );
+
+            if ($advertisable) {
+                $versions[] = $version;
+            }
+        }
 
         return $versions;
     }

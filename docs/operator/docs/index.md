@@ -59,4 +59,8 @@ front, not after the migration:
   what `docup:doctor` checks.
 - [Composition modes](composition.md) — how one project serves several
   repositories, and the behaviour table that differs between the two modes.
+- [Redirects and crawlers](redirects.md) — keeping a URL somebody linked to,
+  and the twelve documented cases.
+- [Who may read it](access.md) — the one decision behind every reader request,
+  and the 48 combinations it is asserted on.
 - [Running it](operations.md) — the scheduler, backups, the build sandbox.

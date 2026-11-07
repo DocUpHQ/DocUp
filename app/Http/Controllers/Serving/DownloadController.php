@@ -7,6 +7,9 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Serving;
 
+use App\Access\AccessDecision;
+use App\Access\AccessSurface;
+use App\Access\ReaderGate;
 use App\Http\Controllers\Controller;
 use App\Http\Middleware\RejectNonCanonicalPath;
 use App\Serving\ArtifactHandoff;
@@ -50,6 +53,7 @@ final class DownloadController extends Controller
         private readonly RoutingSnapshotLoader $snapshots,
         private readonly ManifestReader $manifests,
         private readonly ArtifactHandoff $handoff,
+        private readonly ReaderGate $gate,
     ) {}
 
     /**
@@ -113,6 +117,37 @@ final class DownloadController extends Controller
         }
 
         /*
+         * 🛑 §8.12.21's `download` surface, through the one decision function.
+         *
+         * An offline format is the whole version in one file, so an authorised
+         * download is the same question as an authorised page and must not be a
+         * different answer. Read the Docs' equivalent endpoints are a known
+         * place for a private project's PDF to be world-readable, which is why
+         * §8.12.21 names "offline formats" in the list of surfaces that MUST be
+         * "generated from the **authorised** view".
+         *
+         * The path is the version root: a download is not path-scoped, so a
+         * bearer token scoped to `/api/` does not cover the version's PDF —
+         * which is the right answer, because the PDF contains `/api/` **and
+         * everything else**.
+         */
+        $decision = $this->gate->authorise(
+            mount: $mountMatch->mount,
+            version: $resolved,
+            language: $language,
+            path: '/',
+            surface: AccessSurface::Download,
+        );
+
+        if (! $decision->allowed) {
+            return $this->refuse(
+                RejectionReason::FileNotFound,
+                'access.'.$decision->reason->value,
+                $decision,
+            );
+        }
+
+        /*
          * 🛑 §8.7.19: "only the **primary** component mount MAY emit `pdf`,
          * `epub` and `htmlzip`." Until Phase 13 a version has one mount and it
          * is the primary one, but reading `is_primary` rather than taking the
@@ -144,10 +179,9 @@ final class DownloadController extends Controller
         $directives = CachePolicy::decide(
             projectIsPublic: $project->visibility === 'public',
             versionIsPublic: $resolved->visibility === 'public',
-            // §12's reader policy reaches this endpoint with EffectiveAccess in
-            // Phase 21, exactly as it reaches the document proxy. A parameter
-            // now so the shape is right before anything serves.
-            rulePubliclyCacheable: true,
+            // §12's reader policy, supplied by the decision above — the same
+            // third input the document proxy takes, from the same function.
+            rulePubliclyCacheable: $decision->rulePubliclyCacheable,
             cacheTags: CachePolicy::tagsFor(
                 mountId: Uuid::toText($mountMatch->mount->id),
                 projectId: Uuid::toText($project->id),
@@ -296,20 +330,32 @@ final class DownloadController extends Controller
         return false;
     }
 
-    private function refuse(RejectionReason $reason, string $rule): Response
+    /**
+     * @param  AccessDecision|null  $decision  🛑 when the refusal came from
+     *                                         §12.3, the status is the
+     *                                         decision's: §8.12.23 makes the
+     *                                         outcome a property of the
+     *                                         authorisation state, so a 401 or
+     *                                         a project's `deny_status` must
+     *                                         survive the trip through this
+     *                                         method rather than being
+     *                                         flattened to 404 by it.
+     */
+    private function refuse(RejectionReason $reason, string $rule, ?AccessDecision $decision = null): Response
     {
         /*
-         * 🛑 404 for every refusal, like the document proxy. §8.12.23 makes
-         * 404 the default over 403 for the reason it states, and on this
-         * endpoint the point is sharper: a 403 for "this version is private"
-         * beside a 404 for "no such version" tells an anonymous reader which
-         * versions exist.
+         * 🛑 404 for every refusal this endpoint decides for itself, like the
+         * document proxy. §8.12.23 makes 404 the default over 403 for the
+         * reason it states, and on this endpoint the point is sharper: a 403
+         * for "this version is private" beside a 404 for "no such version"
+         * tells an anonymous reader which versions exist.
          */
-        return response('', 404, [
+        return response('', $decision === null ? 404 : $decision->status, [
             'Cache-Control' => 'no-store',
             'X-Content-Type-Options' => 'nosniff',
             RejectNonCanonicalPath::RESOLVER_HEADER => $rule,
             'X-DocUp-Refusal' => $reason->value,
+            ...($decision === null ? [] : ReaderGate::headers($decision)),
         ]);
     }
 }

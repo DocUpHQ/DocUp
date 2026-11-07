@@ -217,7 +217,11 @@ final class RoutingSnapshotLoader
          *     url_prefix: string|null,
          *     versioning_scheme: string,
          *     routing_epoch: int,
+         *     authz_epoch: int,
+         *     policy_generation: int,
          *     visibility: string,
+         *     deny_status: string,
+         *     organisation_id: string,
          *     chrome_mode: string,
          *     default_version_id: string|null
          * }> $projects
@@ -226,10 +230,26 @@ final class RoutingSnapshotLoader
             ->select([
                 'id',
                 'slug',
+                'organisation_id',
                 'url_prefix',
                 'versioning_scheme',
                 'routing_epoch',
+                /*
+                 * 🛑 §12's three authorisation facts, in the snapshot rather
+                 * than queried per request. §8.9.1 requires the resolver to run
+                 * "with no database queries", and §8.12.14 forbids a public
+                 * fast path that skips the decision — so every request makes a
+                 * decision, and the inputs to it have to be here or the
+                 * decision costs a query.
+                 *
+                 * `authz_epoch` is also the policy cache's key, so carrying it
+                 * is what makes a policy edit take effect on the next request
+                 * without a purge (§8.12.15).
+                 */
+                'authz_epoch',
+                'policy_generation',
                 'visibility',
+                'deny_status',
                 'chrome_mode',
                 'default_version_id',
             ])
@@ -355,6 +375,10 @@ final class RoutingSnapshotLoader
                     routingEpoch: (int) $project->routing_epoch,
                     visibility: (string) $project->visibility,
                     chromeMode: (string) $project->chrome_mode,
+                    organisationId: (string) $project->organisation_id,
+                    authzEpoch: (int) $project->authz_epoch,
+                    policyGeneration: (int) $project->policy_generation,
+                    denyStatus: (int) $project->deny_status,
                     defaultVersionId: $project->default_version_id === null
                         ? null
                         : (string) $project->default_version_id,

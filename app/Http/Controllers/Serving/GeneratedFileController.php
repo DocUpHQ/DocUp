@@ -54,9 +54,25 @@ final class GeneratedFileController
         private readonly DocumentController $documents,
     ) {}
 
-    public function __invoke(Request $request, string $docupGeneratedFile): Response
+    /**
+     * 🛑 The filename is read **by name** from the route, never positionally.
+     *
+     * Phase 19 recorded this trap and Phase 20 walked into it anyway: Laravel
+     * passes a route's **domain** parameters before its path parameters, so a
+     * controller declaring `string $docupGeneratedFile` on a route under
+     * `Route::domain('{docupHostLabel}.'.$apex)` receives the **host label** in
+     * it. Both groups that register these routes are domain-scoped — the
+     * default subdomain and the custom host — so all four generated files
+     * answered `generated.unknown_file` on every host there has ever been.
+     *
+     * Found by Phase 21's first HTTP request for a `sitemap.xml`. Phase 20's
+     * own tests drove `GeneratedArtifacts` and the store directly and asserted
+     * the written bytes, which were correct; nothing asked for one over HTTP.
+     * `tests/Feature/Seo/GeneratedArtifactsTest` now does, on both host shapes.
+     */
+    public function __invoke(Request $request): Response
     {
-        $file = $docupGeneratedFile;
+        $file = (string) $request->route('docupGeneratedFile');
 
         if (! in_array($file, GeneratedStore::FILES, true)) {
             return $this->absent('generated.unknown_file');
