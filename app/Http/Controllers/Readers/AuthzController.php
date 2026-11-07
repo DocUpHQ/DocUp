@@ -86,18 +86,35 @@ final readonly class AuthzController
     public function __invoke(Request $request): Response
     {
         /*
-         * 🛑 The path comes from nginx's `X-Original-URI`-equivalent — the
-         * `uri` query parameter in the shipped configuration — because an
-         * `auth_request` subrequest's own URI is `/_/authz`, not the document's.
+         * 🛑 The path comes from nginx, which puts the document's URI in the
+         * subrequest's query string — an `auth_request` subrequest's own URI is
+         * `/_/authz`, not the document's.
          *
-         * 🛑 And it is a **path**, re-normalised through the same resolver the
+         * 🛑 **Read from the RAW query string, not through `$request->query()`,
+         * and that is an authorisation bypass closed rather than a style
+         * choice.**
+         *
+         * nginx sets `QUERY_STRING "uri=$request_uri"`, and `$request_uri`
+         * includes the client's own query string. So a request for
+         * `/private/page.html?x=1&uri=/public/` produces
+         * `uri=/private/page.html?x=1&uri=/public/` — and PHP's query parser
+         * takes the **last** `uri`, which is the client's. The subrequest would
+         * then authorise `/public/` while nginx served `/private/page.html`.
+         *
+         * Everything after the **first** `uri=` is the document's URI verbatim,
+         * including any `&` the client put in it, so taking the remainder of
+         * the raw string is both unambiguous and correct for an ordinary page
+         * with two query parameters. There is no parse for a client to exploit.
+         *
+         * 🛑 And it is then a **path**, resolved through the same resolver the
          * document controller uses. §8.9.4 forbids resolving a project from
          * anything but the host and path, and the host here is the real one:
          * nginx passes the client's `Host` through to the subrequest, which is
          * what makes this endpoint answer for the right domain at all.
          */
-        $uri = (string) $request->query('uri', '/');
-        $path = (string) (parse_url($uri, PHP_URL_PATH) ?: '/');
+        $query = (string) ($request->server('QUERY_STRING') ?? '');
+        $uri = str_starts_with($query, 'uri=') ? substr($query, 4) : '';
+        $path = (string) (parse_url(urldecode($uri), PHP_URL_PATH) ?: '/');
 
         $snapshot = $this->snapshots->load((string) $request->getHost());
 

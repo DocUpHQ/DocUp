@@ -214,6 +214,64 @@ final class ReaderEndpointTest extends TestCase
         );
     }
 
+    /**
+     * 🛑 A second `uri` parameter cannot redirect the subrequest's opinion.
+     *
+     * nginx sets `QUERY_STRING "uri=$request_uri"`, and `$request_uri` carries
+     * the client's own query string — so a request for
+     * `/private/page.html?x=1&uri=/public/` arrives with **two** `uri`
+     * parameters, and PHP's query parser takes the last. Reading it that way
+     * would authorise the public path while nginx served the private one.
+     *
+     * 🛑 **The two statuses are the opposite way round from the obvious test**,
+     * deliberately. Pointing the forged `uri` at a path that is *also* refused
+     * would pass whichever value the controller read, which is a test with no
+     * teeth. So the **first** `uri` — the one nginx supplies and the one the
+     * file server will act on — names a path that does not resolve, and the
+     * **second** names the real, servable one:
+     *
+     *   correct: authorises the unresolvable path       → 401
+     *   bypassed: authorises `/en/latest/`              → 204
+     *
+     * Verified by reverting the fix: the controller read `$request->query()`,
+     * took the last `uri`, and this returned 204.
+     */
+    public function test_a_second_uri_parameter_cannot_redirect_the_tier_b_decision(): void
+    {
+        /* What nginx sends for `/no/such/path/?x=1&uri=/en/latest/`. */
+        $forged = 'uri=/no/such/path/?x=1&uri=/en/latest/';
+
+        $response = TestResponse::fromBaseResponse($this->app->handle(
+            Request::create(
+                "https://{$this->host}/_/authz?".$forged,
+                'GET',
+                server: ['QUERY_STRING' => $forged],
+            ),
+        ));
+
+        $this->assertSame(
+            401,
+            $response->getStatusCode(),
+            '🛑 the decision must be about the path nginx will serve, not the one the client named last',
+        );
+    }
+
+    /** And an ordinary page with two query parameters still authorises. */
+    public function test_an_ordinary_query_string_still_authorises(): void
+    {
+        $query = 'uri=/en/latest/?highlight=foo&page=2';
+
+        $response = TestResponse::fromBaseResponse($this->app->handle(
+            Request::create(
+                "https://{$this->host}/_/authz?".$query,
+                'GET',
+                server: ['QUERY_STRING' => $query],
+            ),
+        ));
+
+        $this->assertSame(204, $response->getStatusCode());
+    }
+
     // ---------------------------------------------------------- §20.2's JWKS
 
     /**
