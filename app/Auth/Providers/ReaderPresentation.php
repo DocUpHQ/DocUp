@@ -52,6 +52,19 @@ final readonly class ReaderPresentation
         public ?string $password = null,
         public ?string $remoteAddress = null,
         public ?string $sessionSubject = null,
+        /*
+         * 🛑 Which binding vouched for the session's reader, raw 16 bytes,
+         * or null for a dashboard member's session (and for no session).
+         *
+         * Added in Phase 24 because `oidc` and `portal_session` are both
+         * `{binding}` leaves established by a session, and §12.3 lets a rule
+         * name one binding specifically — so "a reader with a session" is not a
+         * fine enough fact. Without this, a project with a portal and an IdP
+         * could not write one rule per audience: every session would satisfy
+         * both rules, and `PortalSessionDriver`'s own promise that "a dashboard
+         * member does not satisfy the IdP's rule" would be false.
+         */
+        public ?string $sessionBinding = null,
     ) {}
 
     /** Nothing was presented, which is the ordinary case on a public page. */

@@ -310,7 +310,7 @@ final class IdTokenVerifierTest extends TestCase
         $verifier = new IdTokenVerifier($store);
 
         try {
-            $verifier->verify(
+            $verifier->claimsFor(
                 $this->token(),
                 $this->bindingId,
                 $this->metadata(),
@@ -336,7 +336,7 @@ final class IdTokenVerifierTest extends TestCase
     {
         $store = $this->storeServing($this->provider->jwks(withAlg: false));
 
-        $claims = (new IdTokenVerifier($store))->verify(
+        $claims = (new IdTokenVerifier($store))->claimsFor(
             $this->token(),
             $this->bindingId,
             $this->metadata(),
@@ -366,7 +366,7 @@ final class IdTokenVerifierTest extends TestCase
 
         for ($attempt = 0; $attempt < 5; $attempt++) {
             try {
-                $verifier->verify(
+                $verifier->claimsFor(
                     $this->token(headers: ['kid' => 'unknown-'.$attempt]),
                     $this->bindingId,
                     $this->metadata(),
@@ -413,7 +413,7 @@ final class IdTokenVerifierTest extends TestCase
     /** @return array<string, mixed> */
     private function verify(string $token): array
     {
-        return (new IdTokenVerifier($this->storeServing($this->provider->jwks())))->verify(
+        return (new IdTokenVerifier($this->storeServing($this->provider->jwks())))->claimsFor(
             $token,
             $this->bindingId,
             $this->metadata(),

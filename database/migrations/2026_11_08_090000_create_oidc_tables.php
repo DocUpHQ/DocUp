@@ -242,6 +242,32 @@ return new class extends Migration
         );
 
         /*
+         * 🛑 §8.13.7's reconciled groups, on the reader rather than in
+         * `role_assignments`.
+         *
+         * §8.12.1 is unambiguous: "a reader identity MUST NEVER hold a role
+         * assignment — the permission resolver MUST raise rather than return
+         * an empty set for a reader subject". So a mapped **reader group** has
+         * nowhere else to live; it is a fact about the reader that §12.3's
+         * rules give meaning to per project, not a dashboard privilege.
+         *
+         * A JSON column rather than a child table, and the trade is explicit:
+         * a child table would make "which readers are in group X" a SQL
+         * question, which no requirement asks. What every login does ask is
+         * "what are this reader's groups" — one row, read once — and
+         * reconciliation rewrites the whole set rather than diffing rows, so
+         * the atomicity a child table would need is free here.
+         *
+         * Defaults to an empty array rather than NULL so a reader provisioned
+         * under `create_reader` and one whose groups reconciled to nothing are
+         * the same shape. A caller reading `reader_groups` should never have to
+         * distinguish "no groups" from "groups never considered".
+         */
+        Schema::table('reader_identities', function (Blueprint $table): void {
+            $table->json('reader_groups')->nullable()->after('display_label');
+        });
+
+        /*
          * P22's handoff learns that a reader need not be a `User`.
          *
          * 🛑 The FK is dropped and rebuilt rather than altered in place:
@@ -321,6 +347,10 @@ return new class extends Migration
          * `(table, column)`, so this adds the new row and leaves P22's
          * fifteen alone.
          */
+        DataClassification::annotate('reader_identities', [
+            ['reader_groups', 'pseudonymous', 'platform', null, "🛑 §8.13.7: reconciled on every login, added AND removed"],
+        ]);
+
         DataClassification::annotate('reader_handoff_codes', [
             ['reader_identity_id', 'pseudonymous', 'platform', null, '🛑 §8.12.1: the other principal population'],
         ]);
@@ -337,6 +367,11 @@ return new class extends Migration
          * `classify --check` would then fail on columns nobody touched.
          */
         DataClassification::forget('reader_handoff_codes', ['reader_identity_id']);
+        DataClassification::forget('reader_identities', ['reader_groups']);
+
+        Schema::table('reader_identities', function (Blueprint $table): void {
+            $table->dropColumn('reader_groups');
+        });
 
         DB::statement('ALTER TABLE `reader_handoff_codes` DROP CHECK `reader_handoff_codes_one_subject`');
 

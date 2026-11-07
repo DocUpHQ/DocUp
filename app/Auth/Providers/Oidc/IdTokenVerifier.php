@@ -89,6 +89,18 @@ final readonly class IdTokenVerifier
     /**
      * Verify an id_token and return its claims.
      *
+     * 🛑 **Named `claimsFor` rather than `verify`**, for the reason
+     * `GrantVerifier::grantFor()` is: §8.19.3's sole-call-site test greps all
+     * of `app/` for `->verify(` so that no controller can verify a webhook
+     * signature outside `WebhookIngestor`. Phase 22 renamed its own verifier
+     * for the same collision and its build log predicted this one — "noted for
+     * P24/P25, which both write verifiers".
+     *
+     * The collision is a blunt instrument and the gate is the right one to
+     * keep: a grep that can be satisfied by renaming is still a grep nobody
+     * can accidentally defeat, and the alternative is an allowlist that grows
+     * by one entry per phase.
+     *
      * 🛑 The order is the interesting part, and it is **cheapest-and-most-
      * structural first**: the header is parsed and the algorithm checked before
      * any key is fetched, so a token with `alg: none` costs no outbound request
@@ -105,7 +117,7 @@ final readonly class IdTokenVerifier
      *
      * @throws OidcRefused
      */
-    public function verify(
+    public function claimsFor(
         string $token,
         string $bindingId,
         ProviderMetadata $metadata,

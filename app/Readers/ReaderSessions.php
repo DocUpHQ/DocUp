@@ -225,6 +225,39 @@ final readonly class ReaderSessions
      * were asked ({@see RoleResolver::rolesFor()} is typed on `User`), which is
      * the backstop; not asking is the design.
      */
+    /**
+     * 🛑 Which binding vouched for this session's reader, or null.
+     *
+     * Null for a dashboard member's session, because no binding vouched for
+     * them — §8.12.5 is explicit that a portal-session reader "already holds
+     * whatever roles they hold; the binding grants nothing".
+     *
+     * Added in Phase 24 so `{binding}` can mean a *particular* binding. §12.3
+     * lets a rule name one, and before this every session satisfied every
+     * session-backed rule: a project with a portal and an OIDC provider could
+     * not tell its own members from the provider's readers, which is the whole
+     * reason §8.12.17 names the two drivers separately.
+     *
+     * 🛑 One indexed read, on the session's own reader identity, and only
+     * when there is one. A member's session costs nothing extra.
+     *
+     * @return string|null raw 16 bytes
+     */
+    public function bindingFor(SessionRecord $session): ?string
+    {
+        if ($session->readerIdentityId === null) {
+            return null;
+        }
+
+        $bindingId = $this->context->acrossAllOrganisations(
+            static fn (): mixed => DB::table('reader_identities')
+                ->where('id', $session->readerIdentityId)
+                ->value('binding_id'),
+        );
+
+        return is_string($bindingId) ? $bindingId : null;
+    }
+
     public function contextFor(SessionRecord $session, ?Project $project = null): ReaderContext
     {
         if ($session->userId === null) {

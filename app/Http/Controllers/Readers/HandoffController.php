@@ -114,7 +114,7 @@ final readonly class HandoffController
 
         try {
             $minted = $this->handoff->mint(
-                user: $user,
+                subject: $user,
                 domain: $domain,
                 project: $project,
                 challenge: $challenge,

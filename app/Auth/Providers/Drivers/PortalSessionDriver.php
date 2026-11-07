@@ -117,6 +117,24 @@ final class PortalSessionDriver implements AuthComponent
         }
 
         /*
+         * 🛑 **A dashboard member's session, and only that** — Phase 24's
+         * narrowing, and this class's own docblock already promised it: "a
+         * dashboard member does not satisfy the IdP's rule". The converse has
+         * to hold or the promise is one-sided, because a project writing
+         * `{"driver": "portal_session"}` means "our own people", not "anybody
+         * with a session".
+         *
+         * `sessionBinding` is null exactly when no binding vouched for the
+         * reader, which is what a `users` session is. Before P24 there was no
+         * other kind of session, so accepting any was correct then and is
+         * wrong now — the sort of change that is invisible until the second
+         * driver arrives.
+         */
+        if ($presented->sessionBinding !== null) {
+            return AttemptResult::unsatisfied();
+        }
+
+        /*
          * 🛑 No scope. §12.3's last conjunct applies a scope only for `{share}`
          * and `{bearer}`, and a portal session is neither: a reader who signed
          * in is admitted by whatever the rule says, not narrowed to a path a
