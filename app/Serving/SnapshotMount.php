@@ -24,6 +24,15 @@ final class SnapshotMount
      * @param  string  $mode  canonical, serve or redirect (§8.10.2)
      * @param  string  $mountExposure  the §12.3 lattice plus `inherit`
      * @param  list<string>|null  $versionScope  allowed version slugs, or null for all
+     * @param  int  $generatedRevision  §8.11.6's generated-artefact revision —
+     *                                  which revision of `robots.txt`,
+     *                                  `sitemap.xml`, `llms.txt` and
+     *                                  `llms-full.txt` this mount currently
+     *                                  serves. In the snapshot rather than
+     *                                  read per request because the four files
+     *                                  are what a crawler asks for first and
+     *                                  most, and the snapshot is already
+     *                                  loaded.
      */
     public function __construct(
         public readonly string $id,
@@ -34,6 +43,7 @@ final class SnapshotMount
         public readonly SnapshotProject $project,
         public readonly ?string $versioningSchemeOverride = null,
         public readonly ?array $versionScope = null,
+        public readonly int $generatedRevision = 0,
     ) {}
 
     /**

@@ -7,4 +7,5 @@ nav:
   - Operating DocUp: index.html
   - Installing: installing.html
   - Composition modes: composition.html
+  - Redirects and crawlers: redirects.html
   - Running it: operations.html

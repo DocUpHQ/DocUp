@@ -191,6 +191,10 @@ final class RoutingSnapshotLoader
                 'is_indexable',
                 'versioning_scheme_override',
                 'version_scope',
+                // §8.11.6's generated-artefact revision, carried in the
+                // snapshot because `robots.txt` is what a crawler asks for
+                // first and most.
+                'generated_revision',
             ])
             ->where('domain_id', $domainId)
             ->orderBy('position')
@@ -361,6 +365,7 @@ final class RoutingSnapshotLoader
                     ? null
                     : (string) $row->versioning_scheme_override,
                 versionScope: self::decodeScope($row->version_scope),
+                generatedRevision: (int) $row->generated_revision,
             );
         }
 

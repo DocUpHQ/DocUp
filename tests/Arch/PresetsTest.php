@@ -185,6 +185,19 @@ arch()->preset()->laravel()
         // ideas, which a shared App\Enums would file as one.
         // phpstan-strict.neon also raises app/Tls to level 9.
         'App\Tls',
+        // Phase 20, and the argument is unchanged for a thirteenth
+        // namespace. `RedirectRejection`'s values are §8.1.11 public
+        // contract — `redirect.target_not_proven` and
+        // `redirect.cycle_detected` reach an operator's form, the API's
+        // error bodies and the operator guide's own table of refusals — and
+        // `RedirectRefused` carries one, so a shared App\Exceptions would
+        // import the redirects namespace into a namespace everything else
+        // depends on. `RedirectKind` is §8.11.2's vocabulary and means
+        // nothing outside it: `RedirectKind::VersionAgnostic` exists
+        // precisely to keep "a page moved" and "a page moved in every
+        // version" as two ideas, which a shared App\Enums would file as
+        // one. phpstan-strict.neon also raises app/Redirects to level 9.
+        'App\Redirects',
     ]);
 
 arch()->preset()->strict()

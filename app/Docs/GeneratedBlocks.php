@@ -9,6 +9,7 @@ namespace App\Docs;
 
 use App\Composition\ModeBehaviour;
 use App\Composition\SinglePass\Composer;
+use App\Redirects\UrlCases;
 
 /**
  * The blocks of DocUp's own documentation that are generated, not written.
@@ -48,6 +49,17 @@ final class GeneratedBlocks
             ],
             'docs/reference/docs/index.md' => [
                 'docup-yaml' => self::schemaReference(...),
+            ],
+            /*
+             * 🛑 §17's Phase 20 exit criterion asks for "a documented table
+             * of twelve URL cases", and this is what makes it documented
+             * rather than asserted: the same `UrlCases` the test drives is
+             * what renders here. Phase 17 found the cost of the
+             * alternative — §8.7.13's matrix was prose that had drifted —
+             * and the fix was to generate it.
+             */
+            'docs/operator/docs/redirects.md' => [
+                'url-cases' => UrlCases::toMarkdown(...),
             ],
         ];
     }

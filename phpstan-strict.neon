@@ -70,6 +70,19 @@ parameters:
         # grant spends the installation's issuance budget, and one in the
         # store's AAD serves a hostname a key that is not its own.
         - app/Tls
+        # Phase 20. §8.11.2 says a redirect target must not become "an open
+        # redirect or a traffic-exfiltration primitive", and `RedirectTarget`
+        # is the only thing standing between an operator's typo and one —
+        # §9.4's criterion stated by the requirement. §8.11.4's regex
+        # containment is in the same namespace and has the same character: a
+        # type error in the backtracking guard is a serving-path denial of
+        # service, not a crash.
+        - app/Redirects
+        # And §8.11.6's generated files, which tell a crawler which of N
+        # domains is canonical and which versions exist. A type error that
+        # put a hidden version in a sitemap would publish something §8.6
+        # deliberately unadvertised.
+        - app/Seo
         - app/Support
         - app/Concerns
         - app/Models

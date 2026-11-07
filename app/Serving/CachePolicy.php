@@ -82,6 +82,91 @@ final class CachePolicy
     }
 
     /**
+     * How long the edge may keep a 404 (§8.11.8).
+     *
+     * 🛑 Short, and much shorter than content. A 404 is a claim about
+     * **absence**, and absence is the one answer a publish makes wrong:
+     * the page that did not exist a minute ago is the page somebody just
+     * added. Sixty seconds at the edge absorbs a flood of one URL and
+     * bounds how long a newly published page can be denied.
+     */
+    private const NOT_FOUND_CDN_MAX_AGE = 60;
+
+    /** And the browser keeps it for less, because a browser cache cannot be purged. */
+    private const NOT_FOUND_BROWSER_MAX_AGE = 15;
+
+    /**
+     * 🛑 §8.11.8's edge-cacheable 404 — for an absence that is genuinely an
+     * absence.
+     *
+     * > "404 responses MUST be edge-cacheable with a short TTL, and a
+     * > progressive per-source penalty-box limiter MUST apply to 404 bursts
+     * > and search. Read the Docs' June 2026 DDoS targeted exactly these
+     * > paths."
+     *
+     * **The distinction this method exists to enforce** is between a 404
+     * that means "there is nothing here" and a 404 that means "there is
+     * something here and you may not see it". §12 answers the second with
+     * a 404 on purpose, and caching *that* publicly would serve one
+     * reader's refusal to a member who should have been let in — and would
+     * confirm, to anyone watching the cache, which paths are the
+     * interesting ones.
+     *
+     * So the same three-way check as {@see self::decide()} governs, plus
+     * one addition: a rejection that fired **before any project was
+     * identified** is unconditionally cacheable, because there was no
+     * tenant for it to be about. An unknown hostname is not somebody's
+     * private page.
+     *
+     * @param  bool|null  $projectIsPublic  null when no project was reached
+     * @param  bool|null  $versionIsPublic  null when no version was reached
+     */
+    public static function forAbsence(
+        ?bool $projectIsPublic = null,
+        ?bool $versionIsPublic = null,
+        bool $rulePubliclyCacheable = true,
+    ): CacheDirectives {
+        /*
+         * Nothing was identified: no host, no mount, no project. There is
+         * no tenant this answer is about, so there is nothing to leak and
+         * the edge may absorb the flood.
+         */
+        if ($projectIsPublic === null && $versionIsPublic === null) {
+            return self::absence();
+        }
+
+        /*
+         * 🛑 Anything partially identified is held to the full check, and
+         * `null` counts as **not public**. A project reached without a
+         * version is a 404 about a project, and if that project is private
+         * the 404 is an access decision wearing an absence's clothes.
+         */
+        if ($projectIsPublic !== true || $versionIsPublic !== true || ! $rulePubliclyCacheable) {
+            return CacheDirectives::private();
+        }
+
+        return self::absence();
+    }
+
+    /**
+     * 🛑 No cache tags, deliberately.
+     *
+     * §9.3.3 scopes a tag to mount, project, version, build and theme so a
+     * publish can purge exactly what it changed. A 404 belongs to none of
+     * those — it is about a path that has no build and no version — so a
+     * tag would either be wrong or would purge content that is fine. The
+     * short TTL is the invalidation instead, which is why it is short.
+     */
+    private static function absence(): CacheDirectives
+    {
+        return CacheDirectives::publiclyCacheable(
+            maxAge: self::NOT_FOUND_BROWSER_MAX_AGE,
+            cdnMaxAge: self::NOT_FOUND_CDN_MAX_AGE,
+            cacheTags: [],
+        );
+    }
+
+    /**
      * A published, versioned public contract (§8.1.11).
      *
      * 🛑 Here rather than in the controller, and that is the point of the
