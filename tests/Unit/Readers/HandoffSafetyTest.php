@@ -294,8 +294,17 @@ final class HandoffSafetyTest extends TestCase
              */
             $this->assertStringNotContainsString('domain=', $header, '🛑 __Host- forbids a Domain attribute');
 
-            /* And `path=/` exactly, not a path that merely begins with it. */
-            $this->assertDoesNotMatchRegularExpression('/; path=\/\S/', $header);
+            /*
+             * And `path=/` **exactly**, not a path that merely begins with it:
+             * `__Host-` requires `/` and a browser silently discards a cookie
+             * with any other path.
+             *
+             * Written as a positive match on "slash then a delimiter or the
+             * end", because the obvious negative — `/; path=\/\S/` — matches
+             * the very next character of `; path=/; secure` and fails on a
+             * correct cookie. It did.
+             */
+            $this->assertMatchesRegularExpression('/; path=\/(;|$)/', $header);
         }
     }
 

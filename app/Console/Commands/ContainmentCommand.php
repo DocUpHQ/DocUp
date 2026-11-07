@@ -7,7 +7,6 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
-use App\Http\Controllers\Health\SelfTestController;
 use App\Readers\Containment;
 use Illuminate\Console\Command;
 
@@ -32,7 +31,13 @@ use Illuminate\Console\Command;
  *               the script's exit status is the application's verdict rather
  *               than the script's own opinion.
  *
- * {@see SelfTestController} reports the verdict at
+ * 🛑 Written as a plain name rather than `{@see}`, because Pint's
+ * `fully_qualified_strict_types` fixer turns a `{@see}` reference into a real
+ * `use` statement — and the Pest `laravel` preset then refuses a console
+ * command depending on an HTTP controller, correctly. The reference is worth
+ * keeping; the import is not.
+ *
+ * `App\Http\Controllers\Health\SelfTestController` reports the verdict at
  * §8.1.10's `/_/health/self-test`, and `docup:doctor` refuses to pass without
  * one.
  */
