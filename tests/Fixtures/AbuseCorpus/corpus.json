@@ -983,6 +983,70 @@
       "input": "an anonymous request for a private resource on a project configured deny_status=403",
       "expect": "404",
       "note": "🛑 403 is for authenticated principals only. A 403 to an anonymous request confirms the resource exists, which is what §8.2.7's absence-indistinguishable-from-non-existence refuses, and the project's own preference does not override it because the project does not bear the consequence."
+    },
+    {
+      "id": "reader-001",
+      "category": "reader",
+      "defends": "8.12.10",
+      "input": "a handoff code redeemed a second time, with the same verifier",
+      "expect": "already_used",
+      "note": "🛑 The code travels in a URL, so it reaches browser history, the Referer of anything the landing page loads, and every proxy log on the way. Single-use is what makes that leak worthless, and single-use has to be one atomic conditional write — a SELECT then an UPDATE has a race whose outcome is whether one code mints two sessions."
+    },
+    {
+      "id": "reader-002",
+      "category": "reader",
+      "defends": "8.12.10",
+      "input": "a handoff code redeemed with a correctly-shaped verifier from another browser",
+      "expect": "verifier_mismatch",
+      "note": "🛑 RFC 7636's whole purpose, applied to DocUp's own handoff: the verifier exists only in a __Host-, HttpOnly cookie on the origin that started the exchange, so a leaked code is redeemable only by the browser that asked for it. 🛑 And the code is NOT consumed by a wrong verifier, or a probe would become a denial of service against the reader it was stolen from."
+    },
+    {
+      "id": "reader-003",
+      "category": "reader",
+      "defends": "8.12.10",
+      "input": "a handoff with return=//evil.example/ (scheme-relative, so it does begin with a slash)",
+      "expect": "/",
+      "note": "🛑 §8.12.10: the return URL is built from the verified domain row, never from a request parameter. This is the vector that gets missed — a browser reads //host/ as another origin and it passes a naive leading-slash check. The dashboard's handoff endpoint is the one place in the product that sends a reader across registrable domains, so an open redirect here carries the dashboard's authority."
+    },
+    {
+      "id": "reader-004",
+      "category": "reader",
+      "defends": "8.12.11",
+      "input": "a grant minted for domain A, presented on domain B of the same project",
+      "expect": "404",
+      "note": "🛑 The audience is the DOMAIN, not the project. Binding to the project reads just as naturally and would let one grant work on every domain a project serves — which is precisely the cross-origin reuse §8.12.10's per-origin handoff exists to prevent."
+    },
+    {
+      "id": "reader-005",
+      "category": "reader",
+      "defends": "12.4",
+      "input": "a session handle set by a sibling subdomain and presented on another origin",
+      "expect": "404",
+      "note": "🛑 §8.1.4's threat made concrete: documentation is attacker-controlled JavaScript, and on a shared parent domain it can toss a cookie at a sibling. __Host- is what stops the browser, and the server's own half is that `docs_sessions` is keyed on (project, domain) — so a tossed handle names a session that does not match even if the browser misbehaves."
+    },
+    {
+      "id": "reader-006",
+      "category": "reader",
+      "defends": "8.12.15",
+      "input": "a signed, unexpired grant whose ep claim is below the project's current combined epoch",
+      "expect": "404",
+      "note": "🛑 The signature is as valid as it was a moment ago; what changed is one integer in one row. This is how a policy edit or a session revoke takes effect on the next request with no purge — and the claim is the SUM of authz_epoch and identity_epoch, so either one moving is enough."
+    },
+    {
+      "id": "reader-007",
+      "category": "reader",
+      "defends": "8.12.11",
+      "input": "a grant presented with alg: none and an empty signature",
+      "expect": "404",
+      "note": "🛑 Refused structurally rather than by a check: the algorithm is a literal at both ends, so the token's own header never selects a verifier. §8.12.18 requires an algorithm allowlist excluding none; DocUp's own grant is the one token where that allowlist can be a singleton."
+    },
+    {
+      "id": "reader-008",
+      "category": "reader",
+      "defends": "8.12.21",
+      "input": "a grant minted for the search surface, presented on the proxy surface",
+      "expect": "404",
+      "note": "🛑 §8.12.21 disables a project's search entirely while its search generation lags its policy generation. A grant minted while reading a page must not route around that, so the surface is a claim and a mismatch is a refusal."
     }
   ]
 }

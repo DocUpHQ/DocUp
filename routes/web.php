@@ -12,6 +12,7 @@ use App\Http\Controllers\Health\ReadyController;
 use App\Http\Controllers\Health\SelfTestController;
 use App\Http\Controllers\ProjectController;
 use App\Http\Controllers\ProjectVisibilityController;
+use App\Http\Controllers\Readers\HandoffController;
 use App\Http\Controllers\SchemaController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -74,6 +75,25 @@ Route::get('/', fn () => redirect()->route('login'));
 | Fortify owns the routes and the POST handlers; the Inertia views are supplied
 | in FortifyServiceProvider.
 */
+
+/*
+| 🛑 §8.12.10's dashboard half: mint a handoff code for a documentation origin.
+|
+| **`auth` but not `tenant`**, deliberately. A reader arrives here from a
+| documentation host carrying no organisation of their own — that is the whole
+| premise of the handoff — and the organisation is whichever owns the domain
+| they came from. App\Http\Controllers\Readers\HandoffController reads across
+| organisations to find it and App\Readers\ReaderHandoff re-checks that the
+| domain and the project share one, which is the boundary that read crosses to
+| establish rather than to ignore.
+|
+| 🛑 Not under `o/{organisation}`: putting it there would make the documentation
+| origin construct a URL naming a tenant, which is a fact it does not have and
+| must not guess.
+*/
+Route::middleware(['auth'])
+    ->get('reader/handoff', HandoffController::class)
+    ->name('reader.handoff');
 
 Route::middleware(['auth', 'tenant'])
     ->prefix('o/{organisation}')

@@ -242,7 +242,19 @@ final class EffectiveAccess
             required: $required,
             established: $established,
             rule: $rule,
-            satisfiedBy: $satisfiedBy ?? ($request->policy->exists ? null : AccessLeaf::Public),
+            /*
+             * 🛑 No rule matched, so no requirement decided this — the lattice
+             * did, on the reader's established level. What admitted them is
+             * therefore the strongest leaf they actually hold, which is
+             * `public` for an anonymous reader and `binding` for a member.
+             *
+             * 🛑 This used to read `AccessLeaf::Public` unconditionally, and it
+             * was correct for as long as every reader was anonymous — Phase 21
+             * could construct no other kind. {@see ReaderContext::strongestLeaf()}
+             * records what it started reporting the moment Phase 22 gave a
+             * member a session.
+             */
+            satisfiedBy: $satisfiedBy ?? ($request->policy->exists ? null : $request->reader->strongestLeaf()),
             /*
              * 🛑 §9.3.2's third input, and **two** conditions rather than one.
              *

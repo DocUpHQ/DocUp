@@ -191,12 +191,12 @@ final class Requirement
         });
 
         /*
-         * Ordered strongest first. `binding` outranks the two scoped kinds
-         * because it is an identity rather than a capability; `public` is last
-         * because every request satisfies it and it is only the answer when
-         * nothing else was needed.
+         * 🛑 The ordering lives in {@see AccessLeaf::strongestFirst()} and the
+         * reason it does is beside it. Phase 22 needed the same ordering for a
+         * reader the lattice admitted with no rule, and a second copy of a
+         * security ordering is how one of them goes stale.
          */
-        foreach ([AccessLeaf::Binding, AccessLeaf::Share, AccessLeaf::Bearer, AccessLeaf::Gate, AccessLeaf::Public] as $leaf) {
+        foreach (AccessLeaf::strongestFirst() as $leaf) {
             if (in_array($leaf, $satisfied, true)) {
                 return $leaf;
             }

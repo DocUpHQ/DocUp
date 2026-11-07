@@ -5,6 +5,10 @@
 
 declare(strict_types=1);
 
+use App\Http\Controllers\Readers\AuthCallbackController;
+use App\Http\Controllers\Readers\AuthStartController;
+use App\Http\Controllers\Readers\AuthzController;
+use App\Http\Controllers\Readers\LogoutController;
 use App\Http\Controllers\Serving\CompositionController;
 use App\Http\Controllers\Serving\CrossReferenceController;
 use App\Http\Controllers\Serving\DocumentController;
@@ -52,6 +56,55 @@ $apexes = array_values(array_filter([
     config('docup.origins.preview'),
 ], static fn (mixed $apex): bool => is_string($apex) && $apex !== ''));
 
+/*
+|------------------------------------------------------------------------------
+| §8.12.10's per-origin reader session (Phase 22)
+|------------------------------------------------------------------------------
+| 🛑 **One closure, registered into all three groups below**, because these
+| four endpoints must answer identically on a default subdomain, a preview host
+| and a custom domain — and §8.12.10's whole mechanism is that a session is
+| established *per origin*. An endpoint present on two of the three would make
+| private documentation unreachable on the third, silently, for exactly the
+| hosts an operator configured by hand.
+|
+| 🛑 They are **before** the catch-all for the reason the provenance route is:
+| §7.3 makes `/_/` reserved and unmountable, so the resolver refuses it and a
+| route declared after `/{docupPath?}` would never be reached.
+|
+| 🛑 **No middleware group, and no session.** The documentation origin admits
+| none (see the note at the top of this file), which is exactly why §8.12.11
+| refuses a framework-encrypted grant: these endpoints read and write raw
+| `__Host-` cookies that the edge must be able to read too.
+*/
+$readerRoutes = static function (string $suffix, bool $labelled): void {
+    $label = '[a-z0-9]([a-z0-9-]*[a-z0-9])?';
+
+    $constrain = static function (mixed $route) use ($labelled, $label): void {
+        if ($labelled && $route instanceof Illuminate\Routing\Route) {
+            /*
+             * Symfony's compiler already defaults a host variable to one label,
+             * so this restates the grammar rather than adding a constraint —
+             * for the reason the downloads route gives about its own patterns:
+             * the pair survives somebody relaxing one of them.
+             */
+            $route->where('docupHostLabel', $label);
+        }
+    };
+
+    $constrain(Route::get('/_/auth/start', AuthStartController::class)->name('docs.auth.start'.$suffix));
+    $constrain(Route::get('/_/auth/callback', AuthCallbackController::class)->name('docs.auth.callback'.$suffix));
+
+    /*
+     * 🛑 POST. A `GET` logout is triggerable by any `<img>` on any site, and
+     * this origin has no CSRF token to fall back on — see
+     * App\Http\Controllers\Readers\LogoutController.
+     */
+    $constrain(Route::post('/_/auth/logout', LogoutController::class)->name('docs.auth.logout'.$suffix));
+
+    /* §8.12.13's Tier B subrequest endpoint, speaking only 204 and 401. */
+    $constrain(Route::get('/_/authz', AuthzController::class)->name('docs.authz'.$suffix));
+};
+
 foreach ($apexes as $index => $apex) {
     /*
      * One label under the apex. SPEC 8.9.3 resolves a "single-label default
@@ -66,7 +119,14 @@ foreach ($apexes as $index => $apex) {
      */
     Route::domain('{docupHostLabel}.'.$apex)
         ->middleware([RejectNonCanonicalPath::class])
-        ->group(function () use ($index): void {
+        ->group(function () use ($index, $readerRoutes): void {
+            /*
+             * §8.12.10's handoff, §8.12.13's Tier B endpoint and the logout.
+             * 🛑 The host-label pattern is applied by the group, so these
+             * inherit the single-label constraint the documents do.
+             */
+            $readerRoutes('.'.$index, labelled: true);
+
             /*
              * SPEC 8.5.24's build provenance, at SPEC 20.2's reserved path.
              *
@@ -281,7 +341,10 @@ $multiLabel = $label.'(?:\.'.$label.')+';
 Route::domain('{docupCustomHost}')
     ->where(['docupCustomHost' => $exclusions.$multiLabel])
     ->middleware([RejectNonCanonicalPath::class])
-    ->group(function (): void {
+    ->group(function () use ($readerRoutes): void {
+        /* §8.12.10's handoff on a custom domain — the case it exists for. */
+        $readerRoutes('.custom', labelled: false);
+
         Route::get('/_/provenance/{build}', [ProvenanceController::class, 'show'])
             ->where('build', '[0-9a-fA-F-]{36}')
             ->name('docs.custom.provenance');

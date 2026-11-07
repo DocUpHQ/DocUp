@@ -168,3 +168,37 @@ Schedule::command('docup:tls:probe')
     ->timezone('UTC')
     ->withoutOverlapping()
     ->onOneServer();
+
+/*
+|------------------------------------------------------------------------------
+| §12.4's reader sessions and §8.12.11's key states
+|------------------------------------------------------------------------------
+| Three jobs that no request can do, and the third is the one that matters.
+|
+| Expired sessions and spent handoff codes authorise nothing — §12.4's absolute
+| ceiling is checked on every use and a handoff code dies in thirty seconds — so
+| sweeping them is housekeeping: `docs_sessions` holds one row per reader per
+| project per domain, and §8.12.15's session inventory is a security surface an
+| operator has to be able to read.
+|
+| 🛑 The third is not housekeeping. `App\Readers\Grants\KeyState` has four
+| states and three of its transitions are **time-based**, so on an installation
+| where nobody runs a command a key sits in `retiring` for ever and §17's fourth
+| state — the one that means "no longer trusted" — is unreachable. A state
+| machine that cannot reach its final state has three states and a comment.
+|
+| 🛑 Retirement only. `docup:readers:maintain` deliberately does not promote a
+| pending key: §8.12.11's keypair mints read access to every private project and
+| is verified against a JWKS the edge caches, so every promotion is a moment
+| when a stale cache becomes an outage. That stays `docup:readers:rotate`, which
+| an operator runs when they mean it.
+|
+| Hourly rather than daily, because the window it is clearing is measured in
+| minutes (§8.12.11's ≤10-minute grant plus one JWKS cache window) and a daily
+| job would hold a stood-down key in the published document for most of a day.
+*/
+Schedule::command('docup:readers:maintain')
+    ->hourly()
+    ->timezone('UTC')
+    ->withoutOverlapping()
+    ->onOneServer();

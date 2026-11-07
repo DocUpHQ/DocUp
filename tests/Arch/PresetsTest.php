@@ -223,6 +223,29 @@ arch()->preset()->laravel()
          * depends on. phpstan-strict.neon also raises app/Access to level 9.
          */
         'App\Access',
+        /*
+         * Phase 22, for the same reason as App\Access and one of its own.
+         *
+         * `KeyState` is an enum and `HandoffRefused` an exception, so the
+         * preset would file them under App\Enums and App\Exceptions. Both
+         * belong where they are:
+         *
+         * 🛑 `KeyState`'s four cases **are** §17's "four-state key rotation",
+         * and the reason each exists is a property of the grant's lifetime —
+         * {@see \App\Readers\Grants\GrantKeys::RETIRING_SECONDS} is derived
+         * from {@see \App\Readers\Grants\GrantMinter::MAX_TTL_SECONDS}, which
+         * is §8.12.11's `exp ≤ 10 minutes`. An App\Enums copy would be four
+         * strings with the argument left behind in another directory, and the
+         * argument is the only thing that stops somebody collapsing `pending`.
+         *
+         * `HandoffRejection`'s cases are the audit vocabulary for §8.12.10 and
+         * `HandoffRefused` carries one, so a shared App\Exceptions would
+         * import the reader namespace into a namespace everything else depends
+         * on — exactly the coupling the App\Access entry above refuses.
+         *
+         * phpstan-strict.neon also raises app/Readers to level 9.
+         */
+        'App\Readers',
     ]);
 
 arch()->preset()->strict()

@@ -169,13 +169,140 @@ decision path as a private one. A cached "this is public" flag read stale in the
 unsafe direction would serve private bytes with no decision at all, which is a
 worse failure than a stale allow for a reader who was already authorised.
 
+## How a reader signs in
+
+Cookies cannot span registrable domains. That is not a limitation to work
+around — it is the thing that makes "any repository may publish here" safe, and
+it is why DocUp separates the dashboard from the documentation apex in the first
+place. The consequence is that **a reader's session on one documentation origin
+is not a session on another**, and never can be.
+
+So each origin establishes its own, by a code exchange against the dashboard:
+
+1. A reader asks for a page they may not read and is sent to
+   `/_/auth/start` on that origin, which stores a one-use secret in a cookie
+   **on that origin** and redirects to the dashboard.
+2. The dashboard — where they are signed in, or where they sign in now — mints a
+   handoff code that lives for **30 seconds**, and sends them back.
+3. The origin exchanges the code for a session, using the secret only it holds.
+
+🛑 **The return address comes from the verified domain row, never from the
+request.** You can pass any `return` you like to the dashboard's handoff
+endpoint; what you get back is a redirect to the host in the `domains` table, or
+a 404. That is what keeps the one endpoint in DocUp that crosses registrable
+domains from being an open redirect with the dashboard's authority behind it.
+
+🛑 **And the last step is a page, not a redirect.** It sets the cookie and then
+navigates, which costs one extra paint per origin per sign-in and buys two
+things: a browser that silently discards the cookie — strict tracking
+protection, blocked site data, private browsing — produces a page that *says
+so* rather than an infinite bounce between two origins, and the retry is
+bounded rather than endless.
+
+### Signing out
+
+There is no global reader sign-out, for the same reason there is no shared
+cookie: `POST /_/auth/logout` ends the session on **that** origin. Signing out
+of one project's documentation leaves another project's signed in. The session
+row is revoked server-side, so the credential in the reader's browser stops
+working on its next request, not when it expires.
+
+## Grants, and why the edge can verify but never mint
+
+Once a reader has a session, every request carries a short-lived **grant**: an
+Ed25519 token holding one authorisation decision, audience-bound to one
+documentation origin, valid for at most ten minutes. Its public keys are at
+`/.well-known/docup-grant-jwks.json`.
+
+The asymmetry is the whole design. A shared secret at the edge would make
+**every proxy a minter**, so compromising one would forge access to every
+private project on the installation. With a signature, the edge can check a
+grant and cannot create one.
+
+A grant carries the project, the version, the surface, the reader's established
+level and the combined policy-and-identity epoch. Every one of those is checked,
+so a grant minted for one domain is refused on another, and a grant minted for
+reading a page is not a grant for searching.
+
+### Key rotation has four states, and all four are necessary
+
+| State | In the JWKS | Signs |
+|---|---|---|
+| `pending` | yes | no |
+| `active` | yes | **yes** — exactly one key, ever |
+| `retiring` | yes | no |
+| `retired` | no | no |
+
+A key is published *before* it signs, so a verifier holding a cached JWKS has it
+before the first grant under it arrives; and it stays published *after* it stops,
+so a rotation does not strand grants that are still inside their ten minutes.
+Collapse either state and rotation becomes an outage that only happens during a
+rotation.
+
+Run `docup:readers:rotate` twice, with a minute between: the first call
+publishes, the second promotes. Retirement is automatic — the scheduler's
+`docup:readers:maintain` does it, because it is the only thing a clock can do.
+
+🛑 Back up the keypair. It is on the list in **Running it**, and losing it
+invalidates every outstanding grant on the installation.
+
+## The three enforcement topologies
+
+Set `DOCUP_ENFORCEMENT_TIER`; `docup:doctor` reports which one you are on.
+
+| Tier | What authorises | When to use it |
+|---|---|---|
+| `a` | every request, in the application | the default, and the shipped compose file |
+| `b` | nginx `auth_request`, cached per reader and directory | scale: one call authorises a page's sixty assets |
+| `c` | the edge, from the grant alone | only with the condition below |
+
+🛑 **Tier C has a mandatory condition and `doctor` fails without it.** The edge
+must poll `/.well-known/docup-epochs` at least every five seconds and refuse any
+grant below the current epoch. Without that feed, a project you flip from public
+to private **keeps serving to anonymous readers** until every outstanding grant
+expires. That is the largest exposure window any design in this area produces,
+and it is why the condition is not advice.
+
+Tiers A and B have no such window: the decision is made against the current
+epoch on every request.
+
 ## When a change takes effect
 
-Editing a policy, a rule or a visibility bumps the project's `authz_epoch`, and
-the decision cache is keyed on it — so the change takes effect on the **next
-request**. Nothing is purged and there is nothing to fail. A policy write also
-bumps `policy_generation`, which is what disables search until the index
-catches up.
+Editing a policy, a rule or a visibility bumps the project's `authz_epoch`;
+revoking a session or deprovisioning a reader bumps its `identity_epoch`. The
+grant carries the **sum** of the two, so either one moving refuses every
+outstanding grant for that project on its **next request**. Nothing is purged
+and there is nothing to fail.
+
+A policy write also bumps `policy_generation`, which is what disables search
+until the index catches up.
+
+🛑 One gap, stated rather than buried: a change to somebody's **dashboard role**
+is bounded by the grant's remaining lifetime — at most ten minutes — rather than
+by one request. `permission_epoch` is the counter that will close it and no phase
+has implemented it yet. If you need somebody out *now*, revoke their reader
+sessions, which is immediate.
+
+## Proving containment
+
+DocUp ships a check that fetches a known-private asset through your real edge
+with no credentials and fails on any 200:
+
+```
+deploy/containment-self-test.sh
+```
+
+Run it at start-up and in your pipeline. `/_/health/self-test` reports the
+verdict as `private_asset_containment`, and `docup:doctor` **fails** when an
+installation that publishes private documentation has never run it — a control
+nobody has exercised is indistinguishable from one that fails.
+
+🛑 It has two halves and the second is the one that matters. A refusal alone
+proves nothing: an installation whose documentation host is misconfigured
+refuses *everything*, and a one-sided check passes on it for ever. So the CI
+version also fetches the same asset **with** a reader session and requires a
+200. That is what makes the refusal evidence of a decision rather than of an
+outage.
 
 ## The decision table
 

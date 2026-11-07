@@ -8,6 +8,8 @@ declare(strict_types=1);
 use App\Http\Controllers\Edge\AcmeChallengeController;
 use App\Http\Controllers\Edge\TlsCertificateController;
 use App\Http\Controllers\Edge\TlsPermissionController;
+use App\Http\Controllers\Readers\EpochFeedController;
+use App\Http\Controllers\Readers\GrantJwksController;
 use App\Http\Middleware\OnlyFromLoopback;
 use Illuminate\Support\Facades\Route;
 
@@ -63,7 +65,38 @@ Route::domain('{docupEdgeHost}')
 
             Route::get('/_/edge/certificate', TlsCertificateController::class)
                 ->name('edge.tls.certificate');
+
+            /*
+             * 🛑 §20.2's `/.well-known/docup-epochs`, **loopback-only**, and
+             * that is a departure from the obvious reading of §20.2 with its
+             * reason recorded in App\Http\Controllers\Readers\EpochFeedController:
+             * the feed is a list of every project identifier on the
+             * installation plus a counter that moves when a private project's
+             * access policy changes. §8.2.7's visibility-filtered index exists
+             * to avoid publishing the first, and §8.6.2 keeps a hidden version
+             * out of a sitemap for less than the second.
+             *
+             * Its only consumer is a Tier C edge, which is the same caller
+             * §8.10.11's endpoints above serve and reaches the application the
+             * same way.
+             */
+            Route::get('/.well-known/docup-epochs', EpochFeedController::class)
+                ->name('edge.epochs');
         });
+
+        /*
+         * 🛑 §20.2's `/.well-known/docup-grant-jwks.json`, and this one **is**
+         * public — §8.12.11 puts the "public keys at a JWKS endpoint", and an
+         * edge that can verify without being able to mint is only possible
+         * because the verification material is public. See the controller for
+         * why that is the design rather than a concession.
+         *
+         * On the wildcard host group for the reason the ACME challenge is: it
+         * has to be matched before routes/docs.php's catch-all, which would
+         * otherwise read it as a version slug and 404.
+         */
+        Route::get('/.well-known/docup-grant-jwks.json', GrantJwksController::class)
+            ->name('edge.grant-jwks');
 
         /*
          * 🛑 This one is NOT loopback-only: the certificate authority fetches

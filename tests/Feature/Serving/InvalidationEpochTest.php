@@ -298,6 +298,10 @@ final class InvalidationEpochTest extends TestCase
      * live. What is asserted instead is the list itself, exactly — so a
      * fifth epoch going live, or a fourth quietly claiming to be, still fails
      * here.
+     *
+     * 🛑 **And it worked.** Phase 22 made `identity_epoch` live and this
+     * assertion is what noticed, which is the whole reason the list is spelled
+     * out rather than counted. The list is now five.
      */
     public function test_the_registry_admits_which_epochs_are_not_yet_live(): void
     {
@@ -307,18 +311,26 @@ final class InvalidationEpochTest extends TestCase
         ));
 
         $this->assertSame(
-            [Epoch::Routing, Epoch::Authz, Epoch::Serving, Epoch::PolicyGeneration],
+            [Epoch::Routing, Epoch::Authz, Epoch::Identity, Epoch::Serving, Epoch::PolicyGeneration],
             $implemented,
-            'P21 makes authz_epoch and policy_generation live; identity, permission and search are still owed',
+            'P22 makes identity_epoch live on a session revoke; permission and search are still owed',
         );
 
         /*
-         * 🛑 And the three that are not, named rather than merely absent. Each
-         * has a column and a declaration: `identity_epoch` waits for P22's
-         * reader identities, `permission_epoch` has been owed since P02's
-         * dashboard cache, and `search_generation` waits for P29's index.
+         * 🛑 And the two that are not, named rather than merely absent. Each has
+         * a column and a declaration: `permission_epoch` has been owed since
+         * P02's dashboard cache, and `search_generation` waits for P29's index.
+         *
+         * 🛑 `permission_epoch` is the one with a cost worth naming here, not
+         * only in the build log. §10.8 gives it "role assignment change", and
+         * §12.3 reads a reader's `members` rung from `role_assignments` — so a
+         * reader removed from a project keeps reading until their **grant**
+         * expires (≤10 minutes, §8.12.11) rather than until their next request.
+         * `Invalidation::bumpIdentity()` records why Phase 22 did not fold that
+         * into `identity_epoch` instead: the registry's value is that each
+         * epoch's trigger list is true.
          */
-        foreach ([Epoch::Identity, Epoch::Permission, Epoch::SearchGeneration] as $owed) {
+        foreach ([Epoch::Permission, Epoch::SearchGeneration] as $owed) {
             $this->assertFalse($owed->isImplemented(), $owed->value.' is not yet bumped by anything');
             $this->assertNotSame('', $owed->ownedByPhase(), 'and it must name the phase that owes it');
         }

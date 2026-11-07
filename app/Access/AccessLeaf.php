@@ -100,4 +100,28 @@ enum AccessLeaf: string
             default => null,
         };
     }
+
+    /**
+     * 🛑 The leaf kinds, strongest first — **one ordering**, because two would
+     * disagree about which credential a reader was judged on.
+     *
+     * `binding` outranks the two scoped kinds because it is an identity rather
+     * than a capability, which matters: §12.3's last conjunct applies a
+     * share's or a bearer's narrow scope **only when that was the satisfying
+     * leaf**, so a member who also happens to hold a `/v1` share link must be
+     * judged on the binding or the link's scope would silently narrow them.
+     * `public` is last because every request satisfies it, so it is the answer
+     * only when nothing else was needed.
+     *
+     * Phase 21 wrote this list inside {@see Requirement::satisfyingLeaf()};
+     * Phase 22 needs the same ordering for a reader admitted by the lattice
+     * with no rule at all ({@see ReaderContext::strongestLeaf()}), and two
+     * copies of a security ordering is how one of them ends up stale.
+     *
+     * @return list<self>
+     */
+    public static function strongestFirst(): array
+    {
+        return [self::Binding, self::Share, self::Bearer, self::Gate, self::Public];
+    }
 }

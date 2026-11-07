@@ -31,12 +31,23 @@ final class RoutingSnapshot
      * @param  string  $host  normalised, as {@see HostMatcher::normalise()} returns it
      * @param  bool  $servable  §8.10.6: an unverified or suspended host serves nothing
      * @param  list<SnapshotMount>  $mounts
+     * @param  string|null  $domainId  raw 16 bytes of the `domains` row that
+     *                                 answered, or null for an unservable host.
+     *                                 🛑 Phase 22 needs it on the serving path
+     *                                 because §8.12.11 makes the **domain** a
+     *                                 grant's audience and §8.12.10 scopes a
+     *                                 session to one origin — and both must come
+     *                                 from the row the resolver matched, never
+     *                                 from a second lookup that could disagree
+     *                                 with it or from anything a request
+     *                                 supplied (§8.9.4).
      */
     public function __construct(
         public readonly string $host,
         public readonly HostKind $kind,
         public readonly bool $servable,
         public readonly array $mounts,
+        public readonly ?string $domainId = null,
     ) {}
 
     /**
