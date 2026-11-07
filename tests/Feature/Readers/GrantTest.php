@@ -11,6 +11,7 @@ use App\Access\AccessDecision;
 use App\Access\AccessLeaf;
 use App\Access\AccessReason;
 use App\Access\AccessSurface;
+use App\Access\ReaderContext;
 use App\Auth\AccessLevel;
 use App\Models\GrantSigningKey;
 use App\Readers\Grants\Grant;
@@ -207,6 +208,7 @@ final class GrantTest extends TestCase
                 required: AccessLevel::Members,
                 established: AccessLevel::Public,
             ),
+            reader: ReaderContext::member(bin2hex($this->session->id)),
             session: $this->session,
             domainId: $this->domainA,
             versionId: $this->versionId,
@@ -296,6 +298,83 @@ final class GrantTest extends TestCase
             'an expired token fails the library`s own exp check, so it is not usable even weakly',
         );
         $this->assertFalse($this->verifier->looksLikeGrant('nineteen bytes of noise'));
+    }
+
+    /**
+     * 🛑 A reconstructed scoped leaf carries its scope, or the §12.3 conjunct
+     * that applies it passes unconditionally.
+     *
+     * §12.3's last conjunct narrows a reader to a share's or a bearer's scope
+     * "**if that was the satisfying leaf**", and `ReaderContext::$scope` being
+     * null makes it pass. So a grant minted from a `/v1` share link that
+     * established `{share}` with no scope would read `/v2` — the disclosure
+     * Phase 21 found in `Requirement::satisfyingLeaf()`, arriving by another
+     * road.
+     *
+     * 🛑 **Not reachable in Phase 22**: no share link or bearer token exists
+     * until P23, so a grant's satisfying leaf is only ever `binding` or
+     * `public`. Asserted now because the first scoped driver would otherwise
+     * inherit a fail-open conjunct from code that looks finished, and because
+     * this test is what will fail if somebody drops the scope again.
+     */
+    public function test_a_scoped_leaf_is_reconstructed_with_its_scope(): void
+    {
+        $scoped = new Grant(
+            sessionId: $this->session->id,
+            domainId: $this->domainA,
+            projectId: $this->session->projectId,
+            versionId: $this->versionId,
+            versionSlug: 'v1',
+            ruleId: null,
+            combinedEpoch: 7,
+            issuedAt: time(),
+            expiresAt: time() + 300,
+            satisfiedBy: AccessLeaf::Share,
+            pathPrefix: '/guide',
+        );
+
+        $context = $scoped->readerContext();
+
+        $this->assertNotNull($context->scope, '🛑 a share leaf without a scope narrows nothing');
+        $this->assertTrue($context->scope->covers($this->session->projectId, 'v1', '/guide/page.html'));
+        $this->assertFalse($context->scope->covers($this->session->projectId, 'v2', '/guide/page.html'));
+        $this->assertFalse($context->scope->covers($this->session->projectId, 'v1', '/internal/page.html'));
+
+        /* And a leaf that carries no scope is left unscoped, which is correct. */
+        $this->assertNull(
+            $this->verifier->grantFor($this->mint(), $this->domainA, 7)?->readerContext()->scope,
+            'a binding leaf is not scope-limited',
+        );
+    }
+
+    /**
+     * 🛑 A binding list that does not parse drops the **whole** list.
+     *
+     * A partially-read list is a reader who satisfies some of the bindings this
+     * installation vouched for — a different reader from the one it signed, and
+     * the difference is invisible because a shorter list only ever refuses.
+     */
+    public function test_a_malformed_binding_list_refuses_the_grant(): void
+    {
+        [$header, $payload, $signature] = explode('.', $this->mint());
+
+        $claims = json_decode((string) base64_decode(strtr($payload, '-_', '+/'), true), true);
+        $this->assertIsArray($claims);
+
+        $claims['bnd'] = ['not-a-uuid'];
+        $forged = GrantKeys::base64Url((string) json_encode($claims));
+
+        /*
+         * The signature no longer matches, so this asserts the refusal rather
+         * than the parse — which is the honest shape: a `bnd` claim can only
+         * reach the parser through a token this installation signed, and the
+         * parser's own guard is asserted by the unit of work above it.
+         */
+        $this->assertNull(
+            $this->verifier->grantFor($header.'.'.$forged.'.'.$signature, $this->domainA, 7),
+        );
+
+        $this->assertNull(GrantVerifier::fromClaims($claims), '🛑 and the claim parser refuses it too');
     }
 
     // ------------------------------------------------- the four-state rotation
@@ -483,6 +562,7 @@ final class GrantTest extends TestCase
                 established: AccessLevel::Members,
                 satisfiedBy: AccessLeaf::Binding,
             ),
+            reader: ReaderContext::member(bin2hex($this->session->id)),
             session: $this->session,
             domainId: $this->domainA,
             versionId: $this->versionId,

@@ -53,14 +53,26 @@ final class ReaderEndpointTest extends TestCase
         parent::setUp();
 
         Storage::fake('artifacts');
-        /*
-         * 🛑 The containment verdict lives on the `local` disk, so it is faked
-         * here: a real verdict left behind by `deploy/containment-self-test.sh`
-         * on a developer's machine would make these assertions pass or fail on
-         * the strength of what somebody ran yesterday.
-         */
-        Storage::fake('local');
         Cache::flush();
+
+        /*
+         * 🛑 The containment verdict is **removed**, not faked.
+         *
+         * It lives on the `local` disk, and a real verdict left by
+         * `deploy/containment-self-test.sh` on a developer's machine would
+         * make these assertions pass or fail on the strength of what somebody
+         * ran yesterday. The obvious `Storage::fake('local')` is wrong twice
+         * over: it repoints the disk the artifact root is computed from — 19
+         * tests went red with `UnableToCreateDirectory` from
+         * `FilesystemArtifactStore` — and, done after the artifacts fake, it
+         * clears a sibling directory under
+         * `storage/framework/testing/disks/` that the artifacts fake had just
+         * created.
+         *
+         * Deleting one file isolates exactly what this test needs and touches
+         * no configuration.
+         */
+        Storage::disk('local')->delete('containment-self-test.json');
 
         $this->fixtures = sys_get_temp_dir().'/docup-rend-'.getmypid();
 

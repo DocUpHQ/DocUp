@@ -9,6 +9,7 @@ namespace App\Readers\Grants;
 
 use App\Access\AccessDecision;
 use App\Access\AccessSurface;
+use App\Access\ReaderContext;
 use App\Readers\SessionRecord;
 use App\Support\Uuid;
 use Firebase\JWT\JWT;
@@ -56,6 +57,10 @@ final readonly class GrantMinter
     /**
      * Mint a grant for an allowed decision.
      *
+     * @param  ReaderContext  $reader  the context the decision was made
+     *                                 against, for the facts the decision does
+     *                                 not carry — currently the satisfied
+     *                                 binding ids
      * @param  string  $domainId  raw 16 bytes — 🛑 the audience. §17: "a grant
      *                            minted for domain A is refused on domain B".
      * @param  string  $versionId  raw 16 bytes
@@ -72,6 +77,7 @@ final readonly class GrantMinter
      */
     public function mint(
         AccessDecision $decision,
+        ReaderContext $reader,
         SessionRecord $session,
         string $domainId,
         string $versionId,
@@ -125,6 +131,12 @@ final readonly class GrantMinter
             surface: $surface,
             level: $decision->established,
             satisfiedBy: $decision->satisfiedBy,
+            /*
+             * 🛑 Empty throughout Phase 22 and carried anyway — see {@see Grant}
+             * for why a grant without it would be refused by a rule naming a
+             * binding while the session behind it was allowed.
+             */
+            satisfiedBindings: $reader->satisfiedBindings,
         );
 
         $key = $this->keys->signing();
@@ -174,6 +186,15 @@ final readonly class GrantMinter
 
         if ($grant->satisfiedBy !== null) {
             $claims['lf'] = $grant->satisfiedBy->value;
+        }
+
+        if ($grant->satisfiedBindings !== []) {
+            /*
+             * Only when non-empty, which through Phase 22 is never — the grant
+             * rides in a cookie on every request to a documentation origin and
+             * an always-empty array is bytes nobody reads.
+             */
+            $claims['bnd'] = array_map(Uuid::toText(...), $grant->satisfiedBindings);
         }
 
         if ($grant->ruleId !== null) {

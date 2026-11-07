@@ -150,6 +150,7 @@ final readonly class ReaderResolver
 
         $token = $this->minter->mint(
             decision: $decision,
+            reader: $reader->context,
             session: $reader->session,
             domainId: $domainId,
             versionId: $versionId,

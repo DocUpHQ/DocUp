@@ -326,6 +326,26 @@ final readonly class GrantVerifier
         $prefix = $claims['pfx'] ?? null;
         $ruleId = $text($claims['rid'] ?? null);
 
+        /*
+         * 🛑 Every entry must parse, and one that does not drops the **whole**
+         * list rather than part of it. A partially-read binding list is a
+         * reader who satisfies some of the bindings they were vouched for,
+         * which is a different reader from the one this installation signed —
+         * and the difference would be invisible, because the shorter list only
+         * ever refuses.
+         */
+        $bindings = [];
+
+        foreach (is_array($claims['bnd'] ?? null) ? $claims['bnd'] : [] as $value) {
+            $binding = $text($value);
+
+            if ($binding === null) {
+                return null;
+            }
+
+            $bindings[] = $binding;
+        }
+
         return new Grant(
             sessionId: $sessionId,
             domainId: $domainId,
@@ -340,6 +360,7 @@ final readonly class GrantVerifier
             level: $level,
             satisfiedBy: $leaf,
             pathPrefix: is_string($prefix) ? $prefix : null,
+            satisfiedBindings: $bindings,
         );
     }
 }

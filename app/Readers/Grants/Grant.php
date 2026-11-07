@@ -9,6 +9,7 @@ namespace App\Readers\Grants;
 
 use App\Access\AccessLeaf;
 use App\Access\AccessSurface;
+use App\Access\CredentialScope;
 use App\Access\EffectiveAccess;
 use App\Access\ReaderContext;
 use App\Auth\AccessLevel;
@@ -73,6 +74,20 @@ final readonly class Grant
      *                                        reader, for §12.3's scope conjunct
      * @param  string|null  $pathPrefix  the narrowest prefix the satisfying
      *                                   rule admitted, when it was path-scoped
+     * @param  list<string>  $satisfiedBindings  binding ids this reader
+     *                                           satisfied, for a `{binding}`
+     *                                           leaf naming one. 🛑 Empty
+     *                                           throughout Phase 22 — no
+     *                                           binding exists until P23 — and
+     *                                           carried now because a grant
+     *                                           without it would be **refused**
+     *                                           by a rule naming a binding
+     *                                           ({@see ReaderContext::satisfies()}),
+     *                                           while the session behind it was
+     *                                           allowed. Fail-closed, so not a
+     *                                           hole; but every request would
+     *                                           re-read the session and mint a
+     *                                           grant that never helped.
      */
     public function __construct(
         public string $sessionId,
@@ -88,6 +103,7 @@ final readonly class Grant
         public AccessLevel $level = AccessLevel::Authenticated,
         public ?AccessLeaf $satisfiedBy = null,
         public ?string $pathPrefix = null,
+        public array $satisfiedBindings = [],
     ) {}
 
     /**
@@ -111,7 +127,37 @@ final readonly class Grant
         return new ReaderContext(
             level: $this->level,
             satisfiedLeaves: $leaves,
+            satisfiedBindings: $this->satisfiedBindings,
             credentialPresented: true,
+            /*
+             * 🛑 **A scoped leaf is reconstructed WITH its scope, or not at
+             * all.** §12.3's last conjunct applies a share's or a bearer's
+             * narrow scope "if that was the satisfying leaf", and
+             * {@see ReaderContext::$scope} being null makes that conjunct pass
+             * unconditionally. So a grant minted from a `/v1` share link, if it
+             * established `{share}` with no scope, would read `/v2` — the exact
+             * disclosure Phase 21 found and fixed in
+             * {@see \App\Access\Requirement::satisfyingLeaf()}, arriving by a
+             * different road.
+             *
+             * 🛑 Not reachable in Phase 22: no share link or bearer token
+             * exists until P23, so `satisfiedBy` is only ever `binding` or
+             * `public`, neither of which carries scope. It is closed **now**
+             * because the first scoped driver would otherwise inherit a
+             * fail-open conjunct from code that looks finished.
+             *
+             * The scope is the grant's own (project, version, prefix), which is
+             * narrower than or equal to whatever admitted the reader — a grant
+             * is minted per version and per surface, so scoping to it cannot
+             * widen anything.
+             */
+            scope: $this->satisfiedBy?->carriesScope() === true
+                ? new CredentialScope(
+                    projectId: $this->projectId,
+                    versionSlugs: [$this->versionSlug],
+                    pathPrefixes: $this->pathPrefix === null ? [] : [$this->pathPrefix],
+                )
+                : null,
             /*
              * 🛑 The subject is the session, keyed and digested by
              * {@see \App\Access\DecisionLog}. §20.3's `subject_hash` is how an
