@@ -148,7 +148,19 @@ final class AuditAnchorCommand extends Command
         }
 
         try {
-            $date = Carbon::createFromFormat('Y-m-d', $given, 'UTC');
+            /*
+             * 🛑 A `DateTimeZone`, not the string `'UTC'`.
+             *
+             * Carbon coerces a string at runtime, so both forms work — but on
+             * **PHP 8.5** the inherited `DateTime::createFromFormat` signature
+             * types the parameter `DateTimeZone|null`, and Larastan level 8
+             * refuses the string. It does not on 8.4, which is what CI runs,
+             * so this was invisible to the gate while being wrong on the newest
+             * PHP the project supports (§11's floor is 8.4.1 and the image
+             * ships 8.5.11). An explicit object is correct on every version and
+             * depends on no library's coercion.
+             */
+            $date = Carbon::createFromFormat('Y-m-d', $given, new \DateTimeZone('UTC'));
         } catch (\Throwable) {
             $date = null;
         }

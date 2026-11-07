@@ -247,9 +247,24 @@ final class HandoffSafetyTest extends TestCase
      * The failure this guards is silent: a browser does not report a `__Host-`
      * cookie with a `Domain` attribute, it simply does not store it.
      */
-    public function test_section_12_4_is_five_rows_and_every_one_obeys_the_prefix(): void
+    public function test_section_12_4_is_six_rows_and_every_one_obeys_the_prefix(): void
     {
-        $this->assertCount(5, ReaderCookies::names(), '§12.4 is five rows');
+        /*
+         * 🛑 **Six, not §12.4's five — a proposed amendment, asserted.**
+         *
+         * §8.12.16 requires a share link to be "converted to a cookie on first
+         * use and 302'd to a clean URL", and §12.4's table has five rows with
+         * nowhere to put it. One of the two documents is incomplete, and it is
+         * §12.4: the missing thing is a cookie, and §12.4 is the table of
+         * cookies. {@see ReaderCookies::SHARE} records the two alternatives that
+         * would have avoided the amendment and why each makes the mechanism
+         * worse.
+         *
+         * The count is asserted **exactly** so a seventh cookie cannot appear
+         * without this test and its reasoning being revisited — which is the
+         * whole value of §12.4 being one table.
+         */
+        $this->assertCount(6, ReaderCookies::names(), '§12.4 plus §8.12.16’s share cookie');
 
         foreach (ReaderCookies::names() as $name) {
             $this->assertStringStartsWith('__Host-', $name);
@@ -273,6 +288,8 @@ final class HandoffSafetyTest extends TestCase
             ReaderCookies::grant('token'),
             ReaderCookies::cacheKey('ck'),
             ReaderCookies::state('state'),
+            /* §8.12.16's share link, which grows §12.4's table by a row and not by an exception. */
+            ReaderCookies::share('secret', 3600),
             ReaderCookies::forget(ReaderCookies::SESSION),
         ];
 

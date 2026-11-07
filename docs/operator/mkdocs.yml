@@ -6,6 +6,7 @@ nav:
   - Composition modes: composition.md
   - Redirects and crawlers: redirects.md
   - Who may read it: access.md
+  - Private without an IdP: providers.md
   - Running it: operations.md
 
 # 🛑 Flat .html URLs, not MkDocs' default directory URLs.

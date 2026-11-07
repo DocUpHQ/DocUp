@@ -12,6 +12,7 @@ use App\Access\AccessSurface;
 use App\Access\ReaderGate;
 use App\Artifacts\ContentTypes;
 use App\Auth\AccessLevel;
+use App\Auth\Providers\DegradedResponse;
 use App\Http\Middleware\RejectNonCanonicalPath;
 use App\Readers\ReaderResolver;
 use App\Redirects\RedirectEngine;
@@ -187,6 +188,28 @@ final class DocumentController
             $mount->project,
             AccessSurface::Proxy,
         );
+
+        /*
+         * 🛑 §8.12.19's branded 503, **before** the decision and not instead of
+         * it being made.
+         *
+         * "A degraded binding MUST deny with a branded 503 naming the binding …
+         * never fall back to another provider, never to public." The reader was
+         * established as anonymous by the resolver precisely so that nothing
+         * downstream can mistake a degraded provider for an absent one — and
+         * returning here is what stops a `members` project with a broken IdP
+         * answering a 404 that reads as "no such page".
+         *
+         * 🛑 This is not a path that bypasses §12.3. The refusal has already
+         * been reached: {@see \App\Auth\Providers\ProviderOutcome::merge()}
+         * short-circuits on `degraded` and establishes no leaves, so §12.3
+         * would refuse this reader too. What the 503 changes is the
+         * **representation** — §8.12.24's own division between an outcome and
+         * how it is rendered.
+         */
+        if ($reader->isDegraded()) {
+            return DegradedResponse::for((string) $reader->degradedBinding);
+        }
 
         $decision = $this->gate->authorise(
             mount: $mount,

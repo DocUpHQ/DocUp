@@ -9,4 +9,5 @@ nav:
   - Composition modes: composition.html
   - Redirects and crawlers: redirects.html
   - Who may read it: access.html
+  - Private without an IdP: providers.html
   - Running it: operations.html

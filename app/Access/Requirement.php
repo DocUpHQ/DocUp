@@ -249,6 +249,36 @@ final class Requirement
     }
 
     /**
+     * Every (leaf kind, binding id) pair the tree names.
+     *
+     * 🛑 Separate from {@see self::bindingIds()} because the two answer
+     * different questions. That one asks "is this binding referenced", for
+     * §8.12.19's undeletability; this one asks "as **what**", which is what
+     * §8.12.17's classification has to be checked against.
+     *
+     * The check itself cannot live in this class: a binding's driver type is a
+     * database row and this is a value object with no connection, which is
+     * deliberate — a requirement is parsed on the serving path, where
+     * {@see EffectiveAccess} must not issue queries. So the pairs
+     * are exposed and {@see ReaderPolicies::addRule()} resolves them once, at
+     * write time, where a query is free.
+     *
+     * @return list<array{leaf: AccessLeaf, binding_id: string}>
+     */
+    public function bindingLeaves(): array
+    {
+        $pairs = [];
+
+        $this->walk($this->tree, static function (AccessLeaf $leaf, ?string $bindingId) use (&$pairs): void {
+            if ($bindingId !== null) {
+                $pairs[] = ['leaf' => $leaf, 'binding_id' => $bindingId];
+            }
+        });
+
+        return $pairs;
+    }
+
+    /**
      * §8.12.7's evaluation: non-identity leaves true, identity leaves false.
      *
      * Public here rather than private so the write-time invariant can be

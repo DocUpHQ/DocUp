@@ -47,7 +47,27 @@ final readonly class EstablishedReader
         public ?Grant $grant = null,
         public ?SessionRecord $session = null,
         public bool $credentialRejected = false,
+        public ?string $degradedBinding = null,
     ) {}
+
+    /**
+     * 🛑 §8.12.19: "A degraded binding MUST **deny** with a branded 503 naming
+     * the binding and linking to its health page — never fall back to another
+     * provider, never to public."
+     *
+     * Carried here rather than thrown, because the decision still has to run:
+     * §8.12.14 forbids a path that bypasses it, and the 503 is a
+     * *representation* of a refusal §12.3 reached — the same division §8.12.24
+     * draws between an outcome and how it is rendered.
+     *
+     * The binding's **name** and nothing else. §8.12.19 wants the reader told
+     * which provider is unavailable so they can tell somebody; it does not want
+     * them told why, which is the health page's job and the operator's.
+     */
+    public function isDegraded(): bool
+    {
+        return $this->degradedBinding !== null;
+    }
 
     /** An anonymous reader: no cookies, nothing presented. */
     public static function anonymous(): self

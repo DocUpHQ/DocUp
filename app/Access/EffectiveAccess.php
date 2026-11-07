@@ -227,7 +227,16 @@ final class EffectiveAccess
          * who did not need it.
          */
         if ($satisfiedBy !== null && $satisfiedBy->carriesScope()) {
-            $scope = $request->reader->scope;
+            /*
+             * 🛑 `scopeFor($satisfiedBy)`, not `->scope`. Phase 23 made it
+             * possible for one reader to present two scoped credentials — a
+             * share link and a bearer token — and §12.3's conditional is on the
+             * **satisfying** leaf, so the scope has to be looked up by it. The
+             * single field read a scope the transport happened to store, which
+             * for a reader holding a wide link and a narrow token judged them
+             * on the link while the rule named the token.
+             */
+            $scope = $request->reader->scopeFor($satisfiedBy);
 
             if ($scope === null
                 || ! $scope->covers($request->projectId, $request->versionSlug, $request->path)) {

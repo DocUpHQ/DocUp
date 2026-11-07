@@ -15,6 +15,7 @@ use App\Http\Controllers\Serving\DocumentController;
 use App\Http\Controllers\Serving\DownloadController;
 use App\Http\Controllers\Serving\GeneratedFileController;
 use App\Http\Controllers\Serving\ProvenanceController;
+use App\Http\Middleware\ConvertShareLink;
 use App\Http\Middleware\RejectNonCanonicalPath;
 use App\Serving\OfflineFormat;
 use Illuminate\Support\Facades\Route;
@@ -118,7 +119,7 @@ foreach ($apexes as $index => $apex) {
      * reading a route parameter here would be a second source of truth.
      */
     Route::domain('{docupHostLabel}.'.$apex)
-        ->middleware([RejectNonCanonicalPath::class])
+        ->middleware([RejectNonCanonicalPath::class, ConvertShareLink::class])
         ->group(function () use ($index, $readerRoutes): void {
             /*
              * §8.12.10's handoff, §8.12.13's Tier B endpoint and the logout.
@@ -340,7 +341,7 @@ $multiLabel = $label.'(?:\.'.$label.')+';
  */
 Route::domain('{docupCustomHost}')
     ->where(['docupCustomHost' => $exclusions.$multiLabel])
-    ->middleware([RejectNonCanonicalPath::class])
+    ->middleware([RejectNonCanonicalPath::class, ConvertShareLink::class])
     ->group(function () use ($readerRoutes): void {
         /* §8.12.10's handoff on a custom domain — the case it exists for. */
         $readerRoutes('.custom', labelled: false);

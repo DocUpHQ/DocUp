@@ -7,7 +7,9 @@ declare(strict_types=1);
 
 namespace Tests\Arch;
 
+use App\Access\AccessLeaf;
 use App\Artifacts\RejectionCode;
+use App\Auth\Providers\DriverRegistry;
 use App\Builds\BuildEnvironment;
 use App\Builds\Toolchain\ToolchainPresets;
 use App\Logging\RedactSecrets;
@@ -1608,6 +1610,175 @@ final class ArchitectureTest extends TestCase
             $offenders,
             'SPEC 17 P22: a second reader of the session tables is a second answer to '
                 .'"is this session still live": '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.12.2: one reader of the provider tables.
+     *
+     * > "One `auth_provider_bindings` table with scope resolution and
+     * > envelope-encrypted secrets **no API or UI ever returns**."
+     *
+     * The secrets are the reason this is an architecture test rather than a
+     * convention. Every read of `auth_provider_bindings` that goes through
+     * {@see Bindings} opens the envelope into a `SecretString`, records the
+     * five-state lifecycle, and turns an envelope failure into SPEC 8.12.19's
+     * degraded state. A second reader gets none of that for free, and the
+     * failure mode is the one SPEC 8.12.2 names: a secret in a response.
+     *
+     * The two console commands are listed because an operator view is exactly
+     * what SPEC 17 asked them to be, and both read state and never a secret.
+     * `ReaderPolicies` is listed because SPEC 8.12.17's write-time check needs a
+     * binding's *driver type* and nothing else.
+     */
+    public function test_only_the_providers_namespace_reads_the_provider_tables(): void
+    {
+        $tables = ['auth_provider_bindings', 'reader_credentials'];
+
+        $permitted = [
+            'app/Auth/Providers/',
+            'app/Models/',
+            'database/migrations/',
+            'database/factories/',
+            'database/seeders/',
+            /*
+             * SPEC 17's two operator commands, which read state and never a
+             * secret — asserted below, not merely intended.
+             */
+            'app/Console/Commands/AuthListCommand.php',
+            'app/Console/Commands/AuthProbeCommand.php',
+            /* SPEC 8.12.17's write-time classification check; a type, never a secret. */
+            'app/Access/ReaderPolicies.php',
+        ];
+
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            foreach ($permitted as $prefix) {
+                if (str_starts_with($relative, $prefix)) {
+                    continue 2;
+                }
+            }
+
+            $source = $this->code($file);
+
+            foreach ($tables as $table) {
+                if (str_contains($source, "'".$table."'") || str_contains($source, '"'.$table.'"')) {
+                    $offenders[] = $relative.' reads '.$table;
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'SPEC 8.12.2: a second reader of the provider tables is a second place a '
+                .'secret can escape: '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.12.2: and the permitted exceptions never select a secret
+     * column.
+     *
+     * The list above is a judgement; this is the check that makes it safe. Each
+     * file outside `app/Auth/Providers/` is read for the four envelope columns
+     * and for `password_hash` and `secret_hash`, because "allowed to read the
+     * table" must not quietly become "allowed to read the secret".
+     */
+    public function test_no_permitted_exception_selects_a_secret_column(): void
+    {
+        $secretColumns = ['wrapped_key', 'ciphertext', 'password_hash', 'secret_hash'];
+
+        $files = [
+            'app/Console/Commands/AuthListCommand.php',
+            'app/Console/Commands/AuthProbeCommand.php',
+            'app/Access/ReaderPolicies.php',
+        ];
+
+        $offenders = [];
+
+        foreach ($files as $relative) {
+            $source = $this->code(base_path($relative));
+
+            foreach ($secretColumns as $column) {
+                if (str_contains($source, "'".$column."'") || str_contains($source, '"'.$column.'"')) {
+                    $offenders[] = $relative.' names '.$column;
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            '🛑 SPEC 8.12.2: "envelope-encrypted secrets no API or UI ever returns" — '
+                .'and a CLI is a UI: '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.12.17: the driver registry and the leaf classification
+     * agree, for every registered driver.
+     *
+     * > "Each driver is classified exactly once."
+     *
+     * Two tables that must say the same thing: {@see DriverRegistry}'s map of
+     * type to class, and {@see AccessLeaf::forDriver()}'s map of type to leaf
+     * kind. A driver registered under a type the classification does not know
+     * would resolve at runtime and then satisfy *no* leaf — a guard that runs
+     * and admits nobody, which reads in a log exactly like a guard that works.
+     *
+     * Asserted by driving each registered class through
+     * {@see DriverRegistry::assertRegistrable()}, which is the one place the
+     * agreement is defined, so this test cannot drift from the rule it checks.
+     */
+    public function test_every_registered_driver_is_classified_exactly_once(): void
+    {
+        $offenders = [];
+
+        foreach (DriverRegistry::types() as $type) {
+            $class = DriverRegistry::for($type);
+
+            if ($class === null) {
+                $offenders[] = $type.' is listed by types() and resolves to nothing';
+
+                continue;
+            }
+
+            if (AccessLeaf::forDriver($type) === null) {
+                $offenders[] = $type.' is registered and SPEC 8.12.17 does not classify it';
+
+                continue;
+            }
+
+        }
+
+        /*
+         * 🛑 And the rule itself, which lives beside the registry rather
+         * than here: {@see DriverRegistry::assertRegistrable()} returns the
+         * violations, so this test cannot drift from the agreement it checks.
+         */
+        $offenders = array_merge($offenders, DriverRegistry::assertRegistrable());
+
+        $this->assertSame(
+            [],
+            $offenders,
+            '🛑 SPEC 8.12.17: a driver and its classification are one fact: '
+                .implode('; ', $offenders),
+        );
+
+        /*
+         * 🛑 And the reverse direction: a classification with no driver.
+         * SPEC 8.12.17's table is the authority on what a leaf kind *means*, so a
+         * type it classifies and nothing implements is a rule an operator can
+         * write and nothing can ever satisfy.
+         */
+        $this->assertNotSame(
+            [],
+            DriverRegistry::types(),
+            'SPEC 8.12.2: the registry is the constraint an enum would have been; it cannot be empty',
         );
     }
 

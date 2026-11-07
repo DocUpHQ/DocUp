@@ -173,15 +173,17 @@ Schedule::command('docup:tls:probe')
 |------------------------------------------------------------------------------
 | §12.4's reader sessions and §8.12.11's key states
 |------------------------------------------------------------------------------
-| Three jobs that no request can do, and the third is the one that matters.
+| Four jobs that no request can do, and the last is the one that matters.
 |
-| Expired sessions and spent handoff codes authorise nothing — §12.4's absolute
-| ceiling is checked on every use and a handoff code dies in thirty seconds — so
-| sweeping them is housekeeping: `docs_sessions` holds one row per reader per
-| project per domain, and §8.12.15's session inventory is a security surface an
-| operator has to be able to read.
+| Expired sessions, spent handoff codes and long-expired reader credentials
+| authorise nothing — §12.4's absolute ceiling is checked on every use, a
+| handoff code dies in thirty seconds, and §8.12.16's expiry is checked on the
+| request that presents the credential — so sweeping them is housekeeping:
+| `docs_sessions` holds one row per reader per project per domain, and
+| §8.12.15's session inventory is a security surface an operator has to be able
+| to read.
 |
-| 🛑 The third is not housekeeping. `App\Readers\Grants\KeyState` has four
+| 🛑 The last is not housekeeping. `App\Readers\Grants\KeyState` has four
 | states and three of its transitions are **time-based**, so on an installation
 | where nobody runs a command a key sits in `retiring` for ever and §17's fourth
 | state — the one that means "no longer trusted" — is unreachable. A state
