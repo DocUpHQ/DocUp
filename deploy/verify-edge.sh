@@ -219,13 +219,46 @@ else
     fail 'Accept-Ranges must be bytes; the edge is not serving the file'
 fi
 
-# --------------------------------------- 🛑 a PRIVATE document, SPEC 9.3.2 ----
+# ------------------------- 🛑 a PRIVATE document, SPEC 8.12.22 and 9.3.2 ----
 #
-# The single most important assertion in this file. SPEC 18.18: without
-# re-emission "a private document is served with no `private, no-store` and no
-# `Vary: Cookie`: SPEC 9.3.2's failure arriving silently behind a correct-looking
-# 200."
+# The single most important assertion in this file, and **Phase 21 changed what
+# it is**.
+#
+# Before the authorisation kernel, nothing enforced `projects.visibility`: a
+# `members` project served its document with a 200 and private cache directives,
+# and what this section checked was SPEC 18.18's header re-emission — "without
+# re-emission a private document is served with no `private, no-store` and no
+# `Vary: Cookie`: SPEC 9.3.2's failure arriving silently behind a
+# correct-looking 200."
+#
+# 🛑 There is no longer a correct-looking 200 to hide behind. SPEC 12.3 refuses
+# an anonymous request for a `members` project at the first conjunct, so the
+# edge answers the project's `deny_status`. That is SPEC 8.12.22's containment
+# property, stated there as "fetches a known-private asset through the real edge
+# with no credentials and **fails on any 200**" — so the assertion becomes
+# exactly that sentence, which is a *stronger* property than the one it
+# replaces: a 404 cannot leak a document, however its headers are mangled.
+#
+# The private cache directives are still checked, on the refusal rather than on
+# a 200, because `CachePolicy::forAbsence()` decides them and SPEC 9.3.2 applies
+# to a refusal about something private just as it does to the document.
 req "$PRIVATE_HOST" "$PUBLIC_PATH" /tmp/edge-private.h
+
+# 🛑 SPEC 8.12.22: fails on any 200.
+STATUS_PRIVATE="$(head -1 /tmp/edge-private.h | tr -d '\r')"
+
+case "$STATUS_PRIVATE" in
+    *' 200'*)
+        fail "🛑 SPEC 8.12.22: a known-private asset served 200 with no credentials — ${STATUS_PRIVATE}" ;;
+    *' 404'*)
+        pass 'SPEC 8.12.22: a known-private asset is refused through the real edge with no credentials' ;;
+    *)
+        # 403 and 401 are permitted outcomes in their own narrow cases
+        # (SPEC 8.12.23), and neither serves the document — so this is not a
+        # containment failure, but it is not the configuration under test
+        # either and must not pass silently.
+        fail "a private asset must be refused; expected 404, got ${STATUS_PRIVATE}" ;;
+esac
 
 for axis in Cache-Control CDN-Cache-Control; do
     v="$(header_values "$axis" /tmp/edge-private.h | tr '[:upper:]' '[:lower:]')"
@@ -255,48 +288,55 @@ else
     fail 'a private response must carry no Cache-Tag'
 fi
 
-# ------------------------------------------- SPEC 9.3.2 on the 304 path ------
+# ------------------------------------------- SPEC 18.18 on the 304 path ------
 #
-# 🛑 The same private-response assertions again, on a conditional request.
-# SPEC 8.9.9 makes 304 the COMMON case for a repeat reader, so this is the path
-# most responses take — and it is the one where the headers are easiest to lose:
-# nginx omits an `add_header` on a 304 unless it carries `always`, and a 304 for
-# a private document with no `private, no-store` is the same leak as a 200 with
-# none. A config that forgot `always` passes every check above and fails here.
-ETAG="$(header_values ETag /tmp/edge-private.h | head -1 | tr -d "\r")"
+# 🛑 SPEC 8.9.9 makes 304 the COMMON case for a repeat reader, so this is the
+# path most responses take — and it is the one where the headers are easiest to
+# lose: **nginx omits an `add_header` on a 304 unless it carries `always`**, so
+# a config that forgot it passes every check above and fails here. That is the
+# property under test and it is a property of the driver, not of the document.
+#
+# 🛑 **On the PUBLIC host since Phase 21**, because an anonymous reader can no
+# longer obtain a private 200 to revalidate (SPEC 8.12.22, above) and therefore
+# cannot obtain a private ETag. The `always` concern is unchanged — a dropped
+# `Cache-Control` on a 304 is a dropped header whatever the project's
+# visibility — so moving the probe keeps the driver property covered.
+#
+# 🛑 What is **not** covered any more, and is not pretended to be: the
+# `private, no-store` + `Vary: Cookie` combination specifically on a 304. It
+# needs an authorised reader revalidating a private document, which arrives with
+# Phase 22's reader sessions. Recorded in the build log as owed rather than
+# quietly dropped.
+ETAG="$(header_values ETag /tmp/edge-public.h | head -1 | tr -d "\r")"
 
 if [ -z "$ETAG" ]; then
-    fail 'a private response carries no ETag, so the 304 path cannot be checked'
+    fail 'the public response carries no ETag, so the 304 path cannot be checked'
 else
-    req "$PRIVATE_HOST" "$PUBLIC_PATH" /tmp/edge-304.h -H "If-None-Match: ${ETAG}"
+    req "$HOST" "$PUBLIC_PATH" /tmp/edge-304.h -H "If-None-Match: ${ETAG}"
 
     if grep -qiE '^HTTP/[0-9.]+ 304' /tmp/edge-304.h; then
-        pass 'a repeat private request is 304 (SPEC 8.9.9)'
+        pass 'a repeat request is 304 (SPEC 8.9.9)'
 
+        # 🛑 Present at all is the assertion. A 304 that lost `Cache-Control`
+        # is a 304 the edge dropped an `add_header` from, and the next one it
+        # drops is on a private response.
         for axis in Cache-Control CDN-Cache-Control; do
-            v="$(header_values "$axis" /tmp/edge-304.h | tr '[:upper:]' '[:lower:]')"
+            v="$(header_values "$axis" /tmp/edge-304.h)"
 
-            case "$v" in
-                *private*no-store*|*no-store*private*)
-                    pass "${axis} is still private, no-store on the 304" ;;
-                *)
-                    fail "${axis} on a 304 must be private, no-store (got: '${v}')" ;;
-            esac
+            if [ -n "$v" ]; then
+                pass "${axis} survives the 304 (SPEC 18.18: nginx needs \`always\`)"
+            else
+                fail "${axis} was dropped on the 304; the driver is missing \`always\`"
+            fi
         done
 
-        if header_values Vary /tmp/edge-304.h | grep -qi cookie; then
-            pass 'Vary still includes Cookie on the 304'
+        if header_values Vary /tmp/edge-304.h | grep -qi 'accept-encoding'; then
+            pass 'Vary survives the 304'
         else
-            fail "Vary on a 304 must include Cookie (got: $(header_values Vary /tmp/edge-304.h))"
-        fi
-
-        if [ "$(header_count Cache-Tag /tmp/edge-304.h)" -eq 0 ]; then
-            pass 'the 304 carries no cache tag'
-        else
-            fail 'a private 304 must carry no Cache-Tag'
+            fail "Vary was dropped on the 304 (got: $(header_values Vary /tmp/edge-304.h))"
         fi
     else
-        fail "a repeat private request must be 304 (got: $(head -1 /tmp/edge-304.h | tr -d '\r'))"
+        fail "a repeat request must be 304 (got: $(head -1 /tmp/edge-304.h | tr -d '\r'))"
     fi
 fi
 
