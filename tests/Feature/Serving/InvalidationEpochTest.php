@@ -283,13 +283,21 @@ final class InvalidationEpochTest extends TestCase
     }
 
     /**
-     * The two with a bound of 0 are the two that are implemented, and the
-     * registry says so.
+     * Which epochs are live, and the registry says so.
      *
      * 🛑 This is the assertion that keeps the registry honest. Seven declared
-     * epochs read as seven working controls; four have a column, a declaration
-     * and nothing that moves them. An unenforced control that looks enforced is
-     * worse than an absent one, so the registry is required to admit it.
+     * epochs read as seven working controls; the ones with a column, a
+     * declaration and nothing that moves them have to be admitted, because an
+     * unenforced control that looks enforced is worse than an absent one.
+     *
+     * 🛑 **Phase 21 changed the shape of this test, not its strictness.** It
+     * used to read "the two with a bound of 0 are the two that are
+     * implemented", which was a true observation about Phases 03 and 04 and
+     * not a property of the registry: `authz_epoch`'s bound is "1 request at
+     * Tier A/B" and `policy_generation`'s is "fail closed", and both are now
+     * live. What is asserted instead is the list itself, exactly — so a
+     * fifth epoch going live, or a fourth quietly claiming to be, still fails
+     * here.
      */
     public function test_the_registry_admits_which_epochs_are_not_yet_live(): void
     {
@@ -298,10 +306,21 @@ final class InvalidationEpochTest extends TestCase
             static fn (Epoch $epoch): bool => $epoch->isImplemented(),
         ));
 
-        $this->assertSame([Epoch::Routing, Epoch::Serving], $implemented);
+        $this->assertSame(
+            [Epoch::Routing, Epoch::Authz, Epoch::Serving, Epoch::PolicyGeneration],
+            $implemented,
+            'P21 makes authz_epoch and policy_generation live; identity, permission and search are still owed',
+        );
 
-        foreach ($implemented as $epoch) {
-            $this->assertStringContainsString('0', $epoch->maxStaleness(), $epoch->value);
+        /*
+         * 🛑 And the three that are not, named rather than merely absent. Each
+         * has a column and a declaration: `identity_epoch` waits for P22's
+         * reader identities, `permission_epoch` has been owed since P02's
+         * dashboard cache, and `search_generation` waits for P29's index.
+         */
+        foreach ([Epoch::Identity, Epoch::Permission, Epoch::SearchGeneration] as $owed) {
+            $this->assertFalse($owed->isImplemented(), $owed->value.' is not yet bumped by anything');
+            $this->assertNotSame('', $owed->ownedByPhase(), 'and it must name the phase that owes it');
         }
 
         // §8.12.21: the search epochs fail closed, because a stale gating answer

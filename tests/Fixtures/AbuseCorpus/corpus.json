@@ -935,6 +935,54 @@
       "input": "fifty consecutive infrastructure failures of a project's default version",
       "expect": "nothing disabled, and the counter unchanged",
       "note": "🛑 They neither increment NOR reset. Resetting is the intuitive implementation and it is wrong: our own outage would launder somebody's twenty-five consecutive broken configurations back to zero."
+    },
+    {
+      "id": "authz-001",
+      "category": "authz",
+      "defends": "8.12.7",
+      "input": "a reader policy rule whose requirement is {\"leaf\": \"gate\", \"driver\": \"ip_allowlist\"}",
+      "expect": "requirement.satisfiable_without_identity",
+      "note": "🛑 The gate substituted for an identity. An IP allowlist is a network fact, never a principal, so a rule it alone satisfies authenticates nobody while reading as though it does."
+    },
+    {
+      "id": "authz-002",
+      "category": "authz",
+      "defends": "8.12.7",
+      "input": "a requirement of {\"any\": [{\"leaf\": \"gate\"}, {\"leaf\": \"binding\"}]}",
+      "expect": "requirement.satisfiable_without_identity",
+      "note": "🛑 The shape that reads as safe and is not: 'from the office OR signed in' is 'from the office'. This is the one an operator writes on purpose, believing it adds a condition."
+    },
+    {
+      "id": "authz-003",
+      "category": "authz",
+      "defends": "8.12.7",
+      "input": "a requirement of {\"all\": []}",
+      "expect": "requirement.empty_group",
+      "note": "🛑 The vacuous-truth fail-open §8.12.7 names by hand. An empty conjunction is TRUE in logic and reads as the strictest rule anybody could write, so it is refused at write time AND evaluates false at read time."
+    },
+    {
+      "id": "authz-004",
+      "category": "authz",
+      "defends": "8.12.7",
+      "input": "a leaf declaring {\"leaf\": \"binding\", \"driver\": \"ip_allowlist\"}",
+      "expect": "requirement.malformed",
+      "note": "🛑 §8.12.17 classifies each driver exactly once. A leaf contradicting the table would make the gate identity-bearing by a typo in a JSON payload rather than by any change to code."
+    },
+    {
+      "id": "authz-005",
+      "category": "authz",
+      "defends": "8.12.8",
+      "input": "a domain_mounts.mount_exposure of 'public' on a project whose visibility is 'members'",
+      "expect": "policy.exposure_widens",
+      "note": "🛑 Composition MUST NEVER widen access. Mounting a project on a second domain is otherwise a way to publish what the project's own visibility forbids."
+    },
+    {
+      "id": "authz-006",
+      "category": "authz",
+      "defends": "8.12.23",
+      "input": "an anonymous request for a private resource on a project configured deny_status=403",
+      "expect": "404",
+      "note": "🛑 403 is for authenticated principals only. A 403 to an anonymous request confirms the resource exists, which is what §8.2.7's absence-indistinguishable-from-non-existence refuses, and the project's own preference does not override it because the project does not bear the consequence."
     }
   ]
 }

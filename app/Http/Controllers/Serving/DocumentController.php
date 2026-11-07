@@ -7,7 +7,11 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Serving;
 
+use App\Access\AccessDecision;
+use App\Access\AccessSurface;
+use App\Access\ReaderGate;
 use App\Artifacts\ContentTypes;
+use App\Auth\AccessLevel;
 use App\Http\Middleware\RejectNonCanonicalPath;
 use App\Redirects\RedirectEngine;
 use App\Redirects\Redirects;
@@ -19,6 +23,7 @@ use App\Serving\CanonicalLocations;
 use App\Serving\FileKind;
 use App\Serving\Hreflang;
 use App\Serving\ManifestReader;
+use App\Serving\MountMatch;
 use App\Serving\Negotiation;
 use App\Serving\NotFoundChain;
 use App\Serving\RejectionReason;
@@ -49,14 +54,26 @@ use Symfony\Component\HttpFoundation\Response;
  *    else. Its position is the whole of its value.
  * 2. Resolve the host to a routing snapshot — one query, by host alone (§8.9.4).
  * 3. Resolve the path against it, purely (§8.9.1).
- * 4. Read the version manifest and the matched build's file manifest, both
+ * 4. 🛑 Authorise, through the one `EffectiveAccess` function (§12.3), at
+ *    §8.11.1's position: after version resolution and **before** the forced
+ *    redirect pass. A forced rule is a redirect to somewhere else on the site,
+ *    and emitting one for a reader who may not read this version would disclose
+ *    that the version exists.
+ * 5. Read the version manifest and the matched build's file manifest, both
  *    immutable and both cached (§8.8.3, §8.4.18).
- * 5. Answer `304` from the manifest digest **before any handoff** (§8.9.9).
- * 6. Decide cacheability through the single three-way check (§9.3.2).
- * 7. Hand off.
+ * 6. Answer `304` from the manifest digest **before any handoff** (§8.9.9).
+ * 7. Decide cacheability through the single three-way check (§9.3.2), with the
+ *    authorisation decision supplying its third input.
+ * 8. 🛑 Re-check §8.7.7's component ceiling after the mount has matched, and
+ *    hand off.
  *
- * Step 5 before step 7 is the one that saves the most work: a repeat reader
+ * Step 6 before step 8 is the one that saves the most work: a repeat reader
  * gets a 304 without the edge touching storage at all.
+ *
+ * 🛑 Step 4 runs for a **public** project too. §8.12.14: "There MUST be no
+ * public fast path that bypasses an authorisation decision on a cached
+ * `is_public` flag." The decision is pure and the policy is one cached query,
+ * so the public path and the private path are the same path.
  */
 final class DocumentController
 {
@@ -81,6 +98,7 @@ final class DocumentController
         private readonly CanonicalLocations $canonical,
         private readonly Redirects $redirects,
         private readonly RedirectEngine $engine,
+        private readonly ReaderGate $gate,
     ) {}
 
     public function __invoke(Request $request): Response
@@ -122,6 +140,41 @@ final class DocumentController
             return $this->refuse(RejectionReason::NothingPublished, 'version.not_servable');
         }
 
+        $relative = VersionUrl::within($mount, $path);
+
+        /*
+         * 🛑 §12.3's one decision, at §8.11.1's position in the order: after
+         * version resolution, before the forced redirect pass.
+         *
+         * The component ceiling is **not** supplied yet — §8.7.7 requires it to
+         * be "re-evaluated on every request after mount matching", and the
+         * mount has not matched. It is re-checked below, once it has, and that
+         * second call is the requirement rather than a belt-and-braces repeat.
+         *
+         * 🛑 **`$route->remainder`, not `$relative`**, and the two are
+         * different coordinate spaces rather than the same one spelled twice.
+         * `$relative` is version-**rooted** — `/en/latest/guide.html` — which
+         * is what §8.11.2's redirect patterns are written against, as the
+         * twelve documented URL cases show. §12.3 makes an access rule's
+         * `path_patterns` "expressed **relative to a component mount**", and
+         * `remainder` is exactly that space: the path the resolver matches
+         * mount prefixes against. Handing the policy the version-rooted form
+         * would make an operator's `/internal` rule match nothing at all —
+         * silently, with the section they meant to protect governed by
+         * whatever rule comes next.
+         */
+        $decision = $this->gate->authorise(
+            mount: $mount,
+            version: $version,
+            language: $route->language,
+            path: $route->remainder,
+            surface: AccessSurface::Proxy,
+        );
+
+        if (! $decision->allowed) {
+            return $this->refuseAccess($decision, $mount, $version);
+        }
+
         /*
          * 🛑 §8.11.1's **forced** user rules, which come after authorisation
          * and before everything that looks at what exists.
@@ -132,7 +185,6 @@ final class DocumentController
          * unforced pass runs after the existence probe, further down, and
          * only catches paths that name nothing.
          */
-        $relative = VersionUrl::within($mount, $path);
         $rules = $this->redirects->setFor((string) $mount->project->id, $mount->project->routingEpoch);
 
         $forced = $this->engine->follow(
@@ -183,6 +235,38 @@ final class DocumentController
                 'component.no_match',
                 $version,
             );
+        }
+
+        /*
+         * 🛑 §8.7.7's ceiling, "**re-evaluated on every request after mount
+         * matching**" — which is this call and could not have been the one
+         * above, because until the mount matched there was no component to ask
+         * about.
+         *
+         * The requirement's reason: without it "any project admin in the
+         * organisation can mount any component onto a public project — a
+         * declassification primitive in a product whose headline feature is
+         * per-project authentication". The snapshot in the manifest is what is
+         * consulted rather than the component's current value, so loosening a
+         * ceiling cannot retroactively expose what was mounted under the old
+         * one; §8.7.7 makes that loosening "a separate audited action that
+         * re-validates every existing mount".
+         */
+        $ceiling = self::componentCeiling($mounts, $match->mountPath);
+
+        if ($ceiling !== null) {
+            $decision = $this->gate->authorise(
+                mount: $mount,
+                version: $version,
+                language: $route->language,
+                path: $route->remainder,
+                surface: AccessSurface::Proxy,
+                componentMinAccess: $ceiling,
+            );
+
+            if (! $decision->allowed) {
+                return $this->refuseAccess($decision, $mount, $version);
+            }
         }
 
         $file = $this->resolver->resolveFile($this->manifests->files($match->buildId), $match);
@@ -266,10 +350,18 @@ final class DocumentController
         $directives = CachePolicy::decide(
             projectIsPublic: $mount->project->visibility === 'public',
             versionIsPublic: $version->visibility === 'public',
-            // Phase 04 serves public documentation only (§17). The reader-policy
-            // input arrives with EffectiveAccess in Phase 21; it is a parameter
-            // now so the shape is right before anything serves.
-            rulePubliclyCacheable: true,
+            /*
+             * 🛑 §9.3.2's third input, now supplied by the decision rather than
+             * assumed. Phase 04 left this `true` with a note saying the reader
+             * policy would fill it in Phase 21; this is that.
+             *
+             * It can only narrow. A rule may declare itself publicly cacheable
+             * only when its requirement is literally the public terminal
+             * (refused at write time otherwise), so an allow that needed a
+             * credential arrives here as `false` and the response is private —
+             * which is the direction §9.3.2 cares about.
+             */
+            rulePubliclyCacheable: $decision->rulePubliclyCacheable,
             cacheTags: CachePolicy::tagsFor(
                 mountId: Uuid::toText($mount->id),
                 projectId: Uuid::toText($mount->project->id),
@@ -286,13 +378,13 @@ final class DocumentController
         $etag = '"'.$servedEntry['sha256'].'"';
 
         if ($this->matchesEtag($request, $etag)) {
-            return response('', 304, $directives->headers() + [
+            return response('', 304, $directives->headers() + ReaderGate::headers($decision) + [
                 'ETag' => $etag,
                 RejectNonCanonicalPath::RESOLVER_HEADER => 'file.not_modified',
             ]);
         }
 
-        $headers = $directives->headers() + $this->contentHeaders(
+        $headers = $directives->headers() + ReaderGate::headers($decision) + $this->contentHeaders(
             // The RESOLVED path, not the served one: the content type and the
             // inline/attachment disposition describe the document a reader
             // asked for, not the container it arrived in. A gzip sidecar of an
@@ -671,6 +763,85 @@ final class DocumentController
             ...$headers,
             'Content-Type' => 'text/html; charset=utf-8',
         ]);
+    }
+
+    /**
+     * 🛑 §8.12.23's refusal, with the status the decision already chose.
+     *
+     * > "The denial outcome is decided by the request's **authorisation
+     * > state**, never by its `Accept` or `Sec-Fetch-*` headers; those choose
+     * > only the *representation* of an already-decided outcome (§8.12.24)."
+     *
+     * So this method chooses no status. {@see AccessDecision::$status} is
+     * already 404, 403, 401 or 503 and this is where that number becomes a
+     * response — which is the whole reason the status lives on the decision
+     * rather than being computed by each of the four surfaces.
+     *
+     * 🛑 **Private cache directives, always.** §9.3.2 and the §17 exit
+     * criterion both: a refusal about something private "carries private cache
+     * directives on both axes with no cache tag".
+     * {@see CachePolicy::forAbsence()} already makes that decision from the
+     * project and version, and the third argument is the decision's — a 404
+     * that §12 used to hide something is never publicly cacheable, however
+     * cacheable an ordinary 404 is (§8.11.8).
+     */
+    private function refuseAccess(
+        AccessDecision $decision,
+        SnapshotMount $mount,
+        SnapshotVersion $version,
+    ): Response {
+        $directives = CachePolicy::forAbsence(
+            projectIsPublic: $mount->project->visibility === 'public',
+            versionIsPublic: $version->visibility === 'public',
+            rulePubliclyCacheable: $decision->rulePubliclyCacheable,
+        );
+
+        $headers = [
+            RejectNonCanonicalPath::RESOLVER_HEADER => 'access.'.$decision->reason->value,
+            'X-Content-Type-Options' => 'nosniff',
+            ...$directives->headers(),
+            ...ReaderGate::headers($decision),
+        ];
+
+        /*
+         * 🛑 An **empty** body for everything that is not a plain 404.
+         *
+         * §8.12.24: "Where §8.12.23 does **not** permit a challenge, both
+         * client classes receive the same `deny_status` and the same empty
+         * body." A 401 and a 403 therefore carry nothing — and the branded 404
+         * page is served only where the answer is indistinguishable from
+         * absence, which is the one case where a page is not a disclosure.
+         */
+        if ($decision->status !== 404) {
+            return response('', $decision->status, $headers);
+        }
+
+        return response(NotFoundChain::builtIn(), 404, [
+            ...$headers,
+            'Content-Type' => 'text/html; charset=utf-8',
+        ]);
+    }
+
+    /**
+     * §8.7.7's snapshotted ceiling for the matched mount, or null.
+     *
+     * Read from the manifest's own mount row rather than from
+     * {@see MountMatch}, which carries the mount path and the
+     * build id and is **frozen** by §17.4. A field on a frozen value object is
+     * an ADR; a lookup in the array the caller already holds is not, and the
+     * two are indistinguishable from the outside.
+     *
+     * @param  list<array{mount_path: string, build_id: string|null, min_access?: string}>  $mounts
+     */
+    private static function componentCeiling(array $mounts, string $mountPath): ?AccessLevel
+    {
+        foreach ($mounts as $row) {
+            if ($row['mount_path'] === $mountPath) {
+                return AccessLevel::tryFrom($row['min_access'] ?? '');
+            }
+        }
+
+        return null;
     }
 
     /**

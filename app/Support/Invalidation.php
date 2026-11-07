@@ -83,6 +83,75 @@ final class Invalidation
     }
 
     /**
+     * 🛑 Bump a project's `authz_epoch` and, for a policy write, its
+     * `policy_generation` (§10.8, §8.12).
+     *
+     * §10.8: `authz_epoch` is bumped by "policy, rule, binding, visibility
+     * change" and keys "decision caches, grant `ep`". §8.12.13 is the reason it
+     * has to be a bump rather than a purge: "revoking a session or editing a
+     * policy takes effect on the **next request**, because the decision is made
+     * in the application against the current epoch". A cache keyed on the epoch
+     * is addressed differently the moment it moves, so there is no window in
+     * which a stale decision can be read — the same structural zero
+     * `routing_epoch` gets, for the same reason.
+     *
+     * 🛑 **Two counters, one statement.** A policy write moves both, and it
+     * moves them in a single `UPDATE` so there is no instant at which the
+     * decision caches have been invalidated and search has not. §8.12.21 makes
+     * search fail closed while `search_generation` lags `policy_generation`, so
+     * the order of two separate statements would decide whether a project's
+     * search is briefly disabled or briefly wrong — and one of those is a
+     * disclosure.
+     *
+     * @param  string  $projectId  raw 16 bytes
+     * @param  string  $cause  one of §10.8's four: policy, rule, binding,
+     *                         visibility change
+     * @param  bool  $policyWrite  true when a policy or rule row changed, which
+     *                             §10.8 makes the trigger for
+     *                             `policy_generation`
+     * @param  string|null  $organisationId  raw 16 bytes, for the audit record
+     * @param  string|null  $actorId  raw 16 bytes, or null when the system did it
+     */
+    public static function bumpAuthz(
+        string $projectId,
+        string $cause,
+        bool $policyWrite = false,
+        ?string $organisationId = null,
+        ?string $actorId = null,
+    ): void {
+        $columns = ['authz_epoch' => DB::raw('`authz_epoch` + 1')];
+
+        if ($policyWrite) {
+            $columns['policy_generation'] = DB::raw('`policy_generation` + 1');
+        }
+
+        $affected = DB::table('projects')->where('id', $projectId)->update($columns);
+
+        if ($affected === 0 || $organisationId === null) {
+            // Same reasoning as bumpRouting(): a deleted project needs no bump,
+            // and without an organisation there is no chain to append to.
+            return;
+        }
+
+        $epochs = [Epoch::Authz->value];
+
+        if ($policyWrite) {
+            $epochs[] = Epoch::PolicyGeneration->value;
+        }
+
+        Audit::record(
+            action: 'epoch.bumped',
+            actorType: $actorId === null ? ActorType::System : ActorType::User,
+            organisationId: $organisationId,
+            actorId: $actorId,
+            subjectType: 'project',
+            subjectId: $projectId,
+            // §8.22.5: identifiers and fixed vocabulary only.
+            payload: ['epoch' => implode(',', $epochs), 'cause' => $cause],
+        );
+    }
+
+    /**
      * The increment expression for `serving_epoch` (§8.8.4, §10.8).
      *
      * 🛑 An **expression**, not an update, and that is the point. §8.8.4 makes

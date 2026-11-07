@@ -12,6 +12,7 @@ use App\Audit\Audit;
 use App\Auth\AccessLevel;
 use App\Auth\Capability;
 use App\Models\Project;
+use App\Support\Invalidation;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -74,6 +75,42 @@ final class ProjectVisibilityController
                     subjectType: 'project',
                     subjectId: $project->id,
                     payload: ['from' => $was->value, 'to' => $now->value],
+                );
+
+                /*
+                 * 🛑 Both epochs, inside the same transaction (§10.8, Phase 21).
+                 *
+                 * §10.8 lists "visibility change" among the four things that
+                 * bump `authz_epoch`, and §8.12.13 calls a change to this
+                 * column "an access-stopping event requiring an epoch bump".
+                 * Until Phase 21 there was no decision for it to invalidate,
+                 * so the omission cost nothing; now there is, and it would
+                 * cost everything the bound is for — §8.12.15 promises a
+                 * policy or visibility change "takes effect on the **next
+                 * request**", and the decision caches key on this number.
+                 *
+                 * 🛑 And `routing_epoch` too, which is the half that is easy to
+                 * miss: `projects.visibility` is carried in the **routing
+                 * snapshot**, cached on the routing epoch (§8.9.10). Bumping
+                 * only the authorisation epoch would re-key the policy cache
+                 * and leave `EffectiveAccess` deciding against the visibility
+                 * the snapshot still held — a project flipped to `members` that
+                 * went on serving publicly for the snapshot's TTL, which is
+                 * precisely the stale-read-in-the-unsafe-direction §8.12.14
+                 * refuses.
+                 */
+                Invalidation::bumpAuthz(
+                    projectId: (string) $project->id,
+                    cause: 'visibility',
+                    organisationId: (string) $project->organisation_id,
+                    actorId: (string) $request->user()->id,
+                );
+
+                Invalidation::bumpRouting(
+                    projectId: (string) $project->id,
+                    cause: 'visibility',
+                    organisationId: (string) $project->organisation_id,
+                    actorId: (string) $request->user()->id,
                 );
             });
         }

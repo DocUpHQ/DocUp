@@ -1338,4 +1338,225 @@ final class ArchitectureTest extends TestCase
                 .implode(', ', $offenders),
         );
     }
+
+    /**
+     * 🛑 SPEC 12.3 and SPEC 4.3/7: "One pure function, the **sole** call site
+     * for every reader access decision, enforced by an architecture test."
+     *
+     * This is that test. The argument is the one SPEC 8.8.2 makes for
+     * `ArtifactIngestor` and SPEC 8.3.9 for `HardenedEgressClient`: a second
+     * decision is not a duplication bug but an **unenforced** one. It gets
+     * written in a hurry, for a download or a search filter or an addons
+     * payload, by somebody who did not know this function existed - and it is
+     * the one that does not consult the component ceiling, because the person
+     * writing it was thinking about versions.
+     *
+     * `app/Access` is allowlisted **by path**, as the egress and artifact tests
+     * allowlist `app/Providers`, so the exemption cannot be claimed by writing
+     * the right words in a file somewhere else.
+     */
+    public function test_only_the_access_namespace_decides_reader_access(): void
+    {
+        $offenders = [];
+
+        /*
+         * Two ways to bypass the function: call it from outside, or assemble
+         * its answer yourself. The last three entries catch the second - a
+         * caller who found the pieces and built a verdict of their own.
+         */
+        $mechanisms = [
+            'EffectiveAccess::' => 'calls the decision function outside App\Access',
+            'new AccessRequest' => 'assembles a decision input outside App\Access',
+            'new AccessDecision' => 'constructs a decision outside App\Access',
+            'Requirement::parse' => 'validates a requirement tree outside App\Access',
+        ];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            if (str_starts_with($relative, 'app/Access/') || str_starts_with($relative, 'app/Providers/')) {
+                continue;
+            }
+
+            $source = $this->code($file);
+
+            foreach ($mechanisms as $needle => $what) {
+                if (str_contains($source, $needle)) {
+                    $offenders[] = $relative.' '.$what;
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'SPEC 12.3: EffectiveAccess is the sole call site for a reader access decision: '
+                .implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 17's Phase 21 exit criterion: "The architecture test fails when a
+     * second class reads the policy tables."
+     *
+     * The reason is SPEC 8.12.6's policy language. First-match-wins is not what
+     * anybody writes by accident: the natural way to read an ordered rule list
+     * is to iterate it looking for an allow, which turns a list containing a
+     * deny into a list that ignores it. One reader, one interpretation.
+     *
+     * Asserted on the table names rather than on a class, because the bypass is
+     * a query rather than a dependency - a `DB::table` call naming
+     * `reader_policy_rules` in a search filter or a flyout builder is exactly
+     * the shape this forbids.
+     */
+    public function test_only_the_access_namespace_reads_the_policy_tables(): void
+    {
+        $tables = ['reader_policies', 'reader_policy_rules'];
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            /*
+             * The namespace that owns them, the migrations that create them,
+             * and the factories and seeders that populate test fixtures. A
+             * factory writes rows; it does not interpret them, which is the
+             * thing this test is about.
+             */
+            if (str_starts_with($relative, 'app/Access/')
+                || str_starts_with($relative, 'database/migrations/')
+                || str_starts_with($relative, 'database/factories/')
+                || str_starts_with($relative, 'database/seeders/')) {
+                continue;
+            }
+
+            $source = $this->code($file);
+
+            foreach ($tables as $table) {
+                if (str_contains($source, "'".$table."'") || str_contains($source, '"'.$table.'"')) {
+                    $offenders[] = $relative.' reads '.$table;
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'SPEC 17 P21: a second reader of the policy tables is a second reading of '
+                .'first-match-wins: '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.12.23: "The denial outcome is decided by the request's
+     * **authorisation state**, never by its `Accept` or `Sec-Fetch-*` headers;
+     * those choose only the *representation* of an already-decided outcome."
+     *
+     * Enforced structurally rather than by review: the decision function and
+     * its inputs may not so much as mention a request or a header. SPEC 8.12.24
+     * then lets a controller pick the body shape from `Accept`, which is why
+     * the ban is on these four files and not on the serving namespace.
+     *
+     * The same technique as Phase 20's clock test on `RedirectEngine`, and for
+     * the same reason: a property asserted by grepping the source cannot be
+     * lost to a refactor that still passes its behavioural tests.
+     */
+    public function test_the_decision_function_cannot_see_a_request_or_a_header(): void
+    {
+        $files = [
+            'app/Access/EffectiveAccess.php',
+            'app/Access/AccessRequest.php',
+            'app/Access/ReaderContext.php',
+            'app/Access/Requirement.php',
+        ];
+
+        $forbidden = ['Illuminate\Http\Request', 'Accept', 'Sec-Fetch', 'User-Agent', '$_SERVER'];
+        $offenders = [];
+
+        foreach ($files as $relative) {
+            $source = $this->code(base_path($relative));
+
+            foreach ($forbidden as $needle) {
+                if (str_contains($source, $needle)) {
+                    $offenders[] = $relative.' mentions '.$needle;
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            '🛑 SPEC 8.12.23: an authorisation decision never varies with a client-supplied '
+                .'header: '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.12.14: "There MUST be **no public fast path** that bypasses an
+     * authorisation decision on a cached `is_public` flag."
+     *
+     * A stale read in the unsafe direction "serves private bytes with no
+     * decision at all, which is a worse class of bug than a stale allow for an
+     * already-authorised reader" - so there must be no cached boolean standing
+     * in for the decision anywhere.
+     *
+     * 🛑 **Asserted on what is cached, not on a spelling**, and the first
+     * version of this test is why. It forbade the identifiers `is_public` and
+     * `isPublic(` anywhere under `app/`, and flagged three files that have
+     * nothing to do with reader access: `component_variables.is_public` is
+     * SPEC 8.7's "this build variable is not a secret", and the composition
+     * controller's `isPublic()` is about a cross-reference target. A gate that
+     * fires on a word rather than on a behaviour is a gate somebody silences.
+     *
+     * What SPEC 8.12.14 actually forbids is a **cached decision**. So the
+     * property asserted is that the decision function touches no cache at all,
+     * and that the only thing `App\Access` caches is the policy — keyed on
+     * `authz_epoch`, which is what gives SPEC 8.12.15 its one-request bound. A
+     * cached *policy* is safe because a bump addresses a different key; a
+     * cached *verdict* is not, because the reader's context is not in the key.
+     */
+    public function test_no_cached_verdict_stands_in_for_a_decision(): void
+    {
+        $offenders = [];
+
+        /*
+         * The decision function and its inputs: no cache, no store, no
+         * memoisation. SPEC 8.12.13's Tier A does permit "a short per-worker
+         * LRU memoising (cache-key cookie, version, directory) → decision" —
+         * that arrives with the grant in Phase 22, is keyed on the reader's own
+         * opaque cookie, and will live beside the gate rather than inside the
+         * function. Nothing here may anticipate it.
+         */
+        foreach (['EffectiveAccess', 'AccessRequest', 'AccessDecision', 'Requirement', 'ReaderContext'] as $class) {
+            $source = $this->code(base_path('app/Access/'.$class.'.php'));
+
+            foreach (['Cache::', 'Redis::', 'apcu_', 'static $'] as $needle) {
+                if (str_contains($source, $needle)) {
+                    $offenders[] = $class.' caches with '.$needle;
+                }
+            }
+        }
+
+        /*
+         * And in the namespace as a whole, the only cache key is the policy's.
+         * A second key would be a cached verdict under another name.
+         */
+        foreach (glob(base_path('app/Access/*.php')) ?: [] as $file) {
+            $source = $this->code($file);
+
+            if (! str_contains($source, 'Cache::')) {
+                continue;
+            }
+
+            if (! str_contains($source, "'authz:policy:'")) {
+                $offenders[] = basename($file).' caches something other than the policy';
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            '🛑 SPEC 8.12.14: no cached verdict may stand in for the decision: '.implode('; ', $offenders),
+        );
+    }
 }

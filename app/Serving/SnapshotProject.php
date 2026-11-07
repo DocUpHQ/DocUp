@@ -26,6 +26,15 @@ final class SnapshotProject
      * @param  array<string, string>  $formerSlugs  §8.6.6's 301 table, keyed
      *                                              `<language>:<old slug>` =>
      *                                              the version's id
+     * @param  string|null  $organisationId  raw 16 bytes, for the decision log
+     * @param  int  $authzEpoch  §10.8; the policy cache's key, so a policy edit
+     *                           takes effect on the next request with no purge
+     * @param  int  $policyGeneration  §8.12.21; compared against the search
+     *                                 generation, which fails closed
+     * @param  int  $denyStatus  §8.12.23's per-project 404 or 403. 🛑 The
+     *                           anonymous-never half of that requirement is not
+     *                           here and cannot be: it depends on the request,
+     *                           and it lives in `EffectiveAccess`
      */
     public function __construct(
         public readonly string $id,
@@ -38,6 +47,10 @@ final class SnapshotProject
         public readonly ?string $defaultVersionId,
         public readonly array $versions = [],
         public readonly array $formerSlugs = [],
+        public readonly ?string $organisationId = null,
+        public readonly int $authzEpoch = 0,
+        public readonly int $policyGeneration = 0,
+        public readonly int $denyStatus = 404,
     ) {}
 
     /**

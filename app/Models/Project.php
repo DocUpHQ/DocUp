@@ -130,6 +130,16 @@ final class Project extends Model
             'has_ever_been_guarded' => 'boolean',
             'anonymous_build_logs' => 'boolean',
             'consecutive_build_failures' => 'integer',
+
+            /*
+             * §10.8's two epochs this project owns on the authorisation side,
+             * cast so a comparison is numeric. 🛑 `deny_status` is deliberately
+             * **not** cast to an enum: §8.12.23 makes it the project's
+             * preference and `EffectiveAccess` the authority, and an enum here
+             * would invite a caller to read it as the answer.
+             */
+            'authz_epoch' => 'integer',
+            'policy_generation' => 'integer',
             'webhook_triggering_disabled_at' => 'datetime:Y-m-d H:i:s.v',
             'created_at' => 'datetime:Y-m-d H:i:s.v',
             'updated_at' => 'datetime:Y-m-d H:i:s.v',

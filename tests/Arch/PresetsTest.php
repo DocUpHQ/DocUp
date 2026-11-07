@@ -198,6 +198,31 @@ arch()->preset()->laravel()
         // version" as two ideas, which a shared App\Enums would file as
         // one. phpstan-strict.neon also raises app/Redirects to level 9.
         'App\Redirects',
+        /*
+         * Phase 21, and here the argument is stronger than for any of the
+         * thirteen before it. §12.3 requires `EffectiveAccess` to be the
+         * **sole** call site for a reader access decision, enforced by an
+         * architecture test — and that test is written on the namespace
+         * (`app/Access` is the allowlisted path). Moving `AccessLeaf`,
+         * `AccessSurface`, `AccessReason` and `RequirementRejection` to
+         * App\Enums and `PolicyRefused` to App\Exceptions would scatter the
+         * authorisation model across three namespaces and leave the sole-call
+         * -site test asserting something narrower than §12.3 says.
+         *
+         * 🛑 `AccessLeaf` in particular cannot leave: §8.12.7's satisfiability
+         * invariant "is defined over that classification", and §8.12.17 gives
+         * it in **one** table precisely so there is one answer to "does this
+         * leaf bear an identity". A second classification is how `ip_allowlist`
+         * ends up counting as authentication in one of the two places.
+         *
+         * `RequirementRejection`'s values are §8.1.11 public contract —
+         * `requirement.satisfiable_without_identity` and
+         * `policy.exposure_widens` reach an operator's form and the API's error
+         * bodies — and `PolicyRefused` carries one, so a shared App\Exceptions
+         * would import the access namespace into a namespace everything else
+         * depends on. phpstan-strict.neon also raises app/Access to level 9.
+         */
+        'App\Access',
     ]);
 
 arch()->preset()->strict()

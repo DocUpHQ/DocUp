@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace App\Docs;
 
+use App\Access\DecisionTable;
 use App\Composition\ModeBehaviour;
 use App\Composition\SinglePass\Composer;
 use App\Redirects\UrlCases;
@@ -60,6 +61,17 @@ final class GeneratedBlocks
              */
             'docs/operator/docs/redirects.md' => [
                 'url-cases' => UrlCases::toMarkdown(...),
+            ],
+            /*
+             * 🛑 §12.3 asks for "a **generated exhaustive decision table** as
+             * its test", and §17's Phase 21 exit criterion asserts the 48-case
+             * matrix "at 100%". Both read the same `DecisionTable`, so the
+             * table an operator reads is the one the suite drove — which is
+             * the property that matters most here of anywhere: an operator who
+             * reads a stale access matrix makes a project public on it.
+             */
+            'docs/operator/docs/access.md' => [
+                'decision-table' => DecisionTable::toMarkdown(...),
             ],
         ];
     }

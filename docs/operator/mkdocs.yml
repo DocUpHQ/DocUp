@@ -5,6 +5,7 @@ nav:
   - Installing: installing.md
   - Composition modes: composition.md
   - Redirects and crawlers: redirects.md
+  - Who may read it: access.md
   - Running it: operations.md
 
 # 🛑 Flat .html URLs, not MkDocs' default directory URLs.
