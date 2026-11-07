@@ -112,7 +112,15 @@ final readonly class AuthzController
          * nginx passes the client's `Host` through to the subrequest, which is
          * what makes this endpoint answer for the right domain at all.
          */
-        $query = (string) ($request->server('QUERY_STRING') ?? '');
+        /*
+         * Narrowed with `is_string` rather than cast: `server()` is typed
+         * `float|int|list<string>|string|null`, and §9.4's level 9 refuses a
+         * cast from it — correctly, because an array arriving here would
+         * stringify to `"Array"` and then fail `str_starts_with`, which is a
+         * refusal reached by accident rather than by rule.
+         */
+        $raw = $request->server('QUERY_STRING');
+        $query = is_string($raw) ? $raw : '';
         $uri = str_starts_with($query, 'uri=') ? substr($query, 4) : '';
         $path = (string) (parse_url(urldecode($uri), PHP_URL_PATH) ?: '/');
 
