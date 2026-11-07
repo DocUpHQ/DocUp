@@ -51,7 +51,27 @@ final class ReaderContext
      * @param  bool  $credentialRejected  the presented credential was expired,
      *                                    revoked or out of scope
      * @param  CredentialScope|null  $scope  §12.3's last conjunct, when the
-     *                                       satisfying leaf carries one
+     *                                       satisfying leaf carries one. 🛑 Use
+     *                                       {@see self::scopeFor()} to read it:
+     *                                       a reader may hold a share **and** a
+     *                                       bearer token, and this single field
+     *                                       cannot say which scope belongs to
+     *                                       which.
+     * @param  array<string, CredentialScope>  $scopes  per-leaf scopes, keyed by
+     *                                                  {@see AccessLeaf} value.
+     *                                                  🛑 Phase 23 added this
+     *                                                  because one field is
+     *                                                  wrong for a reader who
+     *                                                  presents two scoped
+     *                                                  credentials: §12.3
+     *                                                  applies the scope of the
+     *                                                  **satisfying** leaf, and
+     *                                                  with one field a reader
+     *                                                  holding a wide share
+     *                                                  link and a narrow token
+     *                                                  would be judged on the
+     *                                                  share while the rule
+     *                                                  named the token.
      * @param  string|null  $subject  an opaque reader subject, for the decision
      *                                log's keyed digest. 🛑 Never an email:
      *                                §8.12.1 forbids email for linking or
@@ -65,7 +85,29 @@ final class ReaderContext
         public readonly bool $credentialRejected = false,
         public readonly ?CredentialScope $scope = null,
         public readonly ?string $subject = null,
+        public readonly array $scopes = [],
     ) {}
+
+    /**
+     * 🛑 The scope that belongs to one leaf — §12.3's last conjunct, read
+     * correctly.
+     *
+     * > "share/bearer scope covers (project, version, path) **if that was the
+     * > satisfying leaf**"
+     *
+     * The conditional is on the *satisfying* leaf, so the scope has to be
+     * looked up by it. A reader presenting a share link for `/guide/` and a
+     * bearer token for `/api/` satisfies two scoped leaves with two different
+     * scopes, and which one applies depends on which leaf the matched rule
+     * named — not on which the transport happened to store.
+     *
+     * Falls back to {@see self::$scope} so Phase 21 and Phase 22's
+     * single-credential contexts keep working unchanged.
+     */
+    public function scopeFor(AccessLeaf $leaf): ?CredentialScope
+    {
+        return $this->scopes[$leaf->value] ?? $this->scope;
+    }
 
     /** An anonymous reader: the public leaf and nothing else. */
     public static function anonymous(): self

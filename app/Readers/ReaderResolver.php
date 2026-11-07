@@ -11,6 +11,8 @@ use App\Access\AccessDecision;
 use App\Access\AccessSurface;
 use App\Access\EffectiveAccess;
 use App\Access\ReaderContext;
+use App\Auth\Providers\ProviderResolver;
+use App\Auth\Providers\ReaderPresentation;
 use App\Readers\Grants\GrantMinter;
 use App\Readers\Grants\GrantVerifier;
 use App\Serving\SnapshotProject;
@@ -56,6 +58,7 @@ final readonly class ReaderResolver
         private GrantVerifier $verifier,
         private GrantMinter $minter,
         private ReaderSessions $sessions,
+        private ProviderResolver $providers,
     ) {}
 
     /**
@@ -189,17 +192,12 @@ final readonly class ReaderResolver
         bool $credentialRejected,
     ): EstablishedReader {
         $handle = self::cookie($request, ReaderCookies::SESSION);
+        $session = null;
+        $sessionRejected = false;
 
-        if ($handle === null) {
-            return new EstablishedReader(
-                context: ReaderContext::anonymous(),
-                credentialRejected: $credentialRejected,
-            );
-        }
+        if ($handle !== null) {
+            $session = $this->sessions->resolve($handle, $project->id, $domainId, $now);
 
-        $session = $this->sessions->resolve($handle, $project->id, $domainId, $now);
-
-        if ($session === null) {
             /*
              * 🛑 A session handle that resolves to nothing **is** a rejected
              * credential, even though nothing cryptographic failed. §8.12.23's
@@ -208,17 +206,90 @@ final readonly class ReaderResolver
              * fact, and a reader whose session an administrator ended should be
              * asked to sign in again rather than told the project vanished.
              */
+            $sessionRejected = $session === null;
+        }
+
+        /*
+         * 🛑 **Phase 23: the bindings run even when a session resolved.**
+         *
+         * The obvious shape is "session, or else providers", and it is wrong:
+         * §12.3 lets a rule name a specific binding, so a dashboard member who
+         * also holds a share link for `/internal/` must satisfy *both* leaves
+         * or a rule naming `{share}` would refuse them. And §8.12.19's degraded
+         * check has to run whatever else succeeded, or a project with a healthy
+         * portal and a broken IdP would serve from the portal and never report
+         * the IdP.
+         *
+         * So the session supplies the **floor** — `members`, which no driver
+         * can reach on its own — and the providers add leaves on top.
+         */
+        $sessionContext = $session === null ? null : $this->sessions->contextFor($session);
+
+        $outcome = $this->providers->resolve($project, new ReaderPresentation(
+            bearer: self::bearer($request),
+            shareSecret: self::cookie($request, ReaderCookies::SHARE),
+            password: null,
+            /*
+             * 🛑 `$request->ip()`, never a header. §8.9.4 forbids a trusted
+             * request header anywhere in the request path, so this is the
+             * `TrustProxies`-resolved address and not `X-Forwarded-For` as
+             * sent — the same source {@see \App\Http\Middleware\OnlyFromLoopback}
+             * reads, and for the same reason.
+             */
+            remoteAddress: $request->ip(),
+            sessionSubject: $sessionContext?->subject,
+        ));
+
+        /*
+         * 🛑 §8.12.19's branded 503, carried on the established reader rather
+         * than thrown. The decision function must still run — §8.12.14 forbids
+         * a path that bypasses it — and the controller is what turns this into
+         * a response, because only the controller knows how to render one.
+         */
+        if ($outcome->degraded) {
             return new EstablishedReader(
                 context: ReaderContext::anonymous(),
-                credentialRejected: true,
+                session: $session,
+                credentialRejected: $credentialRejected || $sessionRejected,
+                degradedBinding: $outcome->degradedBinding,
             );
         }
 
         return new EstablishedReader(
-            context: $this->sessions->contextFor($session),
+            /*
+             * 🛑 The session is passed **whole**, not just its level. See
+             * {@see ProviderOutcome::toReaderContext()}: taking only the level
+             * lost the `{binding}` leaf a Phase 22 member holds on a project
+             * with no bindings configured, which is the case §17 requires to
+             * keep working.
+             */
+            context: $outcome->toReaderContext($sessionContext),
             session: $session,
-            credentialRejected: $credentialRejected,
+            credentialRejected: $credentialRejected || $sessionRejected,
         );
+    }
+
+    /**
+     * §8.12.16's `Authorization: Bearer` reader token.
+     *
+     * 🛑 Parsed strictly: the scheme is compared case-insensitively because RFC
+     * 9110 makes it so, and anything other than exactly one `Bearer` token is
+     * nothing. A lenient parse here would be a parse an attacker chooses the
+     * shape of.
+     */
+    private static function bearer(Request $request): ?string
+    {
+        $header = $request->headers->get('Authorization');
+
+        if (! is_string($header) || $header === '') {
+            return null;
+        }
+
+        if (preg_match('/^Bearer ([A-Za-z0-9._~+\/-]+=*)$/i', trim($header), $matches) !== 1) {
+            return null;
+        }
+
+        return $matches[1];
     }
 
     /**

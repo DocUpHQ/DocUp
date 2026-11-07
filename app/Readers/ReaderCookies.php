@@ -59,6 +59,43 @@ final readonly class ReaderCookies
     public const string STATE = '__Host-docup_state';
 
     /**
+     * 🛑 §8.12.16's share-link cookie — **a sixth row, and a proposed amendment
+     * to §12.4.**
+     *
+     * §8.12.16 requires a share link to be "converted to a cookie on first use
+     * and 302'd to a clean URL", and §12.4's table has five rows with nowhere to
+     * put it. One of the two documents is incomplete, and it is §12.4: the
+     * missing thing is a cookie, and §12.4 is the table of cookies.
+     *
+     * 🛑 Two alternatives were considered and rejected, because each would have
+     * avoided the amendment by making the mechanism worse:
+     *
+     * - **Reuse `__Host-docup_rsess`** by having a share link establish a
+     *   `docs_sessions` row. `docs_sessions` requires `user_id` XOR
+     *   `reader_identity_id` — a CHECK §8.12.1's disjointness depends on — and a
+     *   link holder is neither. Minting a reader identity for a *link* would put
+     *   a credential into the population §8.12.1 reserves for principals, and
+     *   the row carries no scope column, so §8.12.16's "version and path scope"
+     *   would have to be re-derived by a reverse lookup that does not exist.
+     * - **Promote the link to a session.** Revocation would then depend on an
+     *   epoch bump rather than on the next database read, which is strictly
+     *   weaker than what §8.12.16 asks for.
+     *
+     * Keeping it a credential means every request re-checks the database, so a
+     * revoked link stops working on its next use with nothing to invalidate.
+     *
+     * And it grows §12.4's table by a **row**, not by an exception: this cookie
+     * goes through the same factory and carries the same `__Host-`, Secure,
+     * HttpOnly, `SameSite=Lax`, `Path=/` attributes as the other five.
+     *
+     * TTL is the credential's own: a link expires when §8.12.16 says it does,
+     * and a cookie outliving it would present a secret the database refuses —
+     * which is harmless but makes every request after expiry a rejected
+     * credential rather than an absent one.
+     */
+    public const string SHARE = '__Host-docup_share';
+
+    /**
      * §12.4's dashboard cookie, named here only so the table is complete and
      * testable in one place.
      *
@@ -91,7 +128,15 @@ final readonly class ReaderCookies
      */
     public static function names(): array
     {
-        return [self::DASHBOARD, self::SESSION, self::GRANT, self::CACHE_KEY, self::STATE];
+        return [
+            self::DASHBOARD,
+            self::SESSION,
+            self::GRANT,
+            self::CACHE_KEY,
+            self::STATE,
+            /* 🛑 The sixth; see the constant for the §12.4 amendment it proposes. */
+            self::SHARE,
+        ];
     }
 
     /**
@@ -151,6 +196,25 @@ final readonly class ReaderCookies
     public static function state(string $value): Cookie
     {
         return self::make(self::STATE, $value, self::STATE_TTL_SECONDS);
+    }
+
+    /**
+     * §8.12.16's share link, taken out of the URL.
+     *
+     * 🛑 The TTL is the **credential's own expiry**, passed in rather than
+     * fixed, because §8.12.16 makes every link's expiry mandatory and
+     * per-link. A fixed TTL here would be a second expiry nobody configured —
+     * shorter than the link, and the reader would be asked for the URL again
+     * halfway through a day they were given a week for.
+     *
+     * @param  int  $ttlSeconds  seconds until the credential expires; clamped
+     *                           to at least one second so an already-expired
+     *                           link does not produce a cookie the browser
+     *                           discards before the 302 lands
+     */
+    public static function share(string $secret, int $ttlSeconds): Cookie
+    {
+        return self::make(self::SHARE, $secret, max($ttlSeconds, 1));
     }
 
     /**
