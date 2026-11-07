@@ -76,7 +76,16 @@ final readonly class Grant
      *                                   rule admitted, when it was path-scoped
      * @param  list<string>  $satisfiedBindings  binding ids this reader
      *                                           satisfied, for a `{binding}`
-     *                                           leaf naming one. 🛑 Empty
+     *                                           leaf naming one. 🛑 **UUID
+     *                                           text**, because that is what
+     *                                           §8.12.6's requirement JSON
+     *                                           holds and
+     *                                           `ReaderContext::satisfies()`
+     *                                           compares strictly — P24 found
+     *                                           the verifier parsing these as
+     *                                           bytes, which made every
+     *                                           binding-named rule fail on the
+     *                                           grant path. Empty
      *                                           throughout Phase 22 — no
      *                                           binding exists until P23 — and
      *                                           carried now because a grant
