@@ -85,6 +85,13 @@ final class RoutingSnapshotLoader
                         kind: $candidate->kind,
                         servable: true,
                         mounts: $this->mountsFor($row->id),
+                        /*
+                         * 🛑 The row that actually answered. §8.12.11 binds a
+                         * grant's audience to this identifier, so taking it
+                         * from anywhere but the matched row would let one
+                         * domain's grant verify on another's.
+                         */
+                        domainId: $row->id,
                     );
                 }
             }
@@ -218,6 +225,7 @@ final class RoutingSnapshotLoader
          *     versioning_scheme: string,
          *     routing_epoch: int,
          *     authz_epoch: int,
+         *     identity_epoch: int,
          *     policy_generation: int,
          *     visibility: string,
          *     deny_status: string,
@@ -247,6 +255,7 @@ final class RoutingSnapshotLoader
                  * without a purge (§8.12.15).
                  */
                 'authz_epoch',
+                'identity_epoch',
                 'policy_generation',
                 'visibility',
                 'deny_status',
@@ -377,6 +386,7 @@ final class RoutingSnapshotLoader
                     chromeMode: (string) $project->chrome_mode,
                     organisationId: (string) $project->organisation_id,
                     authzEpoch: (int) $project->authz_epoch,
+                    identityEpoch: (int) $project->identity_epoch,
                     policyGeneration: (int) $project->policy_generation,
                     denyStatus: (int) $project->deny_status,
                     defaultVersionId: $project->default_version_id === null

@@ -108,6 +108,35 @@ return [
     'edge' => [
         'driver' => env('DOCUP_EDGE_DRIVER', 'caddy-intercept'),
         'internal_prefix' => '/_internal',
+
+        /*
+        |-----------------------------------------------------------------------
+        | 🛑 SPEC 8.12.13's enforcement ladder
+        |-----------------------------------------------------------------------
+        | Three topologies from one grant, and the default is the one with
+        | nothing at the edge to misconfigure:
+        |
+        |   `a` — every request authorised in PHP, bytes handed off by internal
+        |         redirect. The shipped compose file.
+        |   `b` — nginx `auth_request` against `/_/authz`, cached on the opaque
+        |         cache-key cookie, so one PHP call authorises a 60-asset page.
+        |         Needs the `fastcgi_cache` directives in deploy/nginx.conf.
+        |   `c` — edge-local token verification.
+        |
+        | 🛑 Tier C carries a MANDATORY condition and `docup:doctor` refuses it
+        | without one: "the edge MUST consume a revocation epoch feed at
+        | ≤5-second intervals and refuse any grant below the current epoch …
+        | Without that feed, a project flipped public→private keeps serving to
+        | anonymous readers for the grant lifetime — the largest exposure window
+        | any design in this area produces."
+        |
+        | `epoch_feed_seconds` is the operator asserting how often their edge
+        | polls SPEC 20.2's feed. Unset means "not configured", which is what
+        | `doctor` refuses Tier C for — a default would be the application
+        | asserting something only the edge knows.
+        */
+        'enforcement_tier' => env('DOCUP_ENFORCEMENT_TIER', 'a'),
+        'epoch_feed_seconds' => env('DOCUP_EDGE_EPOCH_FEED_SECONDS'),
     ],
 
     /*

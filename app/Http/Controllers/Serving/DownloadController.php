@@ -12,6 +12,7 @@ use App\Access\AccessSurface;
 use App\Access\ReaderGate;
 use App\Http\Controllers\Controller;
 use App\Http\Middleware\RejectNonCanonicalPath;
+use App\Readers\ReaderResolver;
 use App\Serving\ArtifactHandoff;
 use App\Serving\CachePolicy;
 use App\Serving\ManifestReader;
@@ -54,6 +55,7 @@ final class DownloadController extends Controller
         private readonly ManifestReader $manifests,
         private readonly ArtifactHandoff $handoff,
         private readonly ReaderGate $gate,
+        private readonly ReaderResolver $readers,
     ) {}
 
     /**
@@ -131,12 +133,27 @@ final class DownloadController extends Controller
          * which is the right answer, because the PDF contains `/api/` **and
          * everything else**.
          */
+        /*
+         * 🛑 §8.12.21's surface axis is also a **grant** axis. A grant minted
+         * while reading a page carries `sfc: proxy` and is refused here, so a
+         * download always establishes the reader from the session — one extra
+         * read per download, against an endpoint that is about to send a
+         * hundred-megabyte file.
+         */
+        $reader = $this->readers->establish(
+            $request,
+            $snapshot->domainId,
+            $mountMatch->mount->project,
+            AccessSurface::Download,
+        );
+
         $decision = $this->gate->authorise(
             mount: $mountMatch->mount,
             version: $resolved,
             language: $language,
             path: '/',
             surface: AccessSurface::Download,
+            reader: $reader->context,
         );
 
         if (! $decision->allowed) {

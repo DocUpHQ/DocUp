@@ -11,6 +11,8 @@ use App\Audit\Audit;
 use App\Builds\Runner\Spool;
 use App\Builds\Sandbox\EgressAllowlist;
 use App\Builds\Sandbox\SandboxPolicy;
+use App\Readers\Containment;
+use App\Readers\EpochFeed;
 use App\Support\Origins;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -51,6 +53,8 @@ final class DoctorCommand extends Command
         $this->checkAuditPartitions();
         $this->checkAuditAppendOnly();
         $this->checkBuildSandbox();
+        $this->checkEnforcementTier();
+        $this->checkContainment();
         $this->notePending();
 
         if ($this->option('json')) {
@@ -230,6 +234,126 @@ final class DoctorCommand extends Command
         }
 
         $this->recordPass('Audit log is append-only', 'UPDATE and DELETE refused on both tables', 'SPEC 8.22.1');
+    }
+
+    /**
+     * 🛑 §8.12.13's mandatory condition on Tier C: "`docup:doctor` MUST refuse
+     * Tier C without it."
+     *
+     * > "the edge MUST consume a revocation epoch feed at ≤5-second intervals
+     * > and refuse any grant below the current epoch … Without that feed, a
+     * > project flipped public→private keeps serving to anonymous readers for
+     * > the grant lifetime — the largest exposure window any design in this
+     * > area produces."
+     *
+     * A **failure**, not a warning, and that is the requirement's own word.
+     * Tier C without the feed is the one configuration in this product that
+     * keeps serving private bytes after an operator has made them private, and
+     * the operator who chose it did so for throughput.
+     */
+    private function checkEnforcementTier(): void
+    {
+        $tier = strtolower((string) config('docup.edge.enforcement_tier', 'a'));
+
+        if (! in_array($tier, ['a', 'b', 'c'], true)) {
+            $this->recordFail(
+                'Enforcement tier',
+                'DOCUP_ENFORCEMENT_TIER is "'.$tier.'", which is not one of a, b or c. '
+                .'Tier A authorises every request in PHP and is the shipped default.',
+                'SPEC 8.12.13',
+            );
+
+            return;
+        }
+
+        if ($tier !== 'c') {
+            $this->recordPass(
+                'Enforcement tier',
+                'tier '.strtoupper($tier).': the application makes every decision against the '
+                .'current epoch, so revoking a session or editing a policy takes effect on the '
+                .'next request',
+                'SPEC 8.12.13',
+            );
+
+            return;
+        }
+
+        $interval = config('docup.edge.epoch_feed_seconds');
+
+        if (! is_numeric($interval)) {
+            $this->recordFail(
+                'Tier C epoch feed',
+                'DOCUP_ENFORCEMENT_TIER=c with no DOCUP_EDGE_EPOCH_FEED_SECONDS. Tier C verifies '
+                .'grants at the edge, so a project flipped public→private keeps serving to '
+                .'anonymous readers until every outstanding grant expires — unless the edge polls '
+                .'/.well-known/docup-epochs and refuses any grant below the current epoch. '
+                .'Configure the poll and declare its interval, or use tier A or B.',
+                'SPEC 8.12.13',
+            );
+
+            return;
+        }
+
+        $seconds = (int) $interval;
+
+        if ($seconds < 1 || $seconds > EpochFeed::INTERVAL_SECONDS) {
+            $this->recordFail(
+                'Tier C epoch feed',
+                'the declared epoch-feed interval is '.$seconds.'s; SPEC 8.12.13 requires '
+                .EpochFeed::INTERVAL_SECONDS.'s or less, because the interval IS the '
+                .'exposure window after a visibility change.',
+                'SPEC 8.12.13',
+            );
+
+            return;
+        }
+
+        $this->recordPass(
+            'Tier C epoch feed',
+            'the edge polls the revocation feed every '.$seconds.'s, so a stale grant is refused '
+            .'within that window',
+            'SPEC 8.12.13',
+        );
+    }
+
+    /**
+     * 🛑 §8.12.22's "`doctor` probe for cached private content", as the verdict
+     * of the containment self-test.
+     *
+     * `doctor` does not fetch: {@see Containment} says why at
+     * length — §8.3.9 gives PHP no way to reach the edge, and the one
+     * allowlisted exemption to that gate carries a note about allowlists that
+     * grow by a case per phase. What `doctor` does is refuse to call an
+     * installation healthy when nothing has proved its containment.
+     */
+    private function checkContainment(): void
+    {
+        $containment = app(Containment::class);
+
+        match ($containment->state()) {
+            'passed' => $this->recordPass(
+                'Private-asset containment',
+                'a known-private asset was refused through the real edge with no credentials',
+                'SPEC 8.12.22',
+            ),
+            'not_applicable' => $this->recordPass(
+                'Private-asset containment',
+                'nothing private is published on this installation, so there is no asset to probe',
+                'SPEC 8.12.22',
+            ),
+            'never_run' => $this->recordFail(
+                'Private-asset containment',
+                'this installation publishes private documentation and the containment self-test '
+                .'has never run. Run deploy/containment-self-test.sh — at start-up and in CI. '
+                .'A control nobody has exercised is indistinguishable from one that fails.',
+                'SPEC 8.12.22',
+            ),
+            default => $this->recordFail(
+                'Private-asset containment',
+                'the containment self-test FAILED: '.($containment->verdict()['summary'] ?? 'no detail'),
+                'SPEC 8.12.22',
+            ),
+        };
     }
 
     private function recordPass(string $check, string $detail, string $ref): void
@@ -564,7 +688,14 @@ final class DoctorCommand extends Command
     private function notePending(): void
     {
         $this->recordPending('DNS wildcard for the docs zone', 'arrives with custom domains', 'Phase 18');
-        $this->recordPending('Private-asset containment probe', 'arrives with the authorisation kernel', 'Phase 22');
+        /*
+         * 🛑 The §8.12.22 containment probe is no longer pending: Phase 22
+         * ships it as `deploy/containment-self-test.sh` and `checkContainment()`
+         * above reports its verdict. Removed from this list rather than left
+         * beside the real check, because an entry that says "arrives with the
+         * authorisation kernel" next to a check from the authorisation kernel is
+         * how an operator concludes the real one is something else.
+         */
         $this->recordPending('Search index size threshold', 'arrives with the search index', 'Phase 29');
     }
 

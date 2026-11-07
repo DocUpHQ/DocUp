@@ -7,6 +7,8 @@ declare(strict_types=1);
 
 namespace App\Serving;
 
+use App\Readers\Grants\GrantKeys;
+
 /**
  * 🛑 The single three-way public check (§9.3.2).
  *
@@ -188,6 +190,39 @@ final class CachePolicy
         return CacheDirectives::publiclyCacheable(
             maxAge: self::CDN_MAX_AGE,
             cdnMaxAge: self::CDN_MAX_AGE,
+            cacheTags: [],
+        );
+    }
+
+    /**
+     * §20.2's JWKS document — the second of §7.3's two `/.well-known/`
+     * exceptions to "nothing under it is publicly cacheable".
+     *
+     * 🛑 Here for the reason {@see self::forPublishedContract()} is here, and
+     * the architecture test sent this one the same way: §9.3.2's invariant is
+     * that **one** place decides public cacheability. A controller writing
+     * `'public, max-age=60'` by hand would be correct today and would be the
+     * second place that has to stay correct forever.
+     *
+     * Public is right, and §8.12.11 is why: "Public-key verification lets the
+     * edge verify and never mint." The document holds public keys, is identical
+     * for every reader of every project on the installation, and names no
+     * tenant — `grant_signing_keys` has no `organisation_id` column at all — so
+     * a shared cache holding it crosses no boundary. No cache tags, for the
+     * same reason the schema has none: there is nothing to scope a purge to.
+     *
+     * 🛑 The `max-age` is deliberately **not** this class's own CDN figure. It
+     * is {@see GrantKeys::JWKS_CACHE_SECONDS}, which the
+     * four-state rotation's `retiring` window is also derived from — one
+     * constant, two consumers. A longer cache here without a longer retiring
+     * window would strand grants at a rotation, which is exactly the failure
+     * the four states exist to prevent.
+     */
+    public static function forGrantKeys(int $maxAge): CacheDirectives
+    {
+        return CacheDirectives::publiclyCacheable(
+            maxAge: $maxAge,
+            cdnMaxAge: $maxAge,
             cacheTags: [],
         );
     }

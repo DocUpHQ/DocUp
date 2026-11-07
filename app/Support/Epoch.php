@@ -127,7 +127,7 @@ enum Epoch: string
             self::Routing => 'P04',
             self::Serving => 'P03',
             self::Authz => 'P21',
-            self::Identity => 'P21',
+            self::Identity => 'P22',
             self::Permission => 'P02',
             self::SearchGeneration => 'P16',
             self::PolicyGeneration => 'P21',
@@ -148,14 +148,18 @@ enum Epoch: string
     public function isImplemented(): bool
     {
         return match ($this) {
-            // 🛑 Phase 21 makes two more live: `authz_epoch` moves on every
-            // policy, rule and visibility change, and `policy_generation` moves
-            // with it on a policy write (§8.12, §10.8). `identity_epoch` still
-            // does not — nothing creates a reader identity until Phase 22, so
-            // there is no deprovision, group change or session revoke to bump
-            // it, and claiming otherwise here would describe a control that
-            // does not exist.
-            self::Routing, self::Serving, self::Authz, self::PolicyGeneration => true,
+            // 🛑 Phase 21 made `authz_epoch` and `policy_generation` live;
+            // Phase 22 makes `identity_epoch` live, because it is the phase
+            // that creates something to revoke. `App\Readers\ReaderSessions`
+            // bumps it on every session revoke, and §8.12.15's "takes effect on
+            // the next request" is that bump meeting the combined epoch inside
+            // a presented grant.
+            //
+            // 🛑 `permission_epoch` is still owed, and the gap is narrower than
+            // it looks rather than absent: §10.8 gives it role-assignment
+            // changes, and `Invalidation::bumpIdentity()` records why those are
+            // deliberately NOT folded in here.
+            self::Routing, self::Serving, self::Authz, self::Identity, self::PolicyGeneration => true,
             default => false,
         };
     }

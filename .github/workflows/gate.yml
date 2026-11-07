@@ -490,6 +490,22 @@ jobs:
             bash deploy/verify-edge.sh \
               '${{ matrix.base }}' docup-docs.localhost '${{ matrix.driver }}'
 
+      # 🛑 SPEC 8.12.22's containment self-test, as the shipped script rather
+      # than as a step written here. The requirement asks for "a boot-time
+      # **and** CI check", so the two must be the same check — a CI-only
+      # version would be one an operator cannot run and one nobody notices
+      # drifting from what boots.
+      #
+      # It probes whatever private project the database holds, which after
+      # verify-edge.sh is the fixture's. `DOCUP_CONTAINMENT_BASE` points it at
+      # the edge's real address while the Host header comes from the plan,
+      # because SPEC 8.9.4 resolves a project from the host and nothing else.
+      - name: Private-asset containment self-test (SPEC 8.12.22)
+        run: |
+          DOCUP_CONTAINMENT_BASE='${{ matrix.base }}' \
+          ARTISAN='docker compose -f ${{ matrix.compose }} exec -T app php artisan' \
+            sh deploy/containment-self-test.sh
+
       - name: Logs, on failure
         if: failure()
         run: docker compose -f '${{ matrix.compose }}' logs --tail 200

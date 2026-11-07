@@ -141,6 +141,41 @@ final class ReaderContext
     }
 
     /**
+     * 🛑 The strongest leaf this reader actually holds, for a decision reached
+     * **without** a rule.
+     *
+     * §12.3's lattice can admit a reader on its own: a member reading a
+     * `members` version with no policy at all is allowed because their
+     * established level reaches the required one, and no rule — so no
+     * {@see Requirement} — was involved. The decision still has to say *what*
+     * admitted them, because §20.3's log and §8.12.25's simulator both key off
+     * it.
+     *
+     * 🛑 **Phase 22 found Phase 21 getting this wrong, and the error was
+     * invisible while it was correct.** `EffectiveAccess` defaulted the
+     * satisfying leaf to `public` whenever no policy existed, which was true of
+     * every reader Phase 21 could construct — they were all anonymous, because
+     * §17 put reader identities in Phase 22. The moment a member could read, a
+     * `members`-only 200 started reporting `by=public`: an operator reading the
+     * decision header or the audit log would see the public terminal named on a
+     * response no anonymous reader could ever have obtained.
+     *
+     * Nothing was over-permitted — the lattice had already decided — but the
+     * evidence was wrong, and §8.12.22's nightly policy linter and §8.12.25's
+     * simulator are both built on that evidence.
+     */
+    public function strongestLeaf(): ?AccessLeaf
+    {
+        foreach (AccessLeaf::strongestFirst() as $leaf) {
+            if (in_array($leaf, $this->satisfiedLeaves, true)) {
+                return $leaf;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Whether this is an authenticated principal, for §8.12.23's `deny_status`.
      *
      * > "A per-project `deny_status='403'` MUST be available for

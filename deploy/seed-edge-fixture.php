@@ -50,6 +50,8 @@ use App\Models\Organisation;
 use App\Models\Project;
 use App\Models\ProjectVersion;
 use App\Models\User;
+use App\Readers\Grants\Grant;
+use App\Readers\ReaderSessions;
 use App\Support\Uuid;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\DB;
@@ -148,6 +150,60 @@ function docup_tar(string $path, array $files): string
     return $path;
 }
 
+/**
+ * 🛑 SPEC 8.12.22's negative control: a real reader session on the private host.
+ *
+ * Returns the plaintext session handle, which verify-edge.sh sends as
+ * `__Host-docup_rsess` and asserts a 200 for. Without it the positive half
+ * cannot distinguish containment from an outage — see the note at the call
+ * site.
+ *
+ * 🛑 Through `ReaderSessions::establish()`, not an INSERT. The handle's hashing,
+ * the per-origin scoping and the prefix lookup all have to be the real ones, or
+ * the control proves something adjacent to what SPEC 8.12.22 asks.
+ *
+ * The user is the fixture's own `OrgAdmin`, so SPEC 12.3 puts them at the
+ * `members` rung on every project in the organisation — which is precisely the
+ * reader a `members` version is private *from* everyone else for.
+ */
+function docup_seed_reader_session(
+    User $user,
+    ProjectVersion $version,
+    string $host,
+): string {
+    /** @var object{id: string}|null $domain */
+    $domain = DB::table('domains')->where('host', $host)->first(['id']);
+
+    if ($domain === null) {
+        return '';
+    }
+
+    $project = Project::query()->findOrFail($version->project_id);
+
+    /*
+     * 🛑 **The fixture's own user**, passed in rather than looked up. The first
+     * version read `User::query()->firstOrFail()`, which on a database with any
+     * other user returns somebody who holds no role on this organisation — so
+     * §12.3 put them at `authenticated` rather than `members` and the member
+     * read was refused.
+     *
+     * The negative control caught it on its first run, which is the whole
+     * argument for having one: the positive half was green, the refusal looked
+     * like containment, and what it actually was was a reader with no standing.
+     */
+    $established = app(ReaderSessions::class)->establish(
+        project: $project,
+        domainId: $domain->id,
+        subject: $user,
+        combinedEpoch: Grant::combinedEpoch(
+            (int) $project->authz_epoch,
+            (int) $project->identity_epoch,
+        ),
+    );
+
+    return $established['handle'];
+}
+
 $archive = docup_tar(sys_get_temp_dir().'/docup-edge-'.$suffix.'.tar', [
     'html/index.html' => "<!doctype html><html><head><title>Edge</title></head>\n"
         .'<body><h1 id="anchor">Edge verification</h1>'
@@ -226,8 +282,28 @@ function docup_seed_project(
 $public = docup_seed_project($organisation, 'edgepub-'.$suffix, 'public', $apex);
 $private = docup_seed_project($organisation, 'edgepriv-'.$suffix, 'members', $apex);
 
+/*
+| 🛑 SPEC 8.12.22's NEGATIVE CONTROL, which Phase 22 owes Phase 21.
+|
+| The positive half — a known-private asset refused with no credentials —
+| already runs on both edge drivers. On its own it cannot tell containment from
+| an outage: an installation whose documentation host is misconfigured refuses
+| *everything*, and the positive half passes on it forever.
+|
+| So the fixture also establishes a real reader session on the private host and
+| prints its handle. verify-edge.sh sends it and asserts a 200, which is what
+| makes the refusal evidence of a decision rather than of a broken edge.
+|
+| 🛑 It goes through `ReaderSessions::establish()` rather than inserting a row,
+| because the thing under test is the session the application would have
+| created: the handle's hashing, the per-origin scoping and the cookie name all
+| have to be the real ones or the control proves something adjacent.
+*/
+$reader = docup_seed_reader_session($user, $private, 'edgepriv-'.$suffix.'.'.$apex);
+
 printf("host=%s\n", 'edgepub-'.$suffix.'.'.$apex);
 printf("private_host=%s\n", 'edgepriv-'.$suffix.'.'.$apex);
+printf("private_session=%s\n", $reader);
 printf("public_path=%s\n", '/en/latest/');
 printf("token=%s\n", $token);
 printf("archive=%s\n", $archive);

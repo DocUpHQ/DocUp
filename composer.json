@@ -16,6 +16,7 @@
         "ext-openssl": "*",
         "ext-pdo": "*",
         "ext-sodium": "*",
+        "firebase/php-jwt": "^7.0",
         "inertiajs/inertia-laravel": "^3.0",
         "laravel/fortify": "^1.41",
         "laravel/framework": "^13.17",

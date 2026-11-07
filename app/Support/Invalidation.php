@@ -9,6 +9,7 @@ namespace App\Support;
 
 use App\Audit\ActorType;
 use App\Audit\Audit;
+use App\Readers\ReaderSessions;
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Support\Facades\DB;
 
@@ -148,6 +149,62 @@ final class Invalidation
             subjectId: $projectId,
             // §8.22.5: identifiers and fixed vocabulary only.
             payload: ['epoch' => implode(',', $epochs), 'cause' => $cause],
+        );
+    }
+
+    /**
+     * 🛑 Bump a project's `identity_epoch` (§10.8).
+     *
+     * §10.8: bumped by "reader deprovision, group change, session revoke",
+     * keying "grant `ep`" with a staleness bound of "1 request at Tier A/B".
+     *
+     * 🛑 **Separate from `authz_epoch`, and the separation is the point.** Both
+     * feed §8.12.11's combined epoch, so either one moving invalidates every
+     * outstanding grant — which means a single counter would work just as well
+     * for invalidation and would destroy the registry's evidence. §10.8 asks
+     * each epoch to declare "what bumps it"; an operator reading an audit event
+     * that says `identity_epoch` knows a reader's standing changed, and one
+     * that says `authz_epoch` knows the policy did. Folded together, every bump
+     * would say "something".
+     *
+     * 🛑 Not bumped by a dashboard **role** change. §10.8 gives that to
+     * `permission_epoch`, which no phase has implemented yet, and widening this
+     * epoch's trigger list to cover it would make the registry's own
+     * declaration false. {@see ReaderSessions} records what that
+     * costs: a role change is bounded by the grant TTL rather than by one
+     * request.
+     *
+     * @param  string  $projectId  raw 16 bytes
+     * @param  string  $cause  one of §10.8's three: reader deprovision, group
+     *                         change, session revoke
+     * @param  string|null  $organisationId  raw 16 bytes, for the audit record
+     * @param  string|null  $actorId  raw 16 bytes, or null when the system did it
+     */
+    public static function bumpIdentity(
+        string $projectId,
+        string $cause,
+        ?string $organisationId = null,
+        ?string $actorId = null,
+    ): void {
+        $affected = DB::table('projects')
+            ->where('id', $projectId)
+            ->update(['identity_epoch' => DB::raw('`identity_epoch` + 1')]);
+
+        if ($affected === 0 || $organisationId === null) {
+            // Same reasoning as bumpRouting(): a deleted project needs no bump,
+            // and without an organisation there is no chain to append to.
+            return;
+        }
+
+        Audit::record(
+            action: 'epoch.bumped',
+            actorType: $actorId === null ? ActorType::System : ActorType::User,
+            organisationId: $organisationId,
+            actorId: $actorId,
+            subjectType: 'project',
+            subjectId: $projectId,
+            // §8.22.5: identifiers and fixed vocabulary only.
+            payload: ['epoch' => Epoch::Identity->value, 'cause' => $cause],
         );
     }
 

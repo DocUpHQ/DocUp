@@ -90,6 +90,15 @@ parameters:
         # pure — there is no I/O for a type error to hide behind, and every
         # finding is a finding about the logic.
         - app/Access
+        # Phase 22. §8.12.11's grant is the one credential in the product that
+        # mints read access to every private project, and §8.12.12 forbids the
+        # minting key reaching any edge component — so a type error in the
+        # verifier's claim handling, the audience comparison or the epoch
+        # comparison is the disclosure §8.12 exists to prevent, not a crash.
+        # §8.12.10's handoff is in the same namespace and has the same
+        # character: a type error in the single-use latch mints two sessions
+        # from one code, and one in the return path is an open redirect.
+        - app/Readers
         - app/Support
         - app/Concerns
         - app/Models

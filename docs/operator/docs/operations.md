@@ -12,6 +12,12 @@ The scheduler is easy to forget and expensive to forget: the audit chain's
 daily anchor is what makes the log verifiable after the fact, and nothing
 reports its absence except `docup:doctor`.
 
+🛑 It also carries one job nothing else can do. `docup:readers:maintain` retires
+grant signing keys whose stand-down window has passed, and three of the four key
+states are reached by a clock — so without the scheduler a stood-down key stays
+in the published JWKS indefinitely. Nothing breaks, and the rotation you thought
+you completed is not complete. See **Who may read it** for the four states.
+
 ## The build sandbox
 
 Every build runs in a container with no route to the database, no route to
@@ -38,17 +44,24 @@ component, and it is enforced by an architecture test rather than by review.
 
 Back up three things, and they are independent:
 
-1. **the database** — projects, versions, manifests, audit events. The
-   manifest is the pointer; losing it loses which build was being served.
+1. **the database** — projects, versions, manifests, audit events, **and the
+   Ed25519 grant keypair**. The manifest is the pointer; losing it loses which
+   build was being served.
 2. **the artifact store** — the built documentation itself. Write-once, so an
    incremental backup is cheap and a restored artifact is byte-identical.
-3. **`.env`** — specifically `APP_KEY` and `DOCUP_AUDIT_KEY`. Envelope-
-   encrypted secrets are unreadable without the first; the audit chain cannot
-   be verified without the second.
+3. **`.env`** — specifically `APP_KEY`, `APP_PREVIOUS_KEYS` and
+   `DOCUP_AUDIT_KEY`. Envelope-encrypted secrets are unreadable without the
+   first two; the audit chain cannot be verified without the third.
 
 Restoring the database without the artifact store gives you a site that
 resolves every URL and serves nothing. Restoring the artifact store without
 the database gives you bytes nobody can find.
+
+🛑 The grant keypair is **in** the database and sealed with `APP_KEY`, so it is
+covered by (1) and (3) together and by neither alone. Losing it is not a
+disaster — every reader re-signs in — but losing `APP_KEY` while keeping the
+database means the installation holds a signing key it cannot open, which
+`docup:doctor` reports as a failure rather than as an outage.
 
 ## Retention
 

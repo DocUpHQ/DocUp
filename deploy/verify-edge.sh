@@ -83,6 +83,7 @@ field() {
 
 HOST="$(field host)"
 PRIVATE_HOST="$(field private_host)"
+PRIVATE_SESSION="$(field private_session)"
 PUBLIC_PATH="$(field public_path)"
 TOKEN="$(field token)"
 ARCHIVE="$(field archive)"
@@ -286,6 +287,68 @@ if [ "$(header_count Cache-Tag /tmp/edge-private.h)" -eq 0 ]; then
     pass 'a private response carries no cache tag'
 else
     fail 'a private response must carry no Cache-Tag'
+fi
+
+# ------------------ 🛑 the NEGATIVE CONTROL, SPEC 8.12.22 — Phase 22 ---------
+#
+# 🛑 **Phase 21 shipped the refusal; this is what makes the refusal evidence.**
+#
+# The assertion above is SPEC 8.12.22's own sentence and it is necessary, but on
+# its own it cannot tell containment from an outage: an installation whose
+# documentation host is misconfigured refuses *everything*, and the positive
+# half passes on it forever. The two halves together say what the requirement
+# means — the asset is reachable, and it is reachable only with credentials.
+#
+#   positive: no credentials  -> not 200   (asserted above)
+#   negative: a real session  -> 200       (asserted here)
+#
+# The session comes from deploy/seed-edge-fixture.php, which establishes it
+# through `ReaderSessions::establish()` so the handle's hashing, the per-origin
+# scoping and the cookie name are all the real ones.
+if [ -z "$PRIVATE_SESSION" ]; then
+    fail '🛑 SPEC 8.12.22: the fixture printed no reader session, so the negative control cannot run'
+else
+    req "$PRIVATE_HOST" "$PUBLIC_PATH" /tmp/edge-private-auth.h \
+        -H "Cookie: __Host-docup_rsess=${PRIVATE_SESSION}"
+
+    STATUS_AUTHED="$(head -1 /tmp/edge-private-auth.h | tr -d '\r')"
+
+    case "$STATUS_AUTHED" in
+        *' 200'*)
+            pass 'SPEC 8.12.22 negative control: the same asset IS served to a member, so the refusal is a decision' ;;
+        *)
+            fail "🛑 SPEC 8.12.22 negative control: a member was refused (${STATUS_AUTHED}) — the positive half proves nothing" ;;
+    esac
+
+    # 🛑 And a member's 200 is still private on both axes. SPEC 9.3.2 is about
+    # the response, not about the reader: a document served to one member must
+    # not enter a shared cache where the next reader could be served it.
+    for axis in Cache-Control CDN-Cache-Control; do
+        v="$(header_values "$axis" /tmp/edge-private-auth.h | tr '[:upper:]' '[:lower:]')"
+
+        if printf '%s' "$v" | grep -q 'public'; then
+            fail "${axis} must not be public on a member's private 200, got: ${v}"
+        else
+            pass "${axis} is not public on a member's private 200"
+        fi
+    done
+
+    if [ "$(header_count Cache-Tag /tmp/edge-private-auth.h)" -eq 0 ]; then
+        pass "a member's private 200 carries no cache tag"
+    else
+        fail "a member's private 200 must carry no Cache-Tag"
+    fi
+
+    # 🛑 And the grant arrived. SPEC 8.12.11 materialises the decision as a
+    # token in a cookie, and the whole Tier A/B/C ladder rests on it being set
+    # on the response that served the bytes — which is a property of the real
+    # edge, because a proxy that drops Set-Cookie would break authorisation
+    # without breaking this request.
+    if header_values Set-Cookie /tmp/edge-private-auth.h | grep -q '__Host-docup_grant='; then
+        pass 'SPEC 8.12.11: the grant cookie survives the edge'
+    else
+        fail '🛑 SPEC 8.12.11: no __Host-docup_grant on a member read — the edge dropped Set-Cookie'
+    fi
 fi
 
 # ------------------------------------------- SPEC 18.18 on the 304 path ------

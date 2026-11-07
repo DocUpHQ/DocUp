@@ -7,6 +7,8 @@ declare(strict_types=1);
 
 namespace App\Serving;
 
+use App\Readers\Grants\Grant;
+
 /**
  * One project, as the routing snapshot carries it.
  *
@@ -31,6 +33,13 @@ final class SnapshotProject
      *                           takes effect on the next request with no purge
      * @param  int  $policyGeneration  §8.12.21; compared against the search
      *                                 generation, which fails closed
+     * @param  int  $identityEpoch  §10.8; bumped by a session revoke or a
+     *                              reader deprovision. 🛑 Carried beside
+     *                              `authzEpoch` because §8.12.11's grant
+     *                              claim is the **sum** of the two
+     *                              ({@see Grant::combinedEpoch()}),
+     *                              and a grant verified against one of them
+     *                              would survive a revoke
      * @param  int  $denyStatus  §8.12.23's per-project 404 or 403. 🛑 The
      *                           anonymous-never half of that requirement is not
      *                           here and cannot be: it depends on the request,
@@ -50,8 +59,23 @@ final class SnapshotProject
         public readonly ?string $organisationId = null,
         public readonly int $authzEpoch = 0,
         public readonly int $policyGeneration = 0,
+        public readonly int $identityEpoch = 0,
         public readonly int $denyStatus = 404,
     ) {}
+
+    /**
+     * 🛑 §8.12.11's "combined policy and identity epoch", for this project as
+     * the snapshot saw it.
+     *
+     * Here rather than at each call site, because a grant minted against one
+     * epoch and verified against the other is a revoke that does not take
+     * effect — and the two call sites that need it (the minter and the
+     * verifier) are in different namespaces.
+     */
+    public function combinedEpoch(): int
+    {
+        return $this->authzEpoch + $this->identityEpoch;
+    }
 
     /**
      * §8.6.6: "a renamed slug MUST leave a working 301 behind it."

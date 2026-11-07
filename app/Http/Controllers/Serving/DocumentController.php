@@ -13,6 +13,7 @@ use App\Access\ReaderGate;
 use App\Artifacts\ContentTypes;
 use App\Auth\AccessLevel;
 use App\Http\Middleware\RejectNonCanonicalPath;
+use App\Readers\ReaderResolver;
 use App\Redirects\RedirectEngine;
 use App\Redirects\Redirects;
 use App\Redirects\RedirectSet;
@@ -37,6 +38,7 @@ use App\Serving\Translations;
 use App\Serving\VersionUrl;
 use App\Support\Uuid;
 use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Cookie;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -99,6 +101,7 @@ final class DocumentController
         private readonly Redirects $redirects,
         private readonly RedirectEngine $engine,
         private readonly ReaderGate $gate,
+        private readonly ReaderResolver $readers,
     ) {}
 
     public function __invoke(Request $request): Response
@@ -163,12 +166,35 @@ final class DocumentController
          * silently, with the section they meant to protect governed by
          * whatever rule comes next.
          */
+        /*
+         * 🛑 Phase 22's one change to this sequence: the reader is **established
+         * before** the decision and the decision is unchanged.
+         *
+         * {@see ReaderContext}'s Phase 21 comment promised exactly this —
+         * "Phase 22 fills it from `docs_sessions` and a verified grant" — and
+         * the shape of that promise is what makes this a two-line change rather
+         * than a rewrite: `EffectiveAccess` gains no parameter, no branch and no
+         * knowledge that sessions exist.
+         *
+         * 🛑 §8.12.14 still holds. A reader arriving with a valid grant skips
+         * the *session lookup*, never the decision: flip this project to private
+         * and the next request's grant still verifies and is still refused,
+         * because the epoch it carries no longer matches.
+         */
+        $reader = $this->readers->establish(
+            $request,
+            $snapshot->domainId,
+            $mount->project,
+            AccessSurface::Proxy,
+        );
+
         $decision = $this->gate->authorise(
             mount: $mount,
             version: $version,
             language: $route->language,
             path: $route->remainder,
             surface: AccessSurface::Proxy,
+            reader: $reader->context,
         );
 
         if (! $decision->allowed) {
@@ -262,6 +288,7 @@ final class DocumentController
                 path: $route->remainder,
                 surface: AccessSurface::Proxy,
                 componentMinAccess: $ceiling,
+                reader: $reader->context,
             );
 
             if (! $decision->allowed) {
@@ -377,11 +404,33 @@ final class DocumentController
          */
         $etag = '"'.$servedEntry['sha256'].'"';
 
+        /*
+         * 🛑 §8.12.11's grant, minted once per TTL and **after** the allow.
+         *
+         * Attached to the 304 as well as the 200, because a conditional request
+         * is a request: a reader whose grant expired while their browser held a
+         * fresh `If-None-Match` would otherwise get a 304 with no new grant,
+         * and every subsequent asset would re-read the session. One place,
+         * both exits.
+         */
+        $issued = $snapshot->domainId === null ? [] : $this->readers->issue(
+            decision: $decision,
+            reader: $reader,
+            project: $mount->project,
+            domainId: $snapshot->domainId,
+            versionId: $version->id,
+            versionSlug: $version->slug,
+            surface: AccessSurface::Proxy,
+        );
+
         if ($this->matchesEtag($request, $etag)) {
-            return response('', 304, $directives->headers() + ReaderGate::headers($decision) + [
-                'ETag' => $etag,
-                RejectNonCanonicalPath::RESOLVER_HEADER => 'file.not_modified',
-            ]);
+            return self::withCookies(
+                response('', 304, $directives->headers() + ReaderGate::headers($decision) + [
+                    'ETag' => $etag,
+                    RejectNonCanonicalPath::RESOLVER_HEADER => 'file.not_modified',
+                ]),
+                $issued,
+            );
         }
 
         $headers = $directives->headers() + ReaderGate::headers($decision) + $this->contentHeaders(
@@ -422,7 +471,25 @@ final class DocumentController
             $headers['Link'] = implode(', ', $links);
         }
 
-        return $this->handoff->respond($storageKey, $headers);
+        return self::withCookies($this->handoff->respond($storageKey, $headers), $issued);
+    }
+
+    /**
+     * Attach §12.4's cookies to a response.
+     *
+     * 🛑 A helper rather than two call sites, because the 200 and the 304 must
+     * carry the same `Set-Cookie` headers and the one that gets forgotten is
+     * always the 304 — it is the exit nobody tests by hand.
+     *
+     * @param  list<Cookie>  $cookies
+     */
+    private static function withCookies(Response $response, array $cookies): Response
+    {
+        foreach ($cookies as $cookie) {
+            $response->headers->setCookie($cookie);
+        }
+
+        return $response;
     }
 
     /**

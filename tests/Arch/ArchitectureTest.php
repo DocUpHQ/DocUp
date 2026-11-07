@@ -11,7 +11,9 @@ use App\Artifacts\RejectionCode;
 use App\Builds\BuildEnvironment;
 use App\Builds\Toolchain\ToolchainPresets;
 use App\Logging\RedactSecrets;
+use App\Models\ReaderIdentity;
 use App\Source\SourceRejection;
+use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
@@ -1557,6 +1559,237 @@ final class ArchitectureTest extends TestCase
             [],
             $offenders,
             '🛑 SPEC 8.12.14: no cached verdict may stand in for the decision: '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 19/17: "Reader sessions are **server-side and revocable** …
+     * Stateless-only cannot satisfy SCIM offboarding or session inventory;
+     * grant-only cannot be revoked. Both are needed."
+     *
+     * One reader of the session tables, for the same reason SPEC 12.3 allows one
+     * decider: three things end a session (an explicit revoke, SPEC 12.4's idle
+     * timeout, SPEC 12.4's absolute ceiling) and a second implementation is the
+     * kind that remembers two of them.
+     */
+    public function test_only_the_readers_namespace_reads_the_session_tables(): void
+    {
+        $tables = ['docs_sessions', 'reader_handoff_codes', 'grant_signing_keys'];
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            /*
+             * The namespace that owns them, the models they hydrate, the
+             * migrations that create them, and the fixtures that populate
+             * them. A model names its own table; it does not decide whether a
+             * session is live, which is the thing this test is about.
+             */
+            if (str_starts_with($relative, 'app/Readers/')
+                || str_starts_with($relative, 'app/Models/')
+                || str_starts_with($relative, 'database/migrations/')
+                || str_starts_with($relative, 'database/factories/')
+                || str_starts_with($relative, 'database/seeders/')) {
+                continue;
+            }
+
+            $source = $this->code($file);
+
+            foreach ($tables as $table) {
+                if (str_contains($source, "'".$table."'") || str_contains($source, '"'.$table.'"')) {
+                    $offenders[] = $relative.' reads '.$table;
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'SPEC 17 P22: a second reader of the session tables is a second answer to '
+                .'"is this session still live": '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.12.1: the two principal populations are **physically disjoint**.
+     *
+     * Three absences, each asserted rather than argued:
+     *
+     *  - `ReaderIdentity` is not `Authenticatable`, so a reader is never
+     *    `auth()->user()` and cannot be handed to anything typed on `User`.
+     *  - It has no `email` column and no lookup by one. SPEC 8.12.1: "email MUST
+     *    NEVER be used for linking or lookup … find-or-create-by-email would let
+     *    any tenant mint an installation owner." The failure mode is a
+     *    convenience method written three phases later.
+     *  - `role_assignments.subject_type` is an ENUM that does not include a
+     *    reader, so the database refuses a row naming one.
+     */
+    public function test_the_two_principal_populations_stay_disjoint(): void
+    {
+        $offenders = [];
+
+        $identity = new \ReflectionClass(ReaderIdentity::class);
+
+        if ($identity->implementsInterface(Authenticatable::class)) {
+            $offenders[] = 'ReaderIdentity implements Authenticatable, so a reader can be auth()->user()';
+        }
+
+        $source = $this->code($identity->getFileName() ?: '');
+
+        foreach (['email', 'Email'] as $forbidden) {
+            if (str_contains($source, $forbidden)) {
+                $offenders[] = 'ReaderIdentity mentions "'.$forbidden.'"; SPEC 8.12.1 forbids email for linking or lookup';
+            }
+        }
+
+        /*
+         * And the database's own refusal, read from the migration rather than
+         * from the live schema so the test says which line is load-bearing.
+         */
+        $roleMigration = (string) (glob(base_path('database/migrations/*_create_projects_and_role_assignments_tables.php'))[0] ?? '');
+
+        if ($roleMigration === '' || ! str_contains($this->code($roleMigration), "enum('subject_type', ['user', 'group', 'api_token'])")) {
+            $offenders[] = 'role_assignments.subject_type no longer refuses a reader identity by enumeration';
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            '🛑 SPEC 8.12.1: '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 12.4 is **one** table, and these names appear in one place.
+     *
+     * The failure this guards is silent in a way almost nothing else is: a
+     * `__Host-` cookie with a `Domain` attribute or a path other than `/` is not
+     * rejected loudly — the browser simply does not store it, the next request
+     * arrives with no session, and the reader loops through SPEC 8.12.10's
+     * handoff forever with nothing in any log. A second place that constructs
+     * one of these names is a second place that has to get three attributes
+     * right.
+     */
+    public function test_only_one_class_names_section_12_4_s_cookies(): void
+    {
+        $names = ['__Host-docup_rsess', '__Host-docup_grant', '__Host-docup_ck', '__Host-docup_state'];
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            if ($relative === 'app/Readers/ReaderCookies.php') {
+                continue;
+            }
+
+            $source = $this->code($file);
+
+            foreach ($names as $name) {
+                if (str_contains($source, $name)) {
+                    $offenders[] = $relative.' names '.$name.' directly';
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            '🛑 SPEC 12.4: App\Readers\ReaderCookies is the one table: '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.12.11 refuses a framework-encrypted grant:
+     *
+     *   "a Laravel-encrypted cookie can only be verified by PHP, foreclosing
+     *    edge authorisation."
+     *
+     * Structurally true already — `routes/docs.php` admits no `web` middleware
+     * group, so `EncryptCookies` never runs on a documentation origin — and this
+     * is the one change that would make it false without changing any of the
+     * files that explain it.
+     */
+    public function test_no_reader_cookie_is_framework_encrypted(): void
+    {
+        $offenders = [];
+
+        /*
+         * Laravel's cookie encrypter is configured either by a middleware
+         * `$except` list or by `EncryptCookies::except()`. Both reach the same
+         * place, and a reader cookie appearing in EITHER means somebody has
+         * been thinking about the encrypter in connection with these cookies —
+         * which is the moment to read SPEC 8.12.11.
+         */
+        foreach (['app/Http/Middleware', 'bootstrap', 'app/Providers'] as $directory) {
+            foreach (glob(base_path($directory.'/*.php')) ?: [] as $file) {
+                $source = $this->code($file);
+
+                if (! str_contains($source, 'EncryptCookies')) {
+                    continue;
+                }
+
+                if (str_contains($source, 'docup_grant') || str_contains($source, 'docup_rsess')) {
+                    $offenders[] = basename($file).' mentions a reader cookie beside EncryptCookies';
+                }
+            }
+        }
+
+        /*
+         * 🛑 And the documentation routes admit no `web` group, which is what
+         * keeps the encrypter away from them in the first place.
+         */
+        if (str_contains($this->code(base_path('routes/docs.php')), "'web'")) {
+            $offenders[] = 'routes/docs.php names the web middleware group';
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            '🛑 SPEC 8.12.11: the grant must be verifiable by the edge: '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.12.12: "No symmetric key capable of minting a grant MUST reach
+     * any edge component."
+     *
+     * The asymmetric design means the private half never has to travel, and
+     * `App\Readers\Grants\GrantKeys` is the one class that opens it — exactly as
+     * `App\Tls\CertificateStore::pem()` is the one opener of a certificate key.
+     * A second opener is a second place a signing key becomes a string.
+     */
+    public function test_only_the_grant_key_store_opens_a_signing_key(): void
+    {
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            if ($relative === 'app/Readers/Grants/GrantKeys.php') {
+                continue;
+            }
+
+            $source = $this->code($file);
+
+            /*
+             * The two things an opener has to name: the AAD that binds a
+             * ciphertext to its `kid`, and the payload key inside the envelope.
+             */
+            if (str_contains($source, 'GrantKeys::aad(') || str_contains($source, "'secret_key'")) {
+                $offenders[] = $relative.' opens or names a grant signing key envelope';
+            }
+
+            /* And the one libsodium call that produces a signature. */
+            if (str_contains($source, 'sodium_crypto_sign_detached(')) {
+                $offenders[] = $relative.' signs with libsodium directly';
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            '🛑 SPEC 8.12.12: one opener, one signer: '.implode('; ', $offenders),
         );
     }
 }
