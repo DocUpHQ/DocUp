@@ -228,7 +228,23 @@ final readonly class ReaderResolver
         $outcome = $this->providers->resolve($project, new ReaderPresentation(
             bearer: self::bearer($request),
             shareSecret: self::cookie($request, ReaderCookies::SHARE),
-            password: null,
+            /*
+             * 🛑 §8.12.16's password, from the request rather than a session.
+             *
+             * It is read on **every** request rather than exchanged once for a
+             * cookie, which is a deliberate difference from the share link.
+             * A share link's secret is in a URL and has to leave it; a password
+             * is typed, and converting it to a long-lived cookie would mean
+             * storing a reusable credential in the browser for a secret the
+             * operator can only rotate by telling everybody.
+             *
+             * 🛑 The parameter is namespaced for the reason
+             * {@see \App\Http\Middleware\ConvertShareLink::PARAMETER} is: a
+             * bare `password` would collide with a generator's own form
+             * handling, and a collision here means somebody's search box being
+             * treated as a credential.
+             */
+            password: self::password($request),
             /*
              * 🛑 `$request->ip()`, never a header. §8.9.4 forbids a trusted
              * request header anywhere in the request path, so this is the
@@ -277,6 +293,23 @@ final readonly class ReaderResolver
      * nothing. A lenient parse here would be a parse an attacker chooses the
      * shape of.
      */
+    /**
+     * §8.12.16's submitted password.
+     *
+     * 🛑 Taken from `input()`, so a POST body and a query string both work —
+     * and the credential page P23 does not build will POST it. Read as a
+     * string or not at all: an array submitted under this name would otherwise
+     * reach `Hash::check()` as `"Array"` and be compared against a real hash.
+     */
+    public const string PASSWORD_PARAMETER = 'docup_password';
+
+    private static function password(Request $request): ?string
+    {
+        $value = $request->input(self::PASSWORD_PARAMETER);
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
     private static function bearer(Request $request): ?string
     {
         $header = $request->headers->get('Authorization');

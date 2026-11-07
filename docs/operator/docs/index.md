@@ -63,4 +63,6 @@ front, not after the migration:
   and the twelve documented cases.
 - [Who may read it](access.md) — the one decision behind every reader request,
   and the 48 combinations it is asserted on.
+- [Private without an IdP](providers.md) — passwords, share links and reader
+  tokens, and why a broken provider answers 503 rather than falling back.
 - [Running it](operations.md) — the scheduler, backups, the build sandbox.

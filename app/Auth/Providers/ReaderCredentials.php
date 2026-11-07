@@ -45,6 +45,18 @@ final readonly class ReaderCredentials
      */
     public const int MAX_PER_PROJECT = 200;
 
+    /**
+     * The share cookie's lifetime when the credential carries no expiry.
+     *
+     * 🛑 Reachable only for a **reader token**: §8.12.16 makes a share link's
+     * expiry mandatory and a database CHECK enforces it, so a `shared_link`
+     * row always has one. A token is presented in a header and never converted
+     * to a cookie, so this value is a floor that nothing currently uses — kept
+     * because `resolve()` serves both kinds and returning null for one of them
+     * would push the branch into every caller.
+     */
+    private const int DEFAULT_COOKIE_SECONDS = 3600;
+
     public function __construct(private ReaderThrottle $throttle) {}
 
     /**
@@ -179,7 +191,7 @@ final readonly class ReaderCredentials
      *
      * @param  'shared_link'|'reader_token'  $kind
      * @param  string  $projectId  raw 16 bytes, from the resolved snapshot
-     * @return array{id: string, bindingId: string, scope: CredentialScope, passworded: bool}|null
+     * @return array{id: string, bindingId: string, scope: CredentialScope, passworded: bool, expiresIn: int}|null
      */
     public function resolve(
         string $secret,
@@ -243,6 +255,17 @@ final readonly class ReaderCredentials
                 'bindingId' => (string) $row->binding_id,
                 'scope' => self::scopeOf($projectId, $row),
                 'passworded' => is_string($row->password_hash) && $row->password_hash !== '',
+                /*
+                 * 🛑 Seconds remaining, for §8.12.16's cookie. The expiry has
+                 * already been checked above, so this is positive — but it is
+                 * clamped anyway, because a clock moving between the check and
+                 * here would otherwise produce a negative `Max-Age`, which a
+                 * browser reads as "delete this cookie" and turns a working
+                 * link into one that silently never converts.
+                 */
+                'expiresIn' => is_string($row->expires_at)
+                    ? max((int) strtotime((string) $row->expires_at) - $now, 1)
+                    : self::DEFAULT_COOKIE_SECONDS,
             ];
         }
 

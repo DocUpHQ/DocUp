@@ -270,6 +270,44 @@ final readonly class ReaderPolicies
      *
      * @throws PolicyRefused
      */
+    /**
+     * 🛑 Every project whose reader policy has **no rules**, for §8.12.19's
+     * red banner.
+     *
+     * > "A zero-rule policy MUST deny with a red banner."
+     *
+     * The **denial** needs no code: §10.6 makes `reader_policies.default_effect`
+     * a single-valued `ENUM('deny')`, so a policy with no rules denies
+     * everything by construction. What was missing is anybody being *told*, and
+     * telling them is a read of the policy tables — which is why it is here.
+     * This class is their sole reader (asserted by the architecture suite),
+     * because first-match-wins has exactly one reading and a second query is a
+     * second reading.
+     *
+     * 🛑 Across every organisation, and deliberately: an installation
+     * operator asking "is anything misconfigured" is asking about the
+     * installation. The caller spans the scope; this method does the counting.
+     *
+     * @return list<string> project slugs, sorted
+     */
+    public function projectsWithNoRules(): array
+    {
+        $slugs = [];
+
+        $rows = DB::table('reader_policies')
+            ->leftJoin('reader_policy_rules', 'reader_policy_rules.policy_id', '=', 'reader_policies.id')
+            ->leftJoin('projects', 'projects.id', '=', 'reader_policies.project_id')
+            ->whereNull('reader_policy_rules.id')
+            ->orderBy('projects.slug')
+            ->get(['projects.slug']);
+
+        foreach ($rows as $row) {
+            $slugs[] = is_string($row->slug) ? $row->slug : '?';
+        }
+
+        return $slugs;
+    }
+
     public function assertOverrideNarrows(string $mountExposure, AccessLevel $projectVisibility): void
     {
         $mount = AccessLevel::tryFrom($mountExposure);
@@ -316,6 +354,85 @@ final readonly class ReaderPolicies
                 RequirementRejection::PublicCacheModeNeedsPublicTerminal,
                 '🛑 §9.3.2: only a rule whose requirement is literally {"leaf":"public"} may be publicly cacheable',
             );
+        }
+
+        $this->assertBindingLeavesAgree($requirement);
+    }
+
+    /**
+     * 🛑 §8.12.17's classification, checked against the **referenced
+     * binding** and not only against a declared `driver`.
+     *
+     * {@see Requirement::validateLeaf()} already refuses
+     * `{"leaf": "binding", "driver": "ip_allowlist"}` — that is corpus case
+     * `authz-004`. It cannot refuse `{"leaf": "binding", "binding_id": "<an
+     * ip_allowlist binding>"}`, because the driver type is a database row and a
+     * requirement is a value object parsed on the serving path, where
+     * {@see EffectiveAccess} must issue no queries.
+     *
+     * 🛑 **Phase 23 added this check and the corpus case `provider-009`
+     * found that it was missing.** The gap failed *closed* — a gate records no
+     * binding id at read time, so such a rule admitted nobody — but failing
+     * closed silently is the configuration mistake §8.12.7's family of
+     * write-time refusals exists to prevent: the rule reads as "signed in via
+     * the office allowlist" and in fact denies everybody, and the operator's
+     * only evidence is readers reporting a 404.
+     *
+     * A binding id naming no row is **not** refused here. A rule may legitimately
+     * be written before its binding exists, or outlive one an operator removed,
+     * and §8.12.19 already makes a *referenced* binding undeletable — so the
+     * only reachable case is a rule written ahead of its binding, which denies
+     * until the binding appears and discloses nothing meanwhile.
+     *
+     * @throws PolicyRefused
+     */
+    private function assertBindingLeavesAgree(Requirement $requirement): void
+    {
+        foreach ($requirement->bindingLeaves() as $pair) {
+            $id = Uuid::tryToBytes($pair['binding_id']);
+
+            if ($id === null) {
+                throw PolicyRefused::of(
+                    RequirementRejection::Malformed,
+                    'binding_id is not a UUID',
+                );
+            }
+
+            /*
+             * The query builder, not a model, so §8.2.1's global scope does not
+             * apply — which is what this lookup needs: an installation-scoped
+             * binding has a NULL `organisation_id` and a rule naming one is
+             * exactly the case §8.12.3's resolution exists for. The same reason
+             * {@see \App\Auth\Providers\Bindings::forProject()} queries this
+             * table directly.
+             *
+             * 🛑 And this reads a **type**, never grants anything. The
+             * outcome can only be a refusal, so an id belonging to another
+             * organisation cannot widen a rule — §12.3 matches at read time on
+             * the ids `Bindings::forProject()` returns, which are scoped.
+             */
+            $type = DB::table('auth_provider_bindings')->where('id', $id)->value('type');
+
+            if (! is_string($type)) {
+                continue;
+            }
+
+            $classified = AccessLeaf::forDriver($type);
+
+            if ($classified === null) {
+                throw PolicyRefused::of(
+                    RequirementRejection::UnknownDriver,
+                    '§8.12.17 does not classify driver `'.$type.'`',
+                );
+            }
+
+            if ($classified !== $pair['leaf']) {
+                throw PolicyRefused::of(
+                    RequirementRejection::Malformed,
+                    '§8.12.17 classifies binding driver `'.$type.'` as `'.$classified->value
+                    .'`, so it cannot be named as `'.$pair['leaf']->value.'`',
+                );
+            }
         }
     }
 

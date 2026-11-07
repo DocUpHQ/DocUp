@@ -1047,6 +1047,110 @@
       "input": "a grant minted for the search surface, presented on the proxy surface",
       "expect": "404",
       "note": "🛑 §8.12.21 disables a project's search entirely while its search generation lags its policy generation. A grant minted while reading a page must not route around that, so the surface is a claim and a mismatch is a refusal."
+    },
+    {
+      "id": "provider-001",
+      "category": "provider",
+      "defends": "8.12.19",
+      "input": "a request to a project with a degraded password binding AND a healthy ip_allowlist binding that would admit it",
+      "expect": "503",
+      "note": "🛑 \"Never fall back to another provider, never to public.\" This is the case a naive merge gets wrong: the healthy allowlist admits the office network, so a project whose portal is broken keeps serving - a privacy posture nobody chose, from code that looks like graceful degradation. The degraded check therefore runs as its own pass over EVERY binding in scope before anything is merged, so it cannot be short-circuited by a binding that satisfied first."
+    },
+    {
+      "id": "provider-002",
+      "category": "provider",
+      "defends": "8.12.19",
+      "input": "a binding transitioned to active with a passing probe and no human test login",
+      "expect": "binding.transition_not_permitted",
+      "note": "🛑 \"MUST NOT leave verifying until an automated probe passes AND a human completes a test login.\" The probe is the half a cron entry can do, so a path that accepted it alone would make the human half decorative - and the human half is the one that catches a provider answering correctly for the wrong directory."
+    },
+    {
+      "id": "provider-003",
+      "category": "provider",
+      "defends": "8.12.19",
+      "input": "a probe that passes on a degraded binding, promoting it straight back to active",
+      "expect": "verifying",
+      "note": "🛑 A recovered provider must not re-enter service unattended. The probe may move degraded to verifying and MUST NOT move anything to active: a provider that failed five times and then answered once has not been diagnosed, and an operator who was never told cannot have fixed it."
+    },
+    {
+      "id": "provider-004",
+      "category": "provider",
+      "defends": "8.12.16",
+      "input": "a reader_credentials row inserted directly with kind=shared_link and expires_at NULL",
+      "expect": "credential.share_link_needs_expiry",
+      "note": "🛑 Mandatory expiry, defended twice because the two defences fail differently: the application refusal can explain itself and the database CHECK survives a future writer who forgets the application. A share link is a bearer secret in a URL; without expiry it is a permanent grant to whoever the first recipient forwards it to."
+    },
+    {
+      "id": "provider-005",
+      "category": "provider",
+      "defends": "8.12.16",
+      "input": "an expired share cookie presented for a private version of a public project",
+      "expect": "404",
+      "note": "🛑 404, NOT 401. 8.12.23 permits a challenge for \"an expired, revoked or out-of-scope share cookie\" - permits, not requires - and 17 declines the permission here. The reason is what a share secret is: a credential that travels by being forwarded. A dead link answered with WWW-Authenticate tells whoever now holds it that the resource is real and guarded, and an expired link is the operator revocation taking effect, so that holder is an outsider by the operator own decision. An earlier revision of SharedLinkDriver returned a challengeable rejection here; the exit criterion own test is what found it."
+    },
+    {
+      "id": "provider-006",
+      "category": "provider",
+      "defends": "8.12.16",
+      "input": "a live share link whose password is absent or wrong",
+      "expect": "401",
+      "note": "🛑 The counterpart to provider-005, and the line between them is proof of the link. Once the secret has resolved the reader has demonstrated they hold a live link, so the existence of the resource is already certain to them and 8.12.16 passworded flow cannot offer a credential page without the challenge. Below that line - an unresolved secret - there is nothing to challenge for."
+    },
+    {
+      "id": "provider-007",
+      "category": "provider",
+      "defends": "8.12.16",
+      "input": "two concurrent requests presenting the same max_uses=1 share link",
+      "expect": "exactly one 200",
+      "note": "🛑 Single-use must be one atomic conditional write. A SELECT then an UPDATE has a race whose outcome is whether a one-use link admits two readers, and for a single-use link that is the whole of its value. The guard therefore lives in the UPDATE own WHERE clause."
+    },
+    {
+      "id": "provider-008",
+      "category": "provider",
+      "defends": "8.12.16",
+      "input": "a wrong password submitted repeatedly against the same credential from one address",
+      "expect": "throttled before any argon2 verification",
+      "note": "🛑 Two properties in one case. The limiter is checked BEFORE the comparison, so a flood costs no Argon2 work - otherwise the rate limiter protects the credential and the CPU is the resource that falls over. And for a passworded link the password is verified only AFTER the secret resolves, so a wrong password against a link that does not exist costs one indexed prefix lookup: checking the password first would make the endpoint an Argon2 oracle for anybody sending noise."
+    },
+    {
+      "id": "provider-009",
+      "category": "provider",
+      "defends": "8.12.17",
+      "input": "a reader policy rule written as {\"leaf\": \"binding\", \"binding_id\": X} where X is an ip_allowlist binding",
+      "expect": "requirement.malformed",
+      "note": "🛑 8.12.17 classifies each driver exactly once and ip_allowlist is a gate, never an identity. Two defences meet here: the leaf is refused at write time against the classification table, and at read time a satisfied gate records no binding id at all - so a rule naming a gate binding cannot be satisfied by being on a network even if the write-time check were bypassed."
+    },
+    {
+      "id": "provider-010",
+      "category": "provider",
+      "defends": "8.12.2",
+      "input": "an active binding whose envelope-encrypted secret cannot be opened (wrong kek_fingerprint)",
+      "expect": "503",
+      "note": "🛑 Fail closed, and fail LOUD. An unreadable secret is indistinguishable from a provider outage from the reader side, so the binding becomes degraded rather than throwing a 500 or - far worse - being skipped as though it were not configured. A skipped binding is a guard that silently stopped guarding, which is the failure mode 8.12.19 exists to make impossible."
+    },
+    {
+      "id": "provider-011",
+      "category": "provider",
+      "defends": "8.12.3",
+      "input": "a project-scoped password binding and an installation-scoped oidc binding, on the same project",
+      "expect": "both resolve",
+      "note": "🛑 Resolution is most-specific OF TYPE, not most-specific overall. Resolving one winner across all types would let a project add a password binding and thereby disable the installation identity provider for its own documentation - a privilege escalation performed by configuring something unrelated."
+    },
+    {
+      "id": "provider-012",
+      "category": "provider",
+      "defends": "8.12.16",
+      "input": "a reader token presented as \"Authorization: Token <T>\", the Read the Docs form",
+      "expect": "404",
+      "note": "20 lists this as a deliberate incompatibility: DocUp reads RFC 6750 Bearer only. 🛑 It is a corpus case rather than a compatibility note because the lenient parse is the tempting fix - and a parser that accepts several shapes is a parser whose shape an attacker chooses. Anything that is not exactly one Bearer token is nothing at all, not an error."
+    },
+    {
+      "id": "provider-013",
+      "category": "provider",
+      "defends": "8.12.4",
+      "input": "an IPv4-mapped IPv6 address ::ffff:127.0.0.1 presented against an ip_allowlist range of 127.0.0.0/8",
+      "expect": "no match",
+      "note": "🛑 The encoding a deny list written in dotted quads does not recognise, here in its mirror image: an allowlist comparison that normalised the mapped form would admit from a family the operator never entered. The comparison is on packed bytes with an explicit family check, so a v6 address never matches a v4 range in either direction. Compare git_url-016, the same encoding against the egress deny list."
     }
   ]
 }

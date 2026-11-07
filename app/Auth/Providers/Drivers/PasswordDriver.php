@@ -80,7 +80,15 @@ final readonly class PasswordDriver implements AuthComponent
          * it; a complexity rule here would be theatre on a secret that is
          * typed once into a form and then pasted into an email.
          */
-        return $hint === null ? [] : ['hint' => mb_substr((string) $hint, 0, 200)];
+        /*
+         * 🛑 Narrowed with `is_string`, not cast. Level 9 refuses a cast from
+         * `mixed`, and correctly: a hint submitted as an array would stringify
+         * to `"Array"` and be stored as a hint shown to every reader of the
+         * project.
+         */
+        return is_string($hint) && $hint !== ''
+            ? ['hint' => mb_substr($hint, 0, 200)]
+            : [];
     }
 
     public function probe(BindingContext $binding): ProbeResult

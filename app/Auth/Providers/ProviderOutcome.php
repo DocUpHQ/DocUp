@@ -11,6 +11,7 @@ use App\Access\AccessLeaf;
 use App\Access\CredentialScope;
 use App\Access\ReaderContext;
 use App\Auth\AccessLevel;
+use App\Support\Uuid;
 
 /**
  * 🛑 Every binding's evidence, merged into **one** {@see ReaderContext}.
@@ -133,7 +134,19 @@ final readonly class ProviderOutcome
              * written as "binding X" be satisfied by being on a network.
              */
             if ($result->leaf->bearsIdentity()) {
-                $bindings[] = $attempt['binding']->id;
+                /*
+                 * 🛑 **UUID text, not raw bytes**, because that is the form the
+                 * requirement tree holds. §8.12.6's leaf is JSON written by an
+                 * operator or an API — `{"leaf": "binding", "binding_id":
+                 * "<uuid>"}` — and `Requirement` hands that string straight to
+                 * {@see ReaderContext::satisfies()}, which compares with
+                 * `in_array(..., true)`. Storing raw bytes here would make
+                 * every rule that names a binding silently unsatisfiable:
+                 * strict comparison between 16 bytes and 36 characters is
+                 * always false, so the rule would refuse the very readers it
+                 * names.
+                 */
+                $bindings[] = Uuid::toText($attempt['binding']->id);
             }
 
             if ($result->scope !== null) {

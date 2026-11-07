@@ -10,6 +10,7 @@ namespace App\Http\Controllers\Serving;
 use App\Access\AccessDecision;
 use App\Access\AccessSurface;
 use App\Access\ReaderGate;
+use App\Auth\Providers\DegradedResponse;
 use App\Http\Controllers\Controller;
 use App\Http\Middleware\RejectNonCanonicalPath;
 use App\Readers\ReaderResolver;
@@ -146,6 +147,17 @@ final class DownloadController extends Controller
             $mountMatch->mount->project,
             AccessSurface::Download,
         );
+
+        /*
+         * 🛑 §8.12.19's 503 on this surface too. §8.12.21 lists "offline
+         * formats" among the surfaces that must be generated from the
+         * authorised view, and a degraded provider is the same fact here as on
+         * a page: the installation cannot check this reader, so it refuses
+         * rather than guessing — and says which provider, so somebody can act.
+         */
+        if ($reader->isDegraded()) {
+            return DegradedResponse::for((string) $reader->degradedBinding);
+        }
 
         $decision = $this->gate->authorise(
             mount: $mountMatch->mount,

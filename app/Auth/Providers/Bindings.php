@@ -433,9 +433,20 @@ final readonly class Bindings
 
         $state = BindingState::tryFrom((string) $row->state) ?? BindingState::Disabled;
 
+        /*
+         * 🛑 `is_numeric` then cast, never a bare cast of a query-builder
+         * value — Phase 20's finding, and level 9 refuses the cast outright.
+         * A `value()` returns `mixed`, and a NULL column cast to int is 0,
+         * which would silently reset the failure counter on every probe of a
+         * row whose counter had never been written.
+         */
+        $previous = $result->passed
+            ? 0
+            : DB::table('auth_provider_bindings')->where('id', $bindingId)->value('probe_failures');
+
         $failures = $result->passed
             ? 0
-            : (int) DB::table('auth_provider_bindings')->where('id', $bindingId)->value('probe_failures') + 1;
+            : (is_numeric($previous) ? (int) $previous : 0) + 1;
 
         DB::table('auth_provider_bindings')->where('id', $bindingId)->update([
             'probe' => (string) json_encode($result->toArray()),

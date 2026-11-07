@@ -131,6 +131,17 @@ anybody could write and, in logic, an empty conjunction is **true** — so it
 would admit everybody. It is refused when you save it and evaluates false
 anyway.
 
+🛑 **And a leaf naming a binding must agree with that binding's driver.**
+`{"leaf": "binding", "binding_id": "…"}` pointing at an `ip_allowlist` is
+refused when you save it, because §8.12.17 classifies the allowlist as a gate.
+Without the refusal the rule would read as "signed in through the office
+allowlist" and in fact admit nobody — a denial you would discover from readers
+reporting a 404.
+
+Which binding produces each leaf, what a reader presents to satisfy it, and
+what happens when a provider breaks are all in
+[Private without an IdP](providers.md).
+
 ### Shadow rules
 
 A rule marked `shadow` is evaluated and recorded and **never enforced**. It
