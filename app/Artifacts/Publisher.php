@@ -31,6 +31,7 @@ use App\Models\Project;
 use App\Models\ProjectVersion;
 use App\Models\ProjectVersionManifest;
 use App\Models\VersionPointerEvent;
+use App\Seo\GeneratedArtifacts;
 use App\Support\Invalidation;
 use App\Support\Uuid;
 use Illuminate\Support\Facades\DB;
@@ -857,6 +858,25 @@ final class Publisher
                 ],
             );
 
+            /*
+             * 🛑 §8.11.6: `robots.txt`, `sitemap.xml`, `llms.txt` and
+             * `llms-full.txt` are "written **at pointer flip**", and this is
+             * the pointer flip — the one branch that moved it.
+             *
+             * After the epoch bump and inside the same transaction as the
+             * flip, so a reader can never see the new pointer with the old
+             * sitemap. §8.11.6's store is deliberately separate from the
+             * build tree (§8.8.1's write-once is untouched), which is what
+             * makes writing here safe: nothing immutable is being altered.
+             *
+             * 🛑 Failure here does **not** fail the publish. A sitemap is a
+             * courtesy to a crawler; the documentation is the product. A
+             * publish refused because a generated file could not be written
+             * would be a reader losing a page over a robot's convenience, so
+             * the error is reported and the flip stands.
+             */
+            $this->regenerateSeoArtefacts($locked);
+
             return new PublishOutcome(
                 published: true,
                 build: $build,
@@ -864,6 +884,27 @@ final class Publisher
                 previousManifestId: $expectedManifestId,
             );
         });
+    }
+
+    /**
+     * §8.11.6's four files, regenerated for every mount of the project.
+     *
+     * Separated so the "this must not break the publish" decision is in one
+     * place with its reason, rather than as a `try` inside a long method.
+     */
+    private function regenerateSeoArtefacts(ProjectVersion $version): void
+    {
+        $project = Project::query()->find($version->project_id);
+
+        if (! $project instanceof Project) {
+            return;
+        }
+
+        try {
+            app(GeneratedArtifacts::class)->regenerate($project);
+        } catch (\Throwable $failure) {
+            report($failure);
+        }
     }
 
     /**

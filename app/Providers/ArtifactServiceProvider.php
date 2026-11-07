@@ -12,6 +12,7 @@ use App\Artifacts\ChromeInjector;
 use App\Artifacts\IngestCaps;
 use App\Artifacts\LocalArtifactStore;
 use App\Artifacts\S3ArtifactStore;
+use App\Seo\GeneratedStore;
 use App\Serving\ArtifactHandoff;
 use App\Serving\CaddyInterceptHandoff;
 use App\Serving\NginxAccelHandoff;
@@ -51,6 +52,15 @@ final class ArtifactServiceProvider extends ServiceProvider
          * judged injectable against a different limit from the other.
          */
         $this->app->singleton(ChromeInjector::class, static fn (): ChromeInjector => ChromeInjector::fromConfig());
+
+        /*
+         * 🛑 §8.11.6's generated-artefact store, bound here because it uses
+         * the same disk as the artifact store and for no other reason — it
+         * is deliberately a **different class** with a different prefix and
+         * no write-once check, so that §8.8.1's rule and §8.8.2's ingest
+         * validation are untouched by a `robots.txt` being regenerated.
+         */
+        $this->app->singleton(GeneratedStore::class, static fn (): GeneratedStore => GeneratedStore::fromConfig());
 
         $this->app->singleton(ArtifactStore::class, function (): ArtifactStore {
             $driver = config('artifacts.driver');

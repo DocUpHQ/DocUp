@@ -4,6 +4,7 @@ nav:
   - Operating DocUp: index.md
   - Installing: installing.md
   - Composition modes: composition.md
+  - Redirects and crawlers: redirects.md
   - Running it: operations.md
 
 # 🛑 Flat .html URLs, not MkDocs' default directory URLs.

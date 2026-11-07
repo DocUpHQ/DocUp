@@ -9,6 +9,7 @@ use App\Http\Controllers\Serving\CompositionController;
 use App\Http\Controllers\Serving\CrossReferenceController;
 use App\Http\Controllers\Serving\DocumentController;
 use App\Http\Controllers\Serving\DownloadController;
+use App\Http\Controllers\Serving\GeneratedFileController;
 use App\Http\Controllers\Serving\ProvenanceController;
 use App\Http\Middleware\RejectNonCanonicalPath;
 use App\Serving\OfflineFormat;
@@ -150,6 +151,41 @@ foreach ($apexes as $index => $apex) {
                 ->name('docs.composition.'.$index);
 
             /*
+             * 🛑 SPEC 8.11.6's four generated files, BEFORE the catch-all and
+             * outside SPEC 7.3's grammar.
+             *
+             * They have to be outside it: the grammar puts every served
+             * document under `{lang}/{version}`, and a crawler asks for
+             * `robots.txt` at the root of the host. The catch-all would read
+             * `robots.txt` as a version slug and 404.
+             *
+             * 🛑 **Two routes, not one with an optional prefix**, for the
+             * reason the cross-reference routes above give: Laravel's
+             * optional-parameter form puts the slash inside the optional
+             * part, so `/{prefix?}/{file}` never matches `/robots.txt` at
+             * all. That is not a tidy-up — a `robots.txt` silently falling
+             * through to the catch-all is the whole feature not working.
+             *
+             * 🛑 And the prefixed route **cannot** be constrained to the
+             * mount prefixes here, because those are rows and this is a
+             * pattern — so it also matches `/en/v1/sitemap.xml`, which is a
+             * documentation path belonging to a build. The controller
+             * disambiguates against the routing snapshot and delegates what
+             * is not a mount root, which is the only place
+             * `UNIQUE (domain_id, path_prefix)` can be consulted.
+             */
+            Route::get('/{docupGeneratedFile}', GeneratedFileController::class)
+                ->where('docupHostLabel', '[a-z0-9]([a-z0-9-]*[a-z0-9])?')
+                ->where('docupGeneratedFile', 'robots\.txt|sitemap\.xml|llms\.txt|llms-full\.txt')
+                ->name('docs.generated.'.$index);
+
+            Route::get('/{docupGeneratedPrefix}/{docupGeneratedFile}', GeneratedFileController::class)
+                ->where('docupHostLabel', '[a-z0-9]([a-z0-9-]*[a-z0-9])?')
+                ->where('docupGeneratedPrefix', '[a-z0-9][a-z0-9._/-]{0,127}')
+                ->where('docupGeneratedFile', 'robots\.txt|sitemap\.xml|llms\.txt|llms-full\.txt')
+                ->name('docs.generated.prefixed.'.$index);
+
+            /*
              * One route for every documentation path. SPEC 7.3's grammar is the
              * resolver's, not the router's — a router pattern per versioning
              * scheme would be a second implementation of the grammar, and
@@ -267,6 +303,18 @@ Route::domain('{docupCustomHost}')
 
         Route::get('/_/composition', CompositionController::class)
             ->name('docs.custom.composition');
+
+        // 🛑 SPEC 8.11.6's four, before the catch-all, and two routes rather
+        // than one optional prefix. See the note on the apex groups above for
+        // both reasons.
+        Route::get('/{docupGeneratedFile}', GeneratedFileController::class)
+            ->where('docupGeneratedFile', 'robots\.txt|sitemap\.xml|llms\.txt|llms-full\.txt')
+            ->name('docs.custom.generated');
+
+        Route::get('/{docupGeneratedPrefix}/{docupGeneratedFile}', GeneratedFileController::class)
+            ->where('docupGeneratedPrefix', '[a-z0-9][a-z0-9._/-]{0,127}')
+            ->where('docupGeneratedFile', 'robots\.txt|sitemap\.xml|llms\.txt|llms-full\.txt')
+            ->name('docs.custom.generated.prefixed');
 
         Route::get('/{docupPath?}', DocumentController::class)
             ->where('docupPath', '.*')

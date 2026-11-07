@@ -9,6 +9,10 @@ namespace App\Http\Controllers\Serving;
 
 use App\Artifacts\ContentTypes;
 use App\Http\Middleware\RejectNonCanonicalPath;
+use App\Redirects\RedirectEngine;
+use App\Redirects\Redirects;
+use App\Redirects\RedirectSet;
+use App\Redirects\RedirectTarget;
 use App\Serving\ArtifactHandoff;
 use App\Serving\CachePolicy;
 use App\Serving\CanonicalLocations;
@@ -16,6 +20,7 @@ use App\Serving\FileKind;
 use App\Serving\Hreflang;
 use App\Serving\ManifestReader;
 use App\Serving\Negotiation;
+use App\Serving\NotFoundChain;
 use App\Serving\RejectionReason;
 use App\Serving\Resolver;
 use App\Serving\RouteKind;
@@ -74,6 +79,8 @@ final class DocumentController
         private readonly ArtifactHandoff $handoff,
         private readonly Translations $translations,
         private readonly CanonicalLocations $canonical,
+        private readonly Redirects $redirects,
+        private readonly RedirectEngine $engine,
     ) {}
 
     public function __invoke(Request $request): Response
@@ -116,6 +123,35 @@ final class DocumentController
         }
 
         /*
+         * 🛑 §8.11.1's **forced** user rules, which come after authorisation
+         * and before everything that looks at what exists.
+         *
+         * "Forced" is the whole distinction: this pass wins over a file
+         * that is still in the build output, which is how an operator
+         * retires a page they cannot remove from the generator. The
+         * unforced pass runs after the existence probe, further down, and
+         * only catches paths that name nothing.
+         */
+        $relative = VersionUrl::within($mount, $path);
+        $rules = $this->redirects->setFor((string) $mount->project->id, $mount->project->routingEpoch);
+
+        $forced = $this->engine->follow(
+            $rules,
+            $relative,
+            $route->language,
+            $version->slug,
+            forced: true,
+        );
+
+        if ($forced !== null) {
+            return $this->redirect(
+                $this->absoluteTarget($mount, $forced->to),
+                'redirect.'.$forced->rule,
+                $forced->status,
+            );
+        }
+
+        /*
          * 🛑 §8.7.15's generated redirects, consulted BEFORE the mount is
          * matched, and §8.11.1's fixed order is why: "implicit redirects"
          * come before the "existence probe". A shadowed path is one the
@@ -137,7 +173,16 @@ final class DocumentController
         $match = $this->resolver->resolveMount($mounts, $route->remainder);
 
         if ($match === null || $match->buildId === null) {
-            return $this->refuse(RejectionReason::MountNotFound, 'component.no_match');
+            return $this->unforcedOrRefuse(
+                $rules,
+                $mount,
+                $relative,
+                $route->language,
+                $version->slug,
+                RejectionReason::MountNotFound,
+                'component.no_match',
+                $version,
+            );
         }
 
         $file = $this->resolver->resolveFile($this->manifests->files($match->buildId), $match);
@@ -165,7 +210,23 @@ final class DocumentController
                 return $this->refuseUntranslated($notice, 'file.no_match');
             }
 
-            return $this->refuse($file->reason ?? RejectionReason::FileNotFound, 'file.no_match');
+            /*
+             * 🛑 §8.11.1's last step: "**unforced** user rules by position",
+             * after the existence probe has shown the path names nothing.
+             * This is the ordinary case — an inbound link to a page that was
+             * removed — and running it here rather than earlier is what
+             * stops a widened pattern from shadowing a live page.
+             */
+            return $this->unforcedOrRefuse(
+                $rules,
+                $mount,
+                $relative,
+                $route->language,
+                $version->slug,
+                $file->reason ?? RejectionReason::FileNotFound,
+                'file.no_match',
+                $version,
+            );
         }
 
         $entry = $file->entry;
@@ -491,9 +552,9 @@ final class DocumentController
     }
 
     /** §8.9.7's 302. Never cached: the target depends on a pointer that moves. */
-    private function redirect(string $to, string $rule): Response
+    private function redirect(string $to, string $rule, int $status = 302): Response
     {
-        return response('', 302, [
+        return response('', $status, [
             'Location' => $to,
             RejectNonCanonicalPath::RESOLVER_HEADER => $rule,
 
@@ -511,25 +572,104 @@ final class DocumentController
     }
 
     /**
-     * A refusal, as cheaply as possible.
+     * §8.11.1's last step, then §8.11.5's chain.
      *
-     * 🛑 No body, and `no-store`. §9.3.5 names "404 bursts" as a rate-limited
-     * class and the DDoS runbook references "the uncached-404/302/search
-     * pattern" — so this path has to be the cheapest thing the application can
-     * do. A rendered 404 page with a layout and translations would make the
-     * cheapest request to generate the most expensive to answer.
-     *
-     * §8.11.5's 404 chain — suggestions, cross-version existence — arrives with
-     * redirects in a later phase and reads the same manifest this method
-     * already has. Noted so the absence is visibly deliberate.
+     * One method because they are one decision: either an unforced rule
+     * catches the path, or nothing does and the chain decides what the
+     * reader sees instead.
      */
-    private function refuse(RejectionReason $reason, string $rule): Response
+    private function unforcedOrRefuse(
+        RedirectSet $rules,
+        SnapshotMount $mount,
+        string $relative,
+        string $language,
+        string $versionSlug,
+        RejectionReason $reason,
+        string $rule,
+        ?SnapshotVersion $version = null,
+    ): Response {
+        $match = $this->engine->follow($rules, $relative, $language, $versionSlug, forced: false);
+
+        if ($match !== null) {
+            return $this->redirect(
+                $this->absoluteTarget($mount, $match->to),
+                'redirect.'.$match->rule,
+                $match->status,
+            );
+        }
+
+        return $this->refuse($reason, $rule, $mount, $version);
+    }
+
+    /**
+     * A rule's root-relative target, put back into the mount's URL space.
+     *
+     * {@see VersionUrl::within()} is what took the prefixes off, so this
+     * is its inverse and they move together.
+     */
+    private function absoluteTarget(SnapshotMount $mount, string $target): string
     {
-        return response('', $reason->status(), [
+        if (RedirectTarget::isAbsolute($target)) {
+            return $target;
+        }
+
+        return VersionUrl::shed($mount).$target;
+    }
+
+    /**
+     * A refusal, as cheaply as possible — and, since §8.11.8, one the edge
+     * may keep.
+     *
+     * 🛑 **Edge-cacheable where it is safe, and `private, no-store` where it
+     * is not.** §8.11.8 wants a 404 the edge can absorb; §9.3.2 forbids a
+     * public directive on anything private. Those are not in tension for a
+     * genuine absence and are in direct conflict for a 404 that §12 is
+     * using to hide something, so the choice is delegated to
+     * {@see CachePolicy::forAbsence()} — the one place §9.3.2's
+     * architecture test permits a public decision to be made.
+     *
+     * 🛑 Still no body for anything but a document request. §9.3.5 names
+     * "404 bursts" as a rate-limited class, so this is the response a flood
+     * receives and it has to stay the cheapest thing the application can
+     * produce. §8.11.5's branded page is bytes from a constant, which is
+     * cheap; a rendered page with a layout and translations would not be.
+     */
+    private function refuse(
+        RejectionReason $reason,
+        string $rule,
+        ?SnapshotMount $mount = null,
+        ?SnapshotVersion $version = null,
+    ): Response {
+        $directives = CachePolicy::forAbsence(
+            projectIsPublic: $mount === null ? null : $mount->project->visibility === 'public',
+            versionIsPublic: $version === null ? null : $version->visibility === 'public',
+        );
+
+        $headers = [
             RejectNonCanonicalPath::RESOLVER_HEADER => $rule.':'.$reason->value,
-            'Cache-Control' => 'private, no-store',
-            'CDN-Cache-Control' => 'private, no-store',
             'X-Content-Type-Options' => 'nosniff',
+            ...$directives->headers(),
+        ];
+
+        if ($reason->status() !== 404) {
+            return response('', $reason->status(), $headers);
+        }
+
+        /*
+         * 🛑 §8.11.5's last link, and ADR 0003's reason for skipping the
+         * one before it. A build's own `404.html` is served only when the
+         * ingestor saw no root-absolute references in it, or when this
+         * mount is at the origin root where those references resolve —
+         * otherwise the reader gets DocUp's page rather than a
+         * stylesheet-less copy of the project's.
+         *
+         * The build page itself is handed off by the edge in a later
+         * phase; what is implemented here is the decision and the
+         * fallback, which is the half that can be wrong silently.
+         */
+        return response(NotFoundChain::builtIn(), 404, [
+            ...$headers,
+            'Content-Type' => 'text/html; charset=utf-8',
         ]);
     }
 
