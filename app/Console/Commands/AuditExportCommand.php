@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Audit\Audit;
+use DateTimeZone;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -235,7 +236,12 @@ final class AuditExportCommand extends Command
         }
 
         try {
-            $date = Carbon::createFromFormat('Y-m-d', $given, 'UTC');
+            /*
+             * 🛑 A `DateTimeZone`, not the string `'UTC'` — see the identical
+             * note in {@see AuditAnchorCommand}: the string is refused by
+             * level 8 on PHP 8.5 and accepted on 8.4, which is what CI runs.
+             */
+            $date = Carbon::createFromFormat('Y-m-d', $given, new DateTimeZone('UTC'));
         } catch (\Throwable) {
             $date = null;
         }
