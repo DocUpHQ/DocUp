@@ -12,6 +12,7 @@ use App\Audit\Audit;
 use App\Auth\OrganisationContext;
 use App\Auth\Providers\BindingContext;
 use App\Models\ReaderIdentity;
+use App\Readers\ReaderSessions;
 use App\Support\Invalidation;
 use App\Support\Uuid;
 use Illuminate\Support\Facades\DB;
@@ -60,6 +61,12 @@ final readonly class ReaderProvisioning
     public function __construct(
         private GroupMappings $mappings,
         private OrganisationContext $context,
+        /*
+         * 🛑 §8.12.15's per-session revocation, which an offboarding
+         * needs and which only `App\Readers` may perform. See
+         * {@see self::withdraw()}.
+         */
+        private ReaderSessions $sessions,
     ) {}
 
     /**
@@ -228,6 +235,235 @@ final readonly class ReaderProvisioning
         );
 
         return $created;
+    }
+
+    /**
+     * 🛑 Perform one inbound {@see ProvisioningIntent}, which is the half of
+     * identity lifecycle that JIT provisioning cannot reach.
+     *
+     * {@see self::provision()} is **pull**: a reader signs in and their claims
+     * arrive with them, so it can only ever act on somebody present. An
+     * offboarding has to act on somebody who is **not** present, and who will
+     * never sign in again precisely because they have left.
+     *
+     * 🛑 **`reader_identities.deprovisioned_at` has existed since Phase 24
+     * and nothing ever wrote it.** The login path refuses on it and
+     * §8.12.25's simulator refuses on it, so the read side has been complete
+     * and correct for three phases over a column that was always null — the
+     * same shape of defect as `reader_groups` and `cidr_allowlist` earlier in
+     * this phase. This method is the write side.
+     *
+     * ## 🛑 Why deactivation revokes sessions rather than waiting
+     *
+     * {@see ProvisioningLatency} states the bound, and it is the grant TTL
+     * *because* this method ends the reader's sessions at once. A session left
+     * alive could mint a fresh grant on its next request, and the latency would
+     * become the session's absolute ceiling — twenty-four hours rather than
+     * ten minutes, a factor of 144. The requirement that the latency be stated
+     * "honestly" is therefore also a requirement about what this method does.
+     *
+     * @param  bool  $dryRun  🛑 report what would happen and change nothing.
+     *                        The first sync against a real directory is exactly
+     *                        when a mapping mistake deactivates everybody, so
+     *                        the seam is built to be rehearsed.
+     * @return bool whether anything changed (or would have)
+     *
+     * @throws ProvisioningRefused
+     */
+    public function apply(
+        BindingContext $binding,
+        ProvisioningIntent $intent,
+        bool $dryRun = false,
+        ?int $now = null,
+    ): bool {
+        $now ??= time();
+
+        /*
+         * 🛑 §8.12.5: "SCIM endpoints and portal-role group mappings MUST
+         * exist at installation and organisation scope only." Checked here as
+         * well as on the driver, because this method is the one that writes —
+         * and a project-scoped binding reaching it would be creating and
+         * deleting identities in an organisation's table.
+         */
+        if ($binding->scope() === 'project') {
+            throw ProvisioningRefused::of(
+                ProvisioningRejection::ProvisioningDisabled,
+                'inbound provisioning is installation- and organisation-scope only (§8.12.5)',
+            );
+        }
+
+        $candidates = ReaderSubject::candidates($binding->id, $intent->subject);
+
+        $identity = $this->context->acrossAllOrganisations(
+            static fn (): ?ReaderIdentity => ReaderIdentity::query()
+                ->where('binding_id', $binding->id)
+                ->whereIn('subject_hash', $candidates)
+                ->first(),
+        );
+
+        return match ($intent->action) {
+            ProvisioningAction::Create, ProvisioningAction::Update,
+            ProvisioningAction::Reactivate => $this->upsert($binding, $intent, $identity, $dryRun, $now),
+            ProvisioningAction::Deactivate,
+            ProvisioningAction::Delete => $this->withdraw($binding, $intent, $identity, $dryRun, $now),
+        };
+    }
+
+    /**
+     * Create, update or reactivate.
+     *
+     * 🛑 Reactivation clears `deprovisioned_at` and nothing else, because
+     * the row's group memberships are what the reader comes back to — which
+     * is the whole reason {@see ProvisioningAction::Deactivate} is not
+     * {@see ProvisioningAction::Delete}.
+     */
+    private function upsert(
+        BindingContext $binding,
+        ProvisioningIntent $intent,
+        ?ReaderIdentity $identity,
+        bool $dryRun,
+        int $now,
+    ): bool {
+        $hash = ReaderSubject::hash($binding->id, $intent->subject);
+        $label = $intent->displayLabel === null
+            ? ReaderSubject::displayLabel([], $hash)
+            : ReaderSubject::displayLabel(['name' => $intent->displayLabel], $hash);
+
+        if ($dryRun) {
+            return $identity === null
+                || $identity->deprovisioned_at !== null
+                || $identity->display_label !== $label;
+        }
+
+        /*
+         * Written out rather than `$identity?->id ?? Uuid::v7()`: level 9 calls
+         * the nullsafe unnecessary on the left of `??`, because `id` is itself
+         * non-nullable and the only null it could yield is the one the
+         * coalesce already handles.
+         */
+        $id = $identity === null ? Uuid::v7() : $identity->id;
+
+        DB::transaction(function () use ($binding, $identity, $hash, $label, $id, $now): void {
+            $row = $identity ?? new ReaderIdentity;
+
+            $row->forceFill([
+                'id' => $id,
+                'organisation_id' => $binding->organisationId,
+                'binding_id' => $binding->id,
+                'subject_hash' => $hash,
+                'display_label' => $label,
+                /* 🛑 Cleared: this is what makes a reactivation a reactivation. */
+                'deprovisioned_at' => null,
+                'updated_at' => date('Y-m-d H:i:s.v', $now),
+                'created_at' => $identity === null
+                    ? date('Y-m-d H:i:s.v', $now)
+                    : $identity->created_at,
+            ])->save();
+
+            Audit::record(
+                action: $identity === null
+                    ? 'reader.identity.provisioned'
+                    : 'reader.identity.reprovisioned',
+                actorType: ActorType::System,
+                organisationId: $binding->organisationId,
+                subjectType: 'reader_identity',
+                subjectId: $id,
+                /*
+                 * 🛑 Identifiers and a fixed vocabulary, as
+                 * {@see self::provision()} does: the readable subject exists
+                 * nowhere in DocUp and an audit payload is somewhere.
+                 */
+                payload: ['binding' => Uuid::toText($binding->id), 'mode' => 'inbound'],
+            );
+        });
+
+        $this->bumpIdentityEpochs($binding, $now);
+
+        return true;
+    }
+
+    /**
+     * 🛑 Deactivate or delete, and **revoke every session** either way.
+     *
+     * The revocation is not tidiness: see this class's note on
+     * {@see self::apply()}. Without it {@see ProvisioningLatency}'s ten minutes
+     * would be twenty-four hours, and the requirement to state the latency
+     * honestly would be a requirement to state a worse one.
+     */
+    private function withdraw(
+        BindingContext $binding,
+        ProvisioningIntent $intent,
+        ?ReaderIdentity $identity,
+        bool $dryRun,
+        int $now,
+    ): bool {
+        if ($identity === null) {
+            /*
+             * 🛑 Not an error. A directory that pushes a deletion for
+             * somebody who never signed in here is a directory doing its job,
+             * and refusing would make an offboarding sync fail on the readers
+             * it has least to say about.
+             */
+            return false;
+        }
+
+        if ($dryRun) {
+            return $identity->deprovisioned_at === null;
+        }
+
+        DB::transaction(function () use ($binding, $intent, $identity, $now): void {
+            $identity->forceFill([
+                'deprovisioned_at' => date('Y-m-d H:i:s.v', $now),
+                'updated_at' => date('Y-m-d H:i:s.v', $now),
+            ])->save();
+
+            /*
+             * 🛑 Every session, now. §8.12.15: "Session inventory and
+             * per-session revocation are required because SCIM offboarding
+             * needs them" — this is the sentence that required them.
+             *
+             * 🛑 Through {@see ReaderSessions::revokeIdentity()} rather than
+             * an `UPDATE` of its own, and an architecture test is what insisted:
+             * "only the readers namespace reads the session tables". The first
+             * version did write the SQL here, and it worked — which is the
+             * problem. A second writer of that table is a second place to
+             * forget the epoch bump, and a session revoked without one keeps
+             * its reader admitted until the grant expires, at the two tiers
+             * where it should have stopped on the next request.
+             */
+            $this->sessions->revokeIdentity($identity, 'deprovisioned', $now);
+
+            Audit::record(
+                action: $intent->action === ProvisioningAction::Delete
+                    ? 'reader.identity.deleted'
+                    : 'reader.identity.deprovisioned',
+                actorType: ActorType::System,
+                organisationId: $binding->organisationId,
+                subjectType: 'reader_identity',
+                subjectId: $identity->id,
+                payload: [
+                    'binding' => Uuid::toText($binding->id),
+                    'mode' => 'inbound',
+                    /*
+                     * 🛑 The bound, recorded with the act. An incident
+                     * review asks "when did they actually lose access", and the
+                     * answer is this timestamp plus this number — so both
+                     * are in the chain rather than one of them in a document
+                     * that may since have changed.
+                     */
+                    'latency_seconds' => ProvisioningLatency::seconds(),
+                ],
+            );
+        });
+
+        /*
+         * 🛑 The epoch bump is what makes Tier A and Tier B take effect on
+         * the next request, which is why {@see ProvisioningLatency::seconds()}
+         * is the grant TTL and not the grant TTL plus anything.
+         */
+        $this->bumpIdentityEpochs($binding, $now);
+
+        return true;
     }
 
     /**

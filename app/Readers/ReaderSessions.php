@@ -11,6 +11,7 @@ use App\Access\ReaderContext;
 use App\Audit\ActorType;
 use App\Audit\Audit;
 use App\Auth\OrganisationContext;
+use App\Auth\Providers\Federation\ReaderProvisioning;
 use App\Auth\RoleResolver;
 use App\Models\DocsSession;
 use App\Models\Project;
@@ -548,6 +549,95 @@ final readonly class ReaderSessions
             actorId: $actorId,
             subjectType: 'project',
             subjectId: $project->id,
+            payload: ['reason' => $reason, 'sessions' => (string) $affected],
+        );
+
+        return $affected;
+    }
+
+    /**
+     * 🛑 End every session one reader identity holds, anywhere.
+
+     *
+     * §8.12.15: "Session inventory and per-session revocation are required
+     * because **SCIM offboarding** needs them" — and this is the method that
+     * sentence was asking for. Until Phase 26b nothing offboarded, so nothing
+     * called it.
+     *
+     * 🛑 Here rather than in `App\Auth\Providers\Federation`, and an
+     * architecture test is what insisted: "only the readers namespace reads the
+     * session tables". The first version of {@see ReaderProvisioning}'s
+     * deprovisioning ran its own `UPDATE docs_sessions`, which worked and was
+     * wrong — a second writer of this table is a second place to forget the
+     * epoch bump, and an identity revoked without one keeps reading until its
+     * grant expires at Tier A and B where it should have stopped on the next
+     * request.
+     *
+     * One epoch bump **per project the reader had a session on**, because
+     * {@see Invalidation::bumpIdentity()} is per project and a reader may hold
+     * sessions on several.
+     *
+     * @return int how many sessions were ended
+     */
+    public function revokeIdentity(ReaderIdentity $identity, string $reason, ?int $now = null): int
+    {
+        $now ??= time();
+        $stamp = date('Y-m-d H:i:s.v', $now);
+
+        /*
+         * The projects first, because the UPDATE is what makes them
+         * unreadable afterwards and the epoch bump needs to know which.
+         */
+        $rows = DB::table('docs_sessions')
+            ->select('project_id', 'organisation_id')
+            ->where('reader_identity_id', $identity->id)
+            ->whereNull('revoked_at')
+            ->get();
+
+        $affected = DB::table('docs_sessions')
+            ->where('reader_identity_id', $identity->id)
+            ->whereNull('revoked_at')
+            ->update([
+                'revoked_at' => $stamp,
+                'revoked_reason' => $reason,
+                'updated_at' => $stamp,
+            ]);
+
+        if ($affected === 0) {
+            return 0;
+        }
+
+        $seen = [];
+
+        foreach ($rows as $row) {
+            $projectId = $row->project_id ?? null;
+
+            if (! is_string($projectId) || isset($seen[$projectId])) {
+                continue;
+            }
+
+            $seen[$projectId] = true;
+
+            Invalidation::bumpIdentity(
+                projectId: $projectId,
+                cause: 'identity '.$reason,
+                organisationId: is_string($row->organisation_id ?? null) ? $row->organisation_id : null,
+            );
+        }
+
+        Audit::record(
+            action: 'reader.session.revoked_identity',
+            actorType: ActorType::System,
+            /*
+             * No `is_string()` guard: `ReaderIdentity::$organisation_id` is
+             * declared non-nullable and level 8 proves the narrowing always
+             * true. An installation-scoped binding's identity does carry the
+             * binding's null organisation — but that is typed where it is read
+             * from the binding, not here.
+             */
+            organisationId: $identity->organisation_id,
+            subjectType: 'reader_identity',
+            subjectId: $identity->id,
             payload: ['reason' => $reason, 'sessions' => (string) $affected],
         );
 
