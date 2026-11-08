@@ -16,12 +16,13 @@ use App\Http\Controllers\PolicySimulatorController;
 use App\Http\Controllers\ProjectController;
 use App\Http\Controllers\ProjectVisibilityController;
 use App\Http\Controllers\Readers\HandoffController;
+use App\Http\Controllers\Readers\LdapSignInController;
 use App\Http\Controllers\Readers\OidcCallbackController;
 use App\Http\Controllers\Readers\OidcStartController;
 use App\Http\Controllers\Readers\SamlAcsController;
 use App\Http\Controllers\Readers\SamlStartController;
 use App\Http\Controllers\SchemaController;
-use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -167,10 +168,62 @@ Route::get('_/auth/oidc/callback', OidcCallbackController::class)->name('reader.
 | `validateCsrfTokens(except:)` in `bootstrap/app.php`. An `except` list is a
 | pattern list that grows, and a pattern is easy to widen by accident; a
 | `withoutMiddleware` on a single route cannot cover a route nobody intended.
+
+| 🛑 **AMENDED (Phase 26b, 2026-11-08): the exemption named the wrong
+| class and therefore exempted nothing.**
+|
+| It read `withoutMiddleware(ValidateCsrfToken::class)`. The `web` group runs
+| `PreventRequestForgery`, and `ValidateCsrfToken extends
+| PreventRequestForgery` — so the exclusion named the SUBCLASS while the
+| group ran the PARENT. `Router::gatherRouteMiddleware()` drops a gathered
+| middleware only when its name matches an exclusion or is a subclass of
+| one, and the parent is not a subclass of the child. Measured: with the
+| HTTP kernel registered, the ACS route still gathered
+| `PreventRequestForgery`.
+|
+| 🛑 **The suite could not see it.** `PreventRequestForgery::handle()`
+| skips validation outright when `runningUnitTests()` is true, which it is
+| for the whole suite — so Phase 25's ACS tests passed against a route that
+| would have refused every genuine identity-provider POST in production with
+| a 419. A status-code test can never catch this; the assertion that does is
+| structural, over the gathered middleware, in
+| `tests/Feature/Ldap/LdapSignInTest.php` — which asserts BOTH halves, this
+| route exempt and the credential POST not, because the contrast is the
+| requirement.
 */
+
+/*
+| 🛑 §8.12.16's credential page, which has no protocol leg because `ldap`
+| has no identity provider to visit. The reader types a username and a
+| password here and DocUp binds to the directory itself.
+|
+| 🛑 **On the dashboard origin, and unauthenticated**, for both of the
+| reasons OIDC and SAML are. §8.14.12 adds a third that is specific to this
+| one: "All authentication MUST redirect to the dashboard host with
+| installation branding only, so a tenant-controlled domain can never
+| present a DocUp-styled login form." A credential form served from a
+| documentation host would be exactly that, and §8.1.4 keeps the origins
+| separate so it cannot be.
+|
+| 🛑 **The POST keeps CSRF**, unlike the SAML ACS beside it. The exemption
+| there exists because an assertion arrives as a cross-origin form the
+| identity provider auto-submits, with no DocUp token to present; this form
+| is served by DocUp to the same origin it posts back to, so the token is
+| both available and load-bearing. Without it a third-party page could post
+| a reader's cached credentials into a flow whose handoff challenge the
+| attacker chose.
+|
+| 🛑 No `{binding}` and no `{project}` segment, as above: which directory
+| guards a project is a fact about the project, and a reader who could name
+| one could have DocUp send their password to a directory of their
+| choosing. Both legs resolve it through §8.12.3 from the stored domain.
+*/
+Route::get('_/auth/ldap', [LdapSignInController::class, 'create'])->name('reader.ldap.create');
+Route::post('_/auth/ldap', [LdapSignInController::class, 'store'])->name('reader.ldap.store');
+
 Route::get('_/auth/saml/start', SamlStartController::class)->name('reader.saml.start');
 Route::post('_/auth/saml/acs', SamlAcsController::class)
-    ->withoutMiddleware(ValidateCsrfToken::class)
+    ->withoutMiddleware(PreventRequestForgery::class)
     ->name('reader.saml.acs');
 
 Route::middleware(['auth', 'tenant'])

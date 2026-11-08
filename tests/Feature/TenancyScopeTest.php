@@ -11,7 +11,10 @@ use App\Auth\Exceptions\TenancyContextMissing;
 use App\Auth\OrganisationContext;
 use App\Models\Organisation;
 use App\Models\Project;
+use App\Models\ReaderIdentity;
+use App\Support\Uuid;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 /**
@@ -134,6 +137,77 @@ final class TenancyScopeTest extends TestCase
         $this->assertSame($this->beta->id, $project->organisation_id);
     }
 
+    /**
+     * 🛑 A DELIBERATE null is a declaration, and the hook leaves it alone.
+     *
+     * §8.12.3 scopes a binding at installation, organisation or project level,
+     * and an installation-scoped one has no organisation -- so
+     * `ReaderProvisioning` writes `organisation_id => null` on purpose, with
+     * `ReaderIdentity`'s `#[Tenancy]` attribute saying "the identity inherits
+     * that organisation". Until Phase 26b the `creating` hook turned that
+     * declaration into `require()` and threw, so an installation-scoped binding
+     * could not provision a reader at all -- which is the only scope §8.12.4
+     * permits for `ldap`, `mtls` and `header_trust`.
+     *
+     * `array_key_exists` is what distinguishes the two cases:
+     * `forceFill(['organisation_id' => null])` leaves the key present and
+     * omitting it does not.
+     */
+    public function test_a_deliberate_null_organisation_is_left_alone(): void
+    {
+        /*
+         * 🛑 `binary: true`, because `subject_hash` is `varbinary(32)` -- the
+         * raw digest and not its hex. 64 hex characters are refused with
+         * "Data too long", which is the schema being clear about what it
+         * holds and worth one line here so the next fixture does not fight
+         * it as well.
+         */
+        $this->context->spanAllOrganisations();
+
+        $identity = new ReaderIdentity;
+
+        $identity->forceFill([
+            'id' => Uuid::v7(),
+            'organisation_id' => null,
+            'binding_id' => $this->installationBinding(),
+            'subject_hash' => hash('sha256', 'installation-scoped-reader', binary: true),
+            'display_label' => 'Reader',
+            'last_seen_at' => now(),
+        ])->save();
+
+        $stored = $this->context->acrossAllOrganisations(
+            static fn (): ?ReaderIdentity => ReaderIdentity::query()->whereKey($identity->id)->first(),
+        );
+
+        $this->assertNotNull($stored, 'the row was not written');
+        $this->assertNull($stored->organisation_id, 'the hook overwrote a deliberate null');
+    }
+
+    /**
+     * 🛑 And an OMISSION still throws, which is the guard's whole purpose.
+     *
+     * The asymmetry is the point: "there is no tenant" is a statement an
+     * installation-scoped caller is entitled to make, and "I forgot to say" is
+     * not. A hook that accepted both would let a row be written into no tenant
+     * by omission, which is §14's top finding.
+     */
+    public function test_omitting_the_organisation_while_spanning_all_still_throws(): void
+    {
+        $this->context->spanAllOrganisations();
+
+        $this->expectException(TenancyContextMissing::class);
+
+        $identity = new ReaderIdentity;
+
+        $identity->forceFill([
+            'id' => Uuid::v7(),
+            'binding_id' => $this->installationBinding(),
+            'subject_hash' => hash('sha256', 'reader-with-no-tenant-named', binary: true),
+            'display_label' => 'Reader',
+            'last_seen_at' => now(),
+        ])->save();
+    }
+
     /** Installation-wide work sees every tenant, which is the whole purpose. */
     public function test_spanning_all_organisations_sees_every_project(): void
     {
@@ -190,5 +264,31 @@ final class TenancyScopeTest extends TestCase
         $project = Project::query()->create(['slug' => 'inherits', 'name' => 'Inherits']);
 
         $this->assertTrue($project->inherit_organisation_roles);
+    }
+
+    /**
+     * An installation-scoped binding row, because `reader_identities.binding_id`
+     * carries a foreign key with `ON DELETE RESTRICT` -- §8.12.19's "a
+     * referenced binding MUST NOT be deletable" as a database constraint. A
+     * fabricated id passes every assertion above and fails the insert.
+     */
+    private function installationBinding(): string
+    {
+        $id = Uuid::v7();
+
+        DB::table('auth_provider_bindings')->insert([
+            'id' => $id,
+            'organisation_id' => null,
+            'scope_type' => 'installation',
+            'scope_id' => null,
+            'type' => 'ldap',
+            'name' => 'Corporate directory',
+            'config' => '{}',
+            'state' => 'active',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        return $id;
     }
 }

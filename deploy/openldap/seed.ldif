@@ -1,0 +1,110 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# ------------------------------------------------------------------------------
+# The fixture directory: one service account, three readers, two groups.
+# ------------------------------------------------------------------------------
+#
+# 🛑 Not an example of how to lay out a directory. It is the smallest tree that
+# can exercise every branch the `ldap` driver has:
+#
+#   dana      in `docs-readers`        the ordinary case
+#   morgan    in no group              a reader the directory knows and the
+#                                      policy does not admit, which is how
+#                                      `reader_groups` is shown to be read
+#                                      rather than assumed
+#   ambiguous TWO entries, same uid    §8.12.18's "exactly one" refusal, which
+#                                      needs a directory that really does
+#                                      return two
+#
+# 🛑 Passwords are `{SSHA}` hashes of values a committed file may hold, because
+# nothing here guards anything: the directory exists inside one compose network
+# for the length of a test run. The hashes rather than cleartext because the
+# ACL in the entrypoint makes `userPassword` unreadable, and a cleartext
+# attribute would make slapd log a warning on every start.
+#
+# Generated with: slappasswd -s '<value>'
+#   service account  svc-password-for-tests-only
+#   dana             dana-password-for-tests-only
+#   morgan           morgan-password-for-tests-only
+#   ambiguous        ambiguous-password-for-tests-only
+
+dn: dc=docup,dc=test
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+o: DocUp LDAP fixture
+dc: docup
+
+dn: ou=people,dc=docup,dc=test
+objectClass: organizationalUnit
+ou: people
+
+dn: ou=groups,dc=docup,dc=test
+objectClass: organizationalUnit
+ou: groups
+
+dn: ou=duplicates,dc=docup,dc=test
+objectClass: organizationalUnit
+ou: duplicates
+
+# 🛑 The service account. §8.12.18 requires bind credentials and
+# `LdapConnection::open()` has no anonymous path, so the fixture needs one that
+# can search but cannot read a password — the ACL in the entrypoint is what
+# makes the second half true.
+dn: cn=svc-docup,dc=docup,dc=test
+objectClass: inetOrgPerson
+cn: svc-docup
+sn: Service
+userPassword: {SSHA}WKRLiFxem1a2GVNz4/LqVlZDs7MRIjNE
+
+dn: uid=dana,ou=people,dc=docup,dc=test
+objectClass: inetOrgPerson
+objectClass: posixAccount
+uid: dana
+cn: Dana Okonkwo
+sn: Okonkwo
+uidNumber: 2001
+gidNumber: 2001
+homeDirectory: /home/dana
+userPassword: {SSHA}nZXmqHWV03hrC6nIQjYumEc6jNhVZneI
+
+dn: uid=morgan,ou=people,dc=docup,dc=test
+objectClass: inetOrgPerson
+objectClass: posixAccount
+uid: morgan
+cn: Morgan Reyes
+sn: Reyes
+uidNumber: 2002
+gidNumber: 2002
+homeDirectory: /home/morgan
+userPassword: {SSHA}JchMkm4eg6dQAULAn6FD+YiT9ECZqrvM
+
+# 🛑 Two entries with the same `uid`, in a branch of their own.
+#
+# A directory where this is possible is a directory where it happens: two
+# `ou`s merged, a migration run twice. `LdapConnection::findOne()` refuses
+# rather than picking one, and that refusal cannot be tested against a tree
+# that enforces uniqueness — so the fixture carries the shape, deliberately,
+# with both entries under `ou=duplicates` so no other case can match them.
+dn: uid=ambiguous,ou=duplicates,dc=docup,dc=test
+objectClass: inetOrgPerson
+objectClass: posixAccount
+uid: ambiguous
+cn: Ambiguous One
+sn: One
+uidNumber: 2003
+gidNumber: 2003
+homeDirectory: /home/ambiguous-one
+userPassword: {SSHA}S5CrT/Ex30eNMc7oxbUgpCJSx7Pd7v8B
+
+dn: cn=ambiguous-two,ou=duplicates,dc=docup,dc=test
+objectClass: inetOrgPerson
+objectClass: posixAccount
+uid: ambiguous
+cn: ambiguous-two
+sn: Two
+uidNumber: 2004
+gidNumber: 2004
+homeDirectory: /home/ambiguous-two
+userPassword: {SSHA}S5CrT/Ex30eNMc7oxbUgpCJSx7Pd7v8B

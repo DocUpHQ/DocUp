@@ -60,6 +60,31 @@ return [
         'submit' => 'Save password',
     ],
 
+    /*
+    | §8.12.16's reader credential page, for the `ldap` driver.
+    |
+    | 🛑 `failed` is ONE sentence for every cause: a wrong password, a
+    | username with no directory entry, a directory that is down and a lockout
+    | all say this. Separating them would be an enumeration oracle over the
+    | operator's own employee directory, which anybody who can reach the
+    | dashboard host could read. §8.12.23 says the same thing about
+    | 404-versus-401 and the reasoning transfers intact; the distinction lives
+    | in the audit chain instead.
+    |
+    | 🛑 And there is no `project` or `organisation` string here, because
+    | §8.14.12 forbids one: "Pages that accept credentials MUST carry **no
+    | project or organisation branding**." `directory` is the binding's own
+    | label, which is installation-scoped by §8.12.4.
+    */
+    'reader_sign_in' => [
+        'title' => 'Sign in to continue',
+        'intro' => 'This documentation is private. Sign in with your :directory account.',
+        'username' => 'Username',
+        'password' => 'Password',
+        'submit' => 'Sign in',
+        'failed' => 'That username and password did not work. Please try again.',
+    ],
+
     'failed' => 'Those credentials do not match our records.',
     'throttle' => 'Too many attempts. Please try again in :seconds seconds.',
 

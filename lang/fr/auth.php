@@ -56,4 +56,20 @@ return [
     'failed' => 'Ces identifiants ne correspondent à aucun compte.',
     'throttle' => 'Trop de tentatives. Veuillez réessayer dans :seconds secondes.',
 
+    /*
+    | §8.12.16 — page d'identification du lecteur, pour le pilote `ldap`.
+    |
+    | 🛑 `failed` est UNE seule phrase pour toutes les causes : voir la note
+    | de la version anglaise. Distinguer « mot de passe incorrect » de
+    | « utilisateur inconnu » fournirait un oracle d'énumération sur
+    | l'annuaire de l'exploitant.
+    */
+    'reader_sign_in' => [
+        'title' => 'Connectez-vous pour continuer',
+        'intro' => 'Cette documentation est privée. Connectez-vous avec votre compte :directory.',
+        'username' => 'Identifiant',
+        'password' => 'Mot de passe',
+        'submit' => 'Se connecter',
+        'failed' => "Cet identifiant et ce mot de passe n'ont pas fonctionné. Veuillez réessayer.",
+    ],
 ];

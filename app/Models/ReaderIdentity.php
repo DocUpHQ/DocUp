@@ -55,7 +55,17 @@ use Illuminate\Support\Carbon;
  * property that has to be true before the first provider arrives, not after.
  *
  * @property-read string $id
- * @property string $organisation_id
+ * @property string|null $organisation_id 🛑 null for an INSTALLATION-scoped
+ *                                        binding, which has no organisation of its
+ *                                        own. §8.12.3 scopes a binding at three
+ *                                        levels and the identity inherits whichever
+ *                                        it was vouched for by; the unique key is
+ *                                        `(binding_id, subject_hash)` with no
+ *                                        organisation in it, so one person behind an
+ *                                        installation binding is one row. Made
+ *                                        nullable in Phase 26b, where §8.12.4's
+ *                                        installation-scope-only drivers made the
+ *                                        `NOT NULL` column unreachable.
  * @property string $binding_id
  * @property string $subject_hash a keyed digest, never a readable subject
  * @property string|null $display_label

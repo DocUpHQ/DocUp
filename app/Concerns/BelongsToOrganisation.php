@@ -63,17 +63,43 @@ trait BelongsToOrganisation
 
         // Fill the tenant on insert rather than trusting every call site.
         static::creating(function (Model $model): void {
-            $context = app(OrganisationContext::class);
-
-            if ($model->getAttribute('organisation_id') !== null) {
+            /*
+             * 🛑 An organisation the caller NAMED, including a deliberate null.
+             *
+             * `array_key_exists` rather than a null check, and the distinction
+             * is the whole of this comment: `forceFill(['organisation_id' =>
+             * null])` leaves the key present, while omitting it does not. So an
+             * explicit null is a **declaration** and a missing key is an
+             * **omission**, and only the omission is this hook's business.
+             *
+             * 🛑 Phase 26b is why. §8.12.4 makes `ldap`, `mtls` and
+             * `header_trust` installation-scope only, an installation-scoped
+             * binding has no organisation, and
+             * {@see \App\Auth\Providers\Federation\ReaderProvisioning}
+             * deliberately writes the binding's organisation -- null -- because
+             * §8.12.1 keys a reader identity on `(binding_id, subject_hash)`
+             * with no organisation in it. The old null check turned that
+             * declaration into `require()`, which throws inside the
+             * `acrossAllOrganisations()` span the provisioning runs in: an
+             * installation-scoped binding could not provision a reader at all,
+             * and the error named the tenancy context rather than the cause.
+             *
+             * 🛑 What this does NOT weaken: the schema stays the authority on
+             * whether null is allowed. `reader_identities.organisation_id` is
+             * nullable because the identity may be the installation's; a table
+             * whose column is `NOT NULL` refuses an explicit null at the
+             * database, loudly, where it should.
+             */
+            if (array_key_exists('organisation_id', $model->getAttributes())) {
                 return;
             }
 
             // Spanning all organisations is a legitimate read posture but never
-            // a legitimate way to create a tenant-scoped row: there is no
-            // tenant to put it in. require() throws, which is correct — the
-            // caller must name one.
-            $model->setAttribute('organisation_id', $context->require());
+            // a legitimate way to create a tenant-scoped row BY OMISSION: there
+            // is no tenant to put it in and the caller has not said there is
+            // none. require() throws, which is correct — the caller must
+            // either name an organisation or say null and mean it.
+            $model->setAttribute('organisation_id', app(OrganisationContext::class)->require());
         });
     }
 

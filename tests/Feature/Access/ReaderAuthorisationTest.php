@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Access;
 
+use App\Access\AccessLeaf;
 use App\Access\AccessSurface;
 use App\Access\PolicyRefused;
 use App\Access\ReaderContext;
@@ -286,6 +287,138 @@ final class ReaderAuthorisationTest extends TestCase
 
         // 🛑 And not publicly cacheable, even for the member who may read it.
         $this->assertFalse($member->rulePubliclyCacheable);
+    }
+
+    /**
+     * 🛑 §17's Phase 26b exit criterion 2: "A request outside an IP allowlist
+     * 404s **even with a valid session**."
+     *
+     * The emphasis is the requirement. An unsatisfied `{gate}` denying an
+     * ANONYMOUS reader proves nothing -- anonymity denies on its own, so such a
+     * test passes with the gate removed entirely. What has to hold is that a
+     * reader whose identity is fully established, holding a session this
+     * installation minted, is still refused because of where they are.
+     *
+     * 🛑 **And a 404, not a 403.** §8.12.23 makes the default refusal a 404
+     * because a 403 confirms the resource exists; an allowlist miss is exactly
+     * the case where an attacker is probing from outside and a 403 would tell
+     * them they had found something.
+     *
+     * 🛑 What this test does NOT cover, said plainly: it asserts the DECISION
+     * over a requirement tree whose `{gate}` leaf is unsatisfied, with the real
+     * {@see ReaderGate}. Deciding that a given address is outside the
+     * allowlist is `IpAllowlistDriver`'s half and is tested where that driver
+     * is -- including `provider-013` in the abuse corpus, which fixes how a
+     * `::ffff:` spelling is treated. The two halves meet in the serving path,
+     * which no test drives with a real client address.
+     */
+    public function test_a_reader_outside_the_ip_allowlist_is_refused_with_a_valid_session(): void
+    {
+        $this->version->forceFill(['visibility' => 'members'])->save();
+
+        /** @var ReaderPolicies $policies */
+        $policies = app(ReaderPolicies::class);
+        $policies->createFor($this->project);
+
+        /*
+         * 🛑 `{binding} AND {gate}`, which is the only shape §8.12.7 permits:
+         * a gate-only rule is refused at write time because it would be
+         * satisfiable without any identity -- which is asserted directly by
+         * {@see self::test_a_gate_only_rule_is_refused_at_write_time()}. So the
+         * allowlist can only ever NARROW an identity requirement, and this is
+         * the narrowing under test.
+         */
+        $policies->addRule(
+            $this->project,
+            label: 'signed in, from the office',
+            allow: true,
+            requirement: [
+                'all' => [
+                    ['leaf' => 'binding'],
+                    ['leaf' => 'gate', 'driver' => 'ip_allowlist'],
+                ],
+            ],
+        );
+
+        Cache::flush();
+
+        /** @var ReaderGate $gate */
+        $gate = app(ReaderGate::class);
+
+        $snapshot = app(RoutingSnapshotLoader::class)->load($this->host);
+        $mount = $snapshot->matchFor('/');
+
+        $this->assertNotNull($mount);
+
+        $version = $mount->mount->project->version('en', 'latest');
+
+        $this->assertNotNull($version);
+
+        /*
+         * A reader whose session is entirely valid: the binding leaf is
+         * satisfied and the subject is known. The gate leaf is not, which is
+         * what being outside the allowlist means by the time the decision is
+         * taken.
+         */
+        /*
+         * 🛑 `Members`, because this version is `members`-visible and the
+         * level has to clear that before the RULE is reached at all. Set on
+         * both contexts deliberately: the one thing that differs between
+         * them is the gate leaf, so the gate is the only thing the
+         * comparison can be about. With `Authenticated` here the positive
+         * control failed on visibility and the test would have "passed" its
+         * negative half for a reason that had nothing to do with an
+         * allowlist.
+         */
+        $insideTheOffice = new ReaderContext(
+            level: AccessLevel::Members,
+            satisfiedLeaves: [AccessLeaf::Binding, AccessLeaf::Gate],
+            credentialPresented: true,
+            subject: 'reader-subject',
+        );
+
+        $elsewhere = new ReaderContext(
+            level: AccessLevel::Members,
+            satisfiedLeaves: [AccessLeaf::Binding],
+            credentialPresented: true,
+            subject: 'reader-subject',
+        );
+
+        /*
+         * 🛑 The positive control FIRST. Without it this test passes on a
+         * policy that denies everybody, which is the failure mode of every
+         * assertion below.
+         */
+        $allowed = $gate->authorise(
+            $mount->mount, $version, 'en', '/', AccessSurface::Proxy, reader: $insideTheOffice,
+        );
+
+        $this->assertTrue($allowed->allowed, 'the rule denies a reader who satisfies all of it');
+        $this->assertSame(200, $allowed->status);
+
+        $refused = $gate->authorise(
+            $mount->mount, $version, 'en', '/', AccessSurface::Proxy, reader: $elsewhere,
+        );
+
+        $this->assertFalse(
+            $refused->allowed,
+            'a reader with a valid session was admitted from outside the allowlist',
+        );
+
+        $this->assertSame(
+            404,
+            $refused->status,
+            '🛑 §8.12.23: an allowlist miss is a 404, because a 403 confirms the resource exists',
+        );
+
+        /*
+         * 🛑 And never publicly cacheable. §9.3.2: "private content never
+         * carries a public cache directive" -- and a decision that depends on
+         * the client's ADDRESS is the least cacheable kind there is, because a
+         * shared cache would serve one network's answer to another's.
+         */
+        $this->assertFalse($refused->rulePubliclyCacheable);
+        $this->assertFalse($allowed->rulePubliclyCacheable);
     }
 
     /** 🛑 The download surface takes the same decision (§8.12.21). */
