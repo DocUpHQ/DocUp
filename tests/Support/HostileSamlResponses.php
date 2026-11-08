@@ -527,11 +527,30 @@ final class HostileSamlResponses
         return $this->valid(requestId: null);
     }
 
-    /** `saml-014`: 130 seconds of skew, against §8.12.18's 120-second ceiling. */
+    /**
+     * `saml-014`: 130 seconds of skew, against §8.12.18's 120-second ceiling.
+     *
+     * 🛑 Shifted by **160**, not 130, and the arithmetic is the point. The
+     * skeleton sets `NotBefore` to `now - 30`, so shifting the clock by 130
+     * puts `NotBefore` only 100 seconds in the future — comfortably inside the
+     * ceiling, and the validator accepted it. The first version of this builder
+     * did exactly that, and the test caught the **fixture**: a ceiling only
+     * holds if something is genuinely on the far side of it.
+     *
+     * 160 - 30 = 130, so `NotBefore` lands exactly 130 seconds ahead.
+     */
     public function clock_skew_130s(?string $requestId = 'docup-request-1'): string
     {
-        return $this->valid($requestId, now: time() + 130);
+        return $this->valid($requestId, now: time() + self::MAX_SKEW_OVERSHOOT + 30);
     }
+
+    /**
+     * 🛑 How far past §8.12.18's 120-second ceiling `clock_skew_130s` reaches.
+     *
+     * A named constant so the fixture's intent survives a change to the
+     * skeleton's own offsets — which is how the first version went wrong.
+     */
+    public const int MAX_SKEW_OVERSHOOT = 130;
 
     // ------------------------------------------------------------ building
 
