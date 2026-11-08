@@ -635,9 +635,16 @@ final readonly class PolicyLinter
         }
 
         /*
-         * 🛑 §9.3.2's caching axis, last because it is the quietest: a rule
-         * that starts permitting a public cache directive has widened who can
-         * read the response even when it has not widened who can request it.
+         * 🛑 §9.3.2's caching axis, and it is **defence against a hand-edited
+         * row** rather than a transition the product can produce.
+         *
+         * `ReaderPolicies::addRule()` refuses `cache_mode = 'public'` unless
+         * the requirement is literally `{"leaf":"public"}`, so the flag is
+         * pinned to the requirement's shape: a rule that legitimately changes
+         * it must change its requirement too, and the `identity` branch above
+         * has already answered by then. What reaches here is a row somebody
+         * wrote by hand — which is exactly the row worth reporting, and the
+         * direction is still knowable.
          */
         if ($before['public_cache'] === false && $after['public_cache'] === true) {
             return PolicyFinding::Widened;
@@ -647,7 +654,7 @@ final readonly class PolicyLinter
             return PolicyFinding::Narrowed;
         }
 
-        return null;
+        return self::windowDirection($before, $after);
     }
 
     /**
@@ -658,9 +665,24 @@ final readonly class PolicyLinter
      */
     private static function selectorsGrew(array $before, array $after): bool
     {
-        if ($before === $after) {
-            return false;
-        }
+        /*
+         * 🛑 **At least one axis must actually have moved**, and the first
+         * version of this method got that wrong in a way worth recording.
+         *
+         * It began `if ($before === $after) return false`, comparing the whole
+         * breadth array — so a change to `public_cache` or to the time window
+         * left all three selector axes equal, every iteration `continue`d, and
+         * the method returned "grew" with no selector having grown. Both
+         * `$grew` and `$shrank` came back true at the call site, and `Widened`
+         * was returned before the branches that know about those two axes were
+         * ever reached.
+         *
+         * The visible failure was an operator told `widened` for turning a
+         * public cache directive **off** — a false alarm in the frightening
+         * direction, which is precisely the "alert with the wrong label is read
+         * and dismissed" that {@see self::directionOf()} exists to avoid.
+         */
+        $moved = false;
 
         foreach (['versions', 'languages', 'paths'] as $axis) {
             $old = is_array($before[$axis]) ? $before[$axis] : [];
@@ -669,6 +691,8 @@ final readonly class PolicyLinter
             if ($old === $new) {
                 continue;
             }
+
+            $moved = true;
 
             /* `['*']` is the stored spelling of "every value on this axis". */
             if ($new === ['*']) {
@@ -692,7 +716,50 @@ final readonly class PolicyLinter
             }
         }
 
-        return true;
+        return $moved;
+    }
+
+    /**
+     * 🛑 §12.3's validity window, as a direction.
+     *
+     * A rule live for longer admits more and one live for less admits less, so
+     * editing `not_before` or `not_after` is a reachability change with a
+     * direction — and the linter said nothing about it until the selector bug
+     * above was fixed, because `selectorsGrew()` was swallowing every
+     * window-only edit as a widening.
+     *
+     * Null means the two windows overlap without either containing the other,
+     * which is a reschedule rather than a tightening or a loosening.
+     *
+     * @param  array<string, mixed>  $before
+     * @param  array<string, mixed>  $after
+     */
+    private static function windowDirection(array $before, array $after): ?PolicyFinding
+    {
+        $old = is_array($before['window'] ?? null) ? $before['window'] : [];
+        $new = is_array($after['window'] ?? null) ? $after['window'] : [];
+
+        if ($old === $new) {
+            return null;
+        }
+
+        $oldFrom = is_int($old['not_before'] ?? null) ? $old['not_before'] : null;
+        $oldTo = is_int($old['not_after'] ?? null) ? $old['not_after'] : null;
+        $newFrom = is_int($new['not_before'] ?? null) ? $new['not_before'] : null;
+        $newTo = is_int($new['not_after'] ?? null) ? $new['not_after'] : null;
+
+        /* Null is unbounded, so it contains every bound on that side. */
+        $startsNoLater = $newFrom === null || ($oldFrom !== null && $newFrom <= $oldFrom);
+        $endsNoEarlier = $newTo === null || ($oldTo !== null && $newTo >= $oldTo);
+
+        if ($startsNoLater && $endsNoEarlier) {
+            return PolicyFinding::Widened;
+        }
+
+        $startsNoEarlier = $oldFrom === null || ($newFrom !== null && $oldFrom <= $newFrom);
+        $endsNoLater = $oldTo === null || ($newTo !== null && $oldTo >= $newTo);
+
+        return $startsNoEarlier && $endsNoLater ? PolicyFinding::Narrowed : null;
     }
 
     /**

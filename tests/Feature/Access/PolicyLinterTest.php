@@ -13,6 +13,7 @@ use App\Access\PathPrefix;
 use App\Access\PolicyFinding;
 use App\Access\PolicyLinter;
 use App\Access\PolicyObservation;
+use App\Access\PolicyRefused;
 use App\Access\ReaderPolicies;
 use App\Access\ReaderPolicy;
 use App\Access\Requirement;
@@ -476,6 +477,136 @@ final class PolicyLinterTest extends TestCase
                 '🛑 §8.12.6: reordering a policy changes which rule decides',
             );
         }
+    }
+
+    /**
+     * 🛑 **§9.3.2 makes the public-cache direction unreachable, and finding
+     * that out is the point of this test.**
+     *
+     * The linter has a branch that reports a rule gaining or losing
+     * `public_cache` as a widening or a narrowing. It cannot fire for any row
+     * the product will store: {@see ReaderPolicies::addRule()}
+     * refuses `cache_mode = 'public'` unless the requirement is literally
+     * `{"leaf":"public"}` — "only a rule whose requirement is literally
+     * {"leaf":"public"} may be publicly cacheable" — so the flag is pinned to
+     * the requirement's shape. A rule that changes the flag must change its
+     * requirement too, at which point the `identity` branch has already
+     * answered.
+     *
+     * Two tests were written against that branch before this was checked, and
+     * both were worthless: one manufactured a `public` cache mode on a
+     * `{binding}` rule by writing the column directly — a state the product
+     * refuses — and the other asserted a no-op. They are replaced by this,
+     * which asserts the refusal instead, because the refusal is the real
+     * property and it is one an operator depends on.
+     */
+    public function test_a_public_cache_directive_is_refused_on_an_identity_rule(): void
+    {
+        $this->expectException(PolicyRefused::class);
+
+        $this->policies->addRule(
+            project: $this->project,
+            label: 'staff read v1, cached publicly',
+            allow: true,
+            requirement: ['leaf' => AccessLeaf::Binding->value, 'binding_id' => Uuid::toText($this->bindingId)],
+            versionSlugs: ['v1'],
+            publicCacheMode: true,
+            actorId: $this->owner->id,
+        );
+    }
+
+    /**
+     * 🛑 §12.3's validity window has a direction too, and it was being
+     * swallowed by the same bug.
+     *
+     * A rule live for longer admits more; one live for less admits less.
+     * Shortening a window was reported as a widening, for the same reason.
+     */
+    public function test_shortening_a_rules_window_is_a_narrowing(): void
+    {
+        $this->rule('staff read v1', allow: true, versions: ['v1']);
+
+        DB::table('reader_policy_rules')
+            ->where('label', 'staff read v1')
+            ->update(['not_after' => date('Y-m-d H:i:s.v', time() + 604800)]);
+
+        Cache::flush();
+        $this->lint();
+
+        /* A week becomes an hour. */
+        DB::table('reader_policy_rules')
+            ->where('label', 'staff read v1')
+            ->update(['not_after' => date('Y-m-d H:i:s.v', time() + 3600)]);
+
+        Cache::flush();
+
+        $observations = $this->lint();
+
+        $this->assertContains(PolicyFinding::Narrowed, $observations[0]->changes);
+        $this->assertNotContains(PolicyFinding::Widened, $observations[0]->changes);
+    }
+
+    /** And extending it is a widening. */
+    public function test_extending_a_rules_window_is_a_widening(): void
+    {
+        $this->rule('staff read v1', allow: true, versions: ['v1']);
+
+        DB::table('reader_policy_rules')
+            ->where('label', 'staff read v1')
+            ->update(['not_after' => date('Y-m-d H:i:s.v', time() + 3600)]);
+
+        Cache::flush();
+        $this->lint();
+
+        DB::table('reader_policy_rules')
+            ->where('label', 'staff read v1')
+            ->update(['not_after' => date('Y-m-d H:i:s.v', time() + 604800)]);
+
+        Cache::flush();
+
+        $observations = $this->lint();
+
+        $this->assertContains(PolicyFinding::Widened, $observations[0]->changes);
+        $this->assertNotContains(PolicyFinding::Narrowed, $observations[0]->changes);
+    }
+
+    /**
+     * 🛑 A window moved sideways is a reschedule, and its direction cannot be
+     * established.
+     *
+     * Neither window contains the other, so neither word is true — reported as
+     * a change rather than guessed, for the reason
+     * `test_repointing_a_rule_at_another_binding_is_a_change` gives.
+     */
+    public function test_rescheduling_a_window_has_no_direction(): void
+    {
+        $this->rule('staff read v1', allow: true, versions: ['v1']);
+
+        DB::table('reader_policy_rules')
+            ->where('label', 'staff read v1')
+            ->update([
+                'not_before' => date('Y-m-d H:i:s.v', time() - 3600),
+                'not_after' => date('Y-m-d H:i:s.v', time() + 3600),
+            ]);
+
+        Cache::flush();
+        $this->lint();
+
+        /* Shifted forward by two hours: later start, later end. */
+        DB::table('reader_policy_rules')
+            ->where('label', 'staff read v1')
+            ->update([
+                'not_before' => date('Y-m-d H:i:s.v', time() + 3600),
+                'not_after' => date('Y-m-d H:i:s.v', time() + 10800),
+            ]);
+
+        Cache::flush();
+
+        $observations = $this->lint();
+
+        $this->assertContains(PolicyFinding::Changed, $observations[0]->changes);
+        $this->assertNotContains(PolicyFinding::Widened, $observations[0]->changes);
+        $this->assertNotContains(PolicyFinding::Narrowed, $observations[0]->changes);
     }
 
     // ------------------------------------------------- re-validation
