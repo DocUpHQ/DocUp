@@ -67,4 +67,8 @@ front, not after the migration:
   tokens, and why a broken provider answers 503 rather than falling back.
 - [Connecting an IdP](oidc.md) — OpenID Connect, one redirect URI for every
   domain, and the eight protocol checks you cannot switch off.
+- [Connecting SAML](saml.md) — what DocUp does and does not implement of
+  SAML 2.0, and the refusals that are not configurable.
+- [Proving who may read it](assurance.md) — the policy simulator, the nightly
+  linter and multi-factor enforcement. Read this one before you trust a policy.
 - [Running it](operations.md) — the scheduler, backups, the build sandbox.

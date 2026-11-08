@@ -1439,6 +1439,166 @@
       "builder": "exchange A's assertion with exchange B's RelayState",
       "expect": "saml.in_response_to_unknown",
       "note": "RelayState is an index into verified state, never a carrier - the stored row holds the request id"
+    },
+    {
+      "id": "policy-001",
+      "category": "policy",
+      "defends": "8.12.25",
+      "input": "a policy simulation naming a reader_identities row belonging to another organisation",
+      "expect": "no_such_identity",
+      "note": "🛑 The simulator's answer carries the identity's binding and its reconciled groups (§8.13.7), so simulating another tenant's reader renders both into this tenant's dashboard. §8.2.2 makes a cross-tenant reference a 404 and the refusal is the ABSENCE of a row rather than a comparison — and it is a refusal, not a denial, because 'that identity may not read this' is a statement about somebody else's reader."
+    },
+    {
+      "id": "policy-002",
+      "category": "policy",
+      "defends": "8.13.7",
+      "input": "a policy simulation naming an identity with deprovisioned_at set",
+      "expect": "identity_deprovisioned",
+      "note": "🛑 There is no reader to simulate. Answering 'deny' would be a true sentence about the wrong subject — the policy is not what refuses them, their deprovisioning is — and an operator would go looking for a rule."
+    },
+    {
+      "id": "policy-003",
+      "category": "policy",
+      "defends": "8.12.25",
+      "input": "a project_reader requesting the policy simulator page",
+      "expect": "404",
+      "note": "🛑 `project.view` is not `project.policy.simulate`. Answering the simulator means naming the organisation's reader identities and their groups — a membership list of everybody who has ever signed in to the documentation, classified `pseudonymous` by §8.22.7. A reader of a project is not an auditor of its readership."
+    },
+    {
+      "id": "policy-004",
+      "category": "policy",
+      "defends": "8.12.25",
+      "input": "the session handle a simulation constructed, replayed as a __Host-docup_rsess cookie",
+      "expect": "404",
+      "note": "🛑 A simulation mints nothing: no session, no grant, no cookie, no row. The handle is 16 random bytes that never reached `docs_sessions`, so it resolves to nothing — which is what stops the simulator being a credential factory for any identity an operator can name."
+    },
+    {
+      "id": "policy-005",
+      "category": "policy",
+      "defends": "20.3",
+      "input": "many policy simulations, then a reading of access_decisions",
+      "expect": "0",
+      "note": "🛑 §20.3's log is a record of reader REQUESTS. An allow row attributed to a reader who never asked would be indistinguishable from a real one for ever, because the subject is stored only as a keyed digest — and an audit trail that cannot be trusted to mean what it says is worse than one missing an entry."
+    },
+    {
+      "id": "policy-006",
+      "category": "policy",
+      "defends": "8.12.22",
+      "input": "an allow rule edited so its requirement becomes {\"leaf\": \"public\"}",
+      "expect": "widened",
+      "note": "🛑 §19/40's named failure mode as one word in a JSON tree: 'the observed failure mode is defaulting projects to public, which quietly voids G3'. Same label, same position, same selectors, same effect — and everybody on the internet can now read it."
+    },
+    {
+      "id": "policy-007",
+      "category": "policy",
+      "defends": "8.12.22",
+      "input": "an allow rule's version_selector emptied, so it selects every version",
+      "expect": "widened",
+      "note": "🛑 The rule still reads as a restriction — it still names a binding, it still has an allow effect — and it now governs documentation it did not govern yesterday."
+    },
+    {
+      "id": "policy-008",
+      "category": "policy",
+      "defends": "8.12.22",
+      "input": "an allow rule taken out of shadow",
+      "expect": "widened",
+      "note": "🛑 Nothing about the rule changed: no selector moved and no requirement changed. What changed is that §8.12.6's first-match pass was skipping it and is not any more — a widening with no diff to the rule itself."
+    },
+    {
+      "id": "policy-009",
+      "category": "policy",
+      "defends": "8.12.22",
+      "input": "a deny rule's path_patterns emptied, so it denies every path",
+      "expect": "narrowed",
+      "note": "🛑 Widening a DENY rule narrows access, and the alert has to say so. §8.12.6 never evaluates a deny rule's requirement, so only its selectors move the needle — and an alert that cried 'widened' about somebody tightening something teaches an operator to disbelieve the word."
+    },
+    {
+      "id": "policy-010",
+      "category": "policy",
+      "defends": "8.12.22",
+      "input": "an allow rule repointed from binding A to binding B, same leaf kind",
+      "expect": "changed",
+      "note": "🛑 A different population of people can read, and neither 'widened' nor 'narrowed' is true. Reported as a change whose direction cannot be established, because a labelled alert is read and dismissed while an unlabelled one is looked at."
+    },
+    {
+      "id": "policy-011",
+      "category": "policy",
+      "defends": "8.12.22",
+      "input": "a rule on /internal-notes behind an earlier rule on /internal",
+      "expect": "reachable",
+      "note": "🛑 The path boundary is a prefix followed by a slash, never a string prefix. `/internal` covers `/internal/notes` and NOT `/internal-notes`; reporting the sibling as dead would have an operator delete a rule and open the section it was protecting."
+    },
+    {
+      "id": "policy-012",
+      "category": "policy",
+      "defends": "8.12.6",
+      "input": "an enforced rule behind a shadow rule whose selectors cover it",
+      "expect": "reachable",
+      "note": "🛑 `firstMatch` skips shadow rules and `shadowMatch` considers only them, so the two populations never compete. One ordering over both would report every policy using the feature as broken — which is how a feature gets abandoned."
+    },
+    {
+      "id": "policy-013",
+      "category": "policy",
+      "defends": "8.12.19",
+      "input": "a binding deleted from under an allow rule that names it",
+      "expect": "binding_missing",
+      "note": "🛑 The reason §8.12.22 says NIGHTLY. Write-time validation checked a world that has since changed: the rule is still valid, still matches, still consumes the first-match slot, and can no longer be satisfied by anybody. The project refuses every reader and the cause is in another table."
+    },
+    {
+      "id": "policy-014",
+      "category": "policy",
+      "defends": "8.12.22",
+      "input": "an allow rule naming a dead binding in one branch of an {\"any\": [...]}",
+      "expect": "reachable",
+      "note": "🛑 Satisfiability is COMPUTED through the requirement's own evaluator, not concluded from the presence of a dead binding. A surviving branch keeps the rule working, and reporting it broken would send an operator to fix a rule that works — after which they would widen it."
+    },
+    {
+      "id": "policy-015",
+      "category": "policy",
+      "defends": "8.13.4",
+      "input": "an org_admin with two_factor_secret set and two_factor_confirmed_at NULL requesting the dashboard",
+      "expect": "mfa_enrolment_required",
+      "note": "🛑 A secret alone is somebody who opened the QR screen and closed the tab. Counting it as enrolment would lock them out with a secret no authenticator holds, remediable only by an operator clearing a column — so §8.13.4's enrolment test is the CONFIRMATION, which is why `config/fortify.php` sets `confirm => true`."
+    },
+    {
+      "id": "policy-016",
+      "category": "policy",
+      "defends": "8.13.4",
+      "input": "a project_admin assigned only at project scope, on an organisation requiring MFA",
+      "expect": "mfa_enrolment_required",
+      "note": "🛑 The role query that misses them: `rolesFor()` includes project-scope assignments only when it is handed a project, so asking 'what roles does this person hold' without one lets exactly this administrator past — silently, because nothing about the check looks wrong."
+    },
+    {
+      "id": "policy-017",
+      "category": "policy",
+      "defends": "8.13.4",
+      "input": "an organisation setting mfa_required=false while DOCUP_MFA_REQUIRED=true",
+      "expect": "mfa_enrolment_required",
+      "note": "🛑 The installation switch dominates. The reverse ordering would make the tenant switch a vulnerability with a checkbox: an org_admin opting their own organisation out of the operator's security posture."
+    },
+    {
+      "id": "policy-018",
+      "category": "policy",
+      "defends": "8.13.4",
+      "input": "a blocked administrator requesting the enrolment page, Fortify's two-factor endpoints, the password confirmation or logout",
+      "expect": "allowed",
+      "note": "🛑 The gate must not block the remedy. An installation whose administrators cannot reach the page that lets them in is repaired by editing the database — and they will reach for DOCUP_MFA_REQUIRED=false instead, after which §8.13.4 is satisfied by a key nobody can turn on."
+    },
+    {
+      "id": "policy-019",
+      "category": "policy",
+      "defends": "8.13.4",
+      "input": "a project_writer on an organisation requiring MFA",
+      "expect": "allowed",
+      "note": "🛑 §8.13.4 is 'required above project_writer', and the exemption is half the requirement. A gate that held out everybody would lock out the people with no administrative reach and the most of them — and would pass every test that only checked the admin."
+    },
+    {
+      "id": "policy-020",
+      "category": "policy",
+      "defends": "8.13.4",
+      "input": "an enrolled user signing in with a correct password and no second factor",
+      "expect": "two-factor.login",
+      "note": "🛑 Phase 02 enabled two-factor, published the columns and wired the challenge view — and left `TwoFactorAuthenticatable` off `User`. Fortify gates the challenge on `class_uses_recursive`, so an enrolled user was issued a secret, shown a QR code, and then signed in with a password alone. A silent no-op in the authentication path, found in Phase 26a."
     }
   ]
 }
