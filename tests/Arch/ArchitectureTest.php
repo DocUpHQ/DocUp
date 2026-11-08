@@ -1248,7 +1248,48 @@ final class ArchitectureTest extends TestCase
      */
     public function test_only_the_ingestor_verifies_a_delivery(): void
     {
-        $allowed = ['app/Webhooks/WebhookIngestor.php', 'app/Webhooks/SignatureScheme.php'];
+        /*
+         * 🛑 **Three entries, and the third one needs its reasoning recorded.**
+         *
+         * §8.19.3's rule is that `SignatureScheme::verify()` has one call site.
+         * The needle is the bare literal `->verify(` anywhere in `app/`, which
+         * is a **proxy** for that rule, and the proxy has now collided with
+         * unrelated code in three consecutive phases:
+         *
+         *  - **P22** renamed `GrantVerifier::verify()` to `grantFor()`;
+         *  - **P24** renamed `IdTokenVerifier::verify()` to `claimsFor()`,
+         *    which P22's build log had predicted;
+         *  - **P25** can rename nothing: the call is `XMLSecurityDSig::verify()`
+         *    on a **vendor** object in a library whose whole job is XML-DSig.
+         *
+         * 🛑 P25 tried to make the needle precise instead and found it cannot
+         * be. `SignatureScheme` is an enum and the ingestor reaches its
+         * `verify()` through a model cast, so the **calling code names nothing**
+         * — `code()` strips comments, and the only mention of the class in
+         * `WebhookIngestor.php` is a docblock. A conjunction of
+         * "names SignatureScheme" and "calls ->verify(" therefore matched
+         * neither the real call site nor a hypothetical violator, which the
+         * companion test below caught immediately. A grep that matches nothing
+         * is the one failure mode a grep-based gate has that looks like success.
+         *
+         * So the needle stays broad and this file is exempted by **path**, with
+         * the boundary stated: it verifies an XML-DSig signature on a SAML
+         * assertion, against a certificate on an `auth_provider_bindings` row.
+         * It touches no webhook, no delivery and no `SignatureScheme`, and an
+         * architecture test asserts the latter.
+         *
+         * 🛑 **A fourth entry should change the mechanism, not the list.** The
+         * sibling test's words apply: "an allowlist that grows by one
+         * legitimate case per phase stops being a gate". The replacement, when
+         * it is needed, is a check on the resolved type rather than on the
+         * method name — which is a static-analysis rule, not a grep.
+         */
+        $allowed = [
+            'app/Webhooks/WebhookIngestor.php',
+            'app/Webhooks/SignatureScheme.php',
+            'app/Auth/Providers/Saml/SignatureVerifier.php',
+        ];
+
         $offenders = [];
 
         foreach ($this->sourceFiles() as $file) {
@@ -1267,6 +1308,37 @@ final class ArchitectureTest extends TestCase
             [],
             $offenders,
             'SPEC 8.19.3: WebhookIngestor is the one call site: '.implode(', ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.19.3's companion: the needle above must still find the
+     * thing it is looking for.
+     *
+     * A grep-based gate has one failure mode that looks like success — the
+     * needle stops matching anything, and the test passes for ever. The
+     * original `->verify(` needle was renamed around twice; this asserts that
+     * the replacement still appears where it is supposed to, so a future rename
+     * of `SignatureScheme` fails here rather than silently retiring the gate.
+     */
+    public function test_the_signature_gate_still_has_something_to_find(): void
+    {
+        $this->assertStringContainsString(
+            '->verify(',
+            $this->code(base_path('app/Webhooks/WebhookIngestor.php')),
+            '🛑 SPEC 8.19.3: the gate greps for `->verify(`, so a rename inside the '
+                .'ingestor must fail HERE rather than quietly make the gate match nothing',
+        );
+
+        /*
+         * 🛑 And the SAML exemption is real rather than a habit: the file it
+         * covers must still be the only reason it exists.
+         */
+        $this->assertStringNotContainsString(
+            'SignatureScheme',
+            $this->code(base_path('app/Auth/Providers/Saml/SignatureVerifier.php')),
+            '🛑 SPEC 8.19.3: the SAML verifier is exempt because it touches no '
+                .'`SignatureScheme`; if it ever does, the exemption is wrong',
         );
     }
 
