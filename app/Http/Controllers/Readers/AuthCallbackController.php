@@ -10,6 +10,7 @@ namespace App\Http\Controllers\Readers;
 use App\Audit\ActorType;
 use App\Audit\Audit;
 use App\Models\Project;
+use App\Models\ReaderIdentity;
 use App\Models\User;
 use App\Readers\Grants\Grant;
 use App\Readers\HandoffRefused;
@@ -124,17 +125,40 @@ final readonly class AuthCallbackController
             return ReaderRejection::notFound();
         }
 
-        $user = User::query()->find($redeemed['userId']);
+        /*
+         * 🛑 Either a dashboard member or a provider-vouched reader, and
+         * **exactly one** — the table's CHECK guarantees it, so the branch here
+         * is a read of which column is set rather than a decision.
+         *
+         * Phase 24 added the second case. `ReaderSessions::establish()` has
+         * taken `User|ReaderIdentity` since Phase 22, which is the seam that
+         * made this two lines rather than a refactor.
+         */
+        $subject = $redeemed['userId'] !== null
+            ? User::query()->find($redeemed['userId'])
+            : ReaderIdentity::query()->withoutGlobalScopes()->find($redeemed['readerIdentityId']);
+
         $project = Project::query()->withoutGlobalScopes()->find($projectId);
 
-        if (! $user instanceof User || ! $project instanceof Project) {
+        if ((! $subject instanceof User && ! $subject instanceof ReaderIdentity) || ! $project instanceof Project) {
+            return ReaderRejection::notFound();
+        }
+
+        /*
+         * 🛑 A deprovisioned reader identity establishes nothing, checked
+         * here as well as at provisioning. The two are different moments: that
+         * one is a login, this one is a code redeemed up to thirty seconds
+         * later, and an operator who deprovisioned a reader in between should
+         * win.
+         */
+        if ($subject instanceof ReaderIdentity && $subject->deprovisioned_at !== null) {
             return ReaderRejection::notFound();
         }
 
         $established = $this->sessions->establish(
             project: $project,
             domainId: $snapshot->domainId,
-            subject: $user,
+            subject: $subject,
             combinedEpoch: Grant::combinedEpoch(
                 $match->mount->project->authzEpoch,
                 $match->mount->project->identityEpoch,

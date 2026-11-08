@@ -94,6 +94,91 @@ final class GrantTest extends TestCase
     }
 
     /**
+     * 🛑 A binding-named rule survives the round trip through a grant.
+     *
+     * > "§8.12.6's requirement leaf … `{"leaf": "binding", "binding_id":
+     * > "<uuid>"}`"
+     *
+     * Phase 24's regression test for a Phase 22 defect its own exit criterion
+     * found. `GrantVerifier::fromClaims()` parsed the `bnd` claim with a
+     * closure that returned raw 16 bytes, while the requirement JSON holds UUID
+     * **text** and `ReaderContext::satisfies()` compares with
+     * `in_array(..., true)`. A strict comparison between 16 bytes and 36
+     * characters is always false, so every rule naming a binding was
+     * unsatisfiable on the grant path — which is every request after a reader's
+     * first, because the first mints the grant and the rest present it.
+     *
+     * 🛑 It could not show before Phase 24. The field is empty throughout
+     * Phase 22 (no binding exists until P23), Phase 23's own drivers re-present
+     * their credential on every request so they never relied on the grant
+     * carrying one, and the symptom is two code paths disagreeing — an allow
+     * followed by a deny for the same reader and the same URL.
+     *
+     * Asserted at both ends: the claim round-trips as text, and the
+     * reconstructed context satisfies a leaf naming that binding.
+     */
+    public function test_a_grant_carries_a_satisfied_binding_as_text(): void
+    {
+        $bindingId = Uuid::toBytes(Uuid::v7());
+        $asText = Uuid::toText($bindingId);
+
+        $token = $this->minter->mint(
+            decision: new AccessDecision(
+                allowed: true,
+                reason: AccessReason::Allowed,
+                status: 200,
+                required: AccessLevel::Authenticated,
+                established: AccessLevel::Restricted,
+                satisfiedBy: AccessLeaf::Binding,
+            ),
+            /*
+             * The context a provider-authenticated reader has: `{binding}`
+             * satisfied, and the binding recorded as text — which is the form
+             * `ProviderOutcome` produces and the form §8.12.6 compares.
+             */
+            reader: new ReaderContext(
+                level: AccessLevel::Authenticated,
+                satisfiedLeaves: [AccessLeaf::Public, AccessLeaf::Binding],
+                satisfiedBindings: [$asText],
+                credentialPresented: true,
+            ),
+            session: $this->session,
+            domainId: $this->domainA,
+            versionId: $this->versionId,
+            versionSlug: 'latest',
+            authzEpoch: 4,
+            identityEpoch: 3,
+        );
+
+        $grant = $this->verifier->grantFor($token, $this->domainA, currentEpoch: 7);
+
+        $this->assertNotNull($grant);
+
+        $this->assertSame(
+            [$asText],
+            $grant->satisfiedBindings,
+            '🛑 the `bnd` claim round-trips as UUID text, not as raw bytes',
+        );
+
+        /*
+         * 🛑 And the reconstructed context satisfies a rule naming it. This is
+         * the assertion that would have caught the defect: the claim could be
+         * carried correctly and still be compared against the wrong thing.
+         */
+        $context = $grant->readerContext();
+
+        $this->assertTrue(
+            $context->satisfies(AccessLeaf::Binding, $asText),
+            '🛑 §8.12.6: a rule naming this binding must be satisfiable from a grant',
+        );
+
+        $this->assertFalse(
+            $context->satisfies(AccessLeaf::Binding, Uuid::v7()),
+            'and a rule naming a different binding must not be',
+        );
+    }
+
+    /**
      * 🛑 §17's exit criterion: "A grant minted for domain A is refused on
      * domain B."
      *

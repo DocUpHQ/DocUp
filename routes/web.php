@@ -13,6 +13,8 @@ use App\Http\Controllers\Health\SelfTestController;
 use App\Http\Controllers\ProjectController;
 use App\Http\Controllers\ProjectVisibilityController;
 use App\Http\Controllers\Readers\HandoffController;
+use App\Http\Controllers\Readers\OidcCallbackController;
+use App\Http\Controllers\Readers\OidcStartController;
 use App\Http\Controllers\SchemaController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -94,6 +96,32 @@ Route::get('/', fn () => redirect()->route('login'));
 Route::middleware(['auth'])
     ->get('reader/handoff', HandoffController::class)
     ->name('reader.handoff');
+
+/*
+| 🛑 §8.12.18's OIDC legs, on the dashboard origin and **unauthenticated**.
+|
+| The sibling route above is behind `auth` because it mints a handoff code for a
+| reader who is already a dashboard user. These two are the other population:
+| §8.12.1 keeps `users` and `reader_identities` "physically disjoint", so a
+| reader whose identity provider vouches for them never has a dashboard session
+| and a route that required one could not serve them.
+|
+| What stands in for `auth` is not nothing. The start leg resolves a **verified
+| domain** and an **active binding** server-side, both from the project rather
+| than from a parameter, and the callback leg resolves everything from a stored,
+| single-use `state` row — §8.12.18's own requirements, which is why they are
+| requirements.
+|
+| 🛑 One fixed callback path for every binding and every custom domain, which
+| is ADR 0008's measurement rather than a convenience: "the identity provider
+| never learns which host began the flow", and the spike's control confirmed
+| that a per-domain `redirect_uri` is refused unless registered. A
+| `{binding}` segment is deliberately absent — which provider guards a project
+| is a fact about the project, and a reader who could name one could have DocUp
+| conduct a login against another tenant's.
+*/
+Route::get('_/auth/oidc/start', OidcStartController::class)->name('reader.oidc.start');
+Route::get('_/auth/oidc/callback', OidcCallbackController::class)->name('reader.oidc.callback');
 
 Route::middleware(['auth', 'tenant'])
     ->prefix('o/{organisation}')

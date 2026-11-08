@@ -10,6 +10,7 @@ namespace Tests\Arch;
 use App\Access\AccessLeaf;
 use App\Artifacts\RejectionCode;
 use App\Auth\Providers\DriverRegistry;
+use App\Auth\Providers\Oidc\IdTokenVerifier;
 use App\Builds\BuildEnvironment;
 use App\Builds\Toolchain\ToolchainPresets;
 use App\Logging\RedactSecrets;
@@ -1610,6 +1611,187 @@ final class ArchitectureTest extends TestCase
             $offenders,
             'SPEC 17 P22: a second reader of the session tables is a second answer to '
                 .'"is this session still live": '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.12.18: protocol validation is **framework-enforced, not
+     * driver-optional**.
+     *
+     * > "Protocol validation MUST be framework-enforced, not driver-optional."
+     *
+     * That is an architectural claim, and this is the test that makes it one.
+     * The enforcement lives in `App\Auth\Providers\Oidc`, so the thing to
+     * assert is that a **driver** cannot do it: no file under
+     * `app/Auth/Providers/Drivers/` may decode a token, verify a signature,
+     * build an authorisation URL or compute a PKCE challenge.
+     *
+     * Without this, the shape SPEC 8.12.18 forbids is the shape the next driver
+     * takes. A third-party `oidc`-like driver written by somebody in a hurry
+     * would own its own validation, and the first thing to go would be PKCE —
+     * so the test is about where the code is allowed to be, not about whether
+     * today's code is correct.
+     */
+    public function test_no_driver_conducts_its_own_protocol(): void
+    {
+        $forbidden = [
+            'JWT::decode' => 'decodes a token itself',
+            'JWT::encode' => 'mints a token itself',
+            'JWK::parseKeySet' => 'parses a key set itself',
+            'openssl_verify' => 'verifies a signature itself',
+            'code_challenge' => 'builds an authorisation request itself',
+            'code_verifier' => 'handles PKCE itself',
+            'grant_type' => 'calls a token endpoint itself',
+            'id_token' => 'reads a provider token itself',
+        ];
+
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            if (! str_starts_with($relative, 'app/Auth/Providers/Drivers/')) {
+                continue;
+            }
+
+            $source = $this->code($file);
+
+            foreach ($forbidden as $needle => $what) {
+                if (str_contains($source, $needle)) {
+                    $offenders[] = $relative.' '.$what;
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'SPEC 8.12.18: a driver that validates its own protocol is a driver whose '
+                .'validation can be skipped: '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.12.18's allowlist excludes `none`, and nothing can extend it.
+     *
+     * Asserted on the constant rather than on behaviour, because the
+     * requirement is about what the allowlist *contains*: `none` absent is the
+     * stated rule, and no `HS*` is the decision that closes the
+     * algorithm-confusion family — a symmetric id_token signature makes the
+     * verification key a shared secret, and for a published JWKS that secret
+     * is not secret.
+     *
+     * The absence of `EdDSA` is asserted too, and for a different reason: SPEC
+     * 8.12.11 uses it for DocUp's own grant, where DocUp holds both halves.
+     * Accepting it from a provider would mean one algorithm serving two trust
+     * relationships, and "where is EdDSA verified" would stop having one
+     * answer.
+     */
+    public function test_the_oidc_algorithm_allowlist_is_asymmetric_and_excludes_none(): void
+    {
+        $allowed = IdTokenVerifier::ALGORITHMS;
+
+        $this->assertNotSame([], $allowed);
+
+        foreach ($allowed as $algorithm) {
+            $this->assertMatchesRegularExpression(
+                '/^(RS|ES)(256|384|512)$/',
+                $algorithm,
+                '🛑 SPEC 8.12.18: `'.$algorithm.'` is not an asymmetric algorithm DocUp should accept',
+            );
+        }
+
+        foreach (['none', 'None', 'HS256', 'HS384', 'HS512', 'EdDSA'] as $refused) {
+            $this->assertNotContains(
+                $refused,
+                $allowed,
+                '🛑 SPEC 8.12.18: `'.$refused.'` must not be in the allowlist',
+            );
+        }
+    }
+
+    /**
+     * 🛑 SPEC 8.12.18: one reader of the OIDC exchange table.
+     *
+     * `state` and `nonce` are single-use, and single use is one atomic
+     * conditional write. A second place that consumed a row would be a second
+     * answer to "has this been used" — the same argument SPEC 12.3 makes for
+     * one decider and SPEC 8.12.10 for the handoff code.
+     */
+    public function test_only_the_oidc_namespace_reads_the_exchange_table(): void
+    {
+        $permitted = [
+            'app/Auth/Providers/Oidc/',
+            'app/Models/',
+            'database/migrations/',
+            'database/factories/',
+            'database/seeders/',
+            /* The scheduled sweep names the command, not the table. */
+            'app/Console/Commands/ReaderMaintenanceCommand.php',
+        ];
+
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            foreach ($permitted as $prefix) {
+                if (str_starts_with($relative, $prefix)) {
+                    continue 2;
+                }
+            }
+
+            $source = $this->code($file);
+
+            foreach (['oidc_authorisation_requests', 'provider_group_mappings'] as $table) {
+                if (str_contains($source, "'".$table."'") || str_contains($source, '"'.$table.'"')) {
+                    $offenders[] = $relative.' reads '.$table;
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'SPEC 8.12.18: a second consumer of an authorisation request is a second '
+                .'answer to "is this state spent": '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.12.5: no reader ever holds a role assignment.
+     *
+     * > "a reader identity MUST NEVER hold a role assignment — the permission
+     * > resolver MUST raise rather than return an empty set for a reader
+     * > subject."
+     *
+     * SPEC 8.12.5 lets an installation- or organisation-scoped binding map a
+     * group to a dashboard role, which means `App\Auth\Providers\Oidc` holds the
+     * mapping table — and the risk is that the *reader* path writes one.
+     * Asserted as an absence: nothing in that namespace inserts into
+     * `role_assignments`.
+     */
+    public function test_the_oidc_namespace_never_writes_a_role_assignment(): void
+    {
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            if (! str_starts_with($relative, 'app/Auth/Providers/Oidc/')) {
+                continue;
+            }
+
+            if (str_contains($this->code($file), "'role_assignments'")) {
+                $offenders[] = $relative;
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            '🛑 SPEC 8.12.1: a reader identity holds no role, so the reader login path '
+                .'writes no assignment: '.implode('; ', $offenders),
         );
     }
 

@@ -408,6 +408,35 @@ final readonly class Bindings
      * blip take a project's documentation offline with a 503, which is the
      * behaviour operators disable a feature to escape.
      */
+    /**
+     * One binding, by id, as a driver context.
+     *
+     * 🛑 **Not cached**, unlike {@see self::forProject()}. This exists for
+     * Phase 24's OIDC callback, which resolves the binding a stored exchange
+     * names — a login completes against the binding's state *now*, not as some
+     * earlier request's epoch saw it. A binding degraded or disabled while the
+     * reader was at their identity provider must deny, which is §8.12.19, and
+     * a cache keyed on `authz_epoch` would hold the stale answer for its five
+     * minutes.
+     *
+     * One indexed read per login, which is not a hot path: the reader has just
+     * made several round trips to somebody else's directory.
+     *
+     * @param  string  $bindingId  raw 16 bytes
+     */
+    public function byId(string $bindingId): ?BindingContext
+    {
+        $row = DB::table('auth_provider_bindings')
+            ->where('id', $bindingId)
+            ->first([
+                'id', 'scope_type', 'scope_id', 'organisation_id', 'type', 'name',
+                'config', 'shareable', 'state', 'epoch',
+                'envelope_version', 'kek_fingerprint', 'wrapped_key', 'ciphertext',
+            ]);
+
+        return $row === null ? null : $this->contextFor((array) $row);
+    }
+
     public function probe(string $bindingId): ProbeResult
     {
         $row = DB::table('auth_provider_bindings')

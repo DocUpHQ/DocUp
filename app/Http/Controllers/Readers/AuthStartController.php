@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Readers;
 
+use App\Auth\Providers\Bindings;
 use App\Readers\PkceChallenge;
 use App\Readers\ReaderCookies;
 use App\Readers\ReaderHandoff;
@@ -37,6 +38,7 @@ final readonly class AuthStartController
     public function __construct(
         private RoutingSnapshotLoader $snapshots,
         private ReaderHandoff $handoff,
+        private Bindings $bindings,
     ) {}
 
     public function __invoke(Request $request): Response
@@ -98,8 +100,36 @@ final readonly class AuthStartController
             attempt: ($state->attempt ?? 0) + 1,
         );
 
+        /*
+         * 🛑 Which leg of the dashboard to send the reader to, decided here
+         * because this is where the project is already resolved.
+         *
+         * An active `oidc` binding means the project's readers authenticate at
+         * an identity provider, so the member handoff — which is behind `auth`
+         * — would bounce them to a dashboard login they have no account for.
+         * With no such binding, nothing changes from Phase 22.
+         *
+         * 🛑 The PKCE verifier cookie is set either way and the final hop is
+         * `/_/auth/callback` either way, so §8.12.10's mechanism is untouched:
+         * the OIDC legs end by minting the same handoff code this origin is
+         * already waiting for. That is what kept this a choice of URL rather
+         * than a second session mechanism.
+         */
+        $project = $match->mount->project;
+
+        $viaProvider = false;
+
+        foreach ($this->bindings->contextsFor($project->id, $project->organisationId, $project->authzEpoch) as $binding) {
+            if ($binding->type === 'oidc' && $binding->isUsable()) {
+                $viaProvider = true;
+                break;
+            }
+        }
+
         $redirect = new RedirectResponse(
-            $this->handoff->startUrl($snapshot->domainId, $pkce->challenge, $returnPath),
+            $viaProvider
+                ? $this->handoff->oidcStartUrl($snapshot->domainId, $pkce->challenge, $returnPath)
+                : $this->handoff->startUrl($snapshot->domainId, $pkce->challenge, $returnPath),
         );
 
         return $redirect

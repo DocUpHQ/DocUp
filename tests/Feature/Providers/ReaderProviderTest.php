@@ -573,7 +573,15 @@ final class ReaderProviderTest extends TestCase
     {
         $bindings = app(Bindings::class);
 
-        foreach (['ldap', 'mtls', 'header_trust', 'oidc', 'made_up'] as $type) {
+        /*
+         * 🛑 `oidc` was on this list in Phase 23 and left it in Phase 24,
+         * which is the phase boundary moving rather than the gate weakening:
+         * §8.12.17 puts `oidc` in the v1-mandatory set and §17 gives it P24,
+         * so a registry that refused it after P24 would be the thing to fix.
+         * The four that remain are §8.12.17's post-cut-line drivers plus a name
+         * that will never be registered.
+         */
+        foreach (['ldap', 'mtls', 'header_trust', 'made_up'] as $type) {
             try {
                 $bindings->create('project', $this->project->id, $type, 'nope-'.$type);
                 $this->fail('"'.$type.'" was accepted and no driver is registered for it');

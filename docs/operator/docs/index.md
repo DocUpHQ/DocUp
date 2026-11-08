@@ -65,4 +65,6 @@ front, not after the migration:
   and the 48 combinations it is asserted on.
 - [Private without an IdP](providers.md) — passwords, share links and reader
   tokens, and why a broken provider answers 503 rather than falling back.
+- [Connecting an IdP](oidc.md) — OpenID Connect, one redirect URI for every
+  domain, and the eight protocol checks you cannot switch off.
 - [Running it](operations.md) — the scheduler, backups, the build sandbox.

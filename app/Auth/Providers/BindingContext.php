@@ -121,4 +121,36 @@ final readonly class BindingContext
     {
         return $this->state === BindingState::Active;
     }
+
+    /**
+     * 🛑 §8.12.3's scope, derived rather than carried.
+     *
+     * The two id fields already say it: `projectId` is set **only** for a
+     * project-scoped binding, and `organisationId` is NULL only at installation
+     * scope. A third field would be a third place for the three to disagree.
+     *
+     * Added in Phase 24 because an installation-scoped binding's group
+     * reconciliation has to re-decide every project it governs, and "which
+     * projects" is a question about scope — so the derivation is written once
+     * here instead of at the call site where it would read as a guess.
+     *
+     * @return 'installation'|'organisation'|'project'
+     */
+    public function scope(): string
+    {
+        return match (true) {
+            $this->projectId !== null => 'project',
+            $this->organisationId !== null => 'organisation',
+            default => 'installation',
+        };
+    }
+
+    /**
+     * The id of whatever {@see self::scope()} names, or null at installation
+     * scope, which has none.
+     */
+    public function scopeId(): ?string
+    {
+        return $this->projectId ?? $this->organisationId;
+    }
 }

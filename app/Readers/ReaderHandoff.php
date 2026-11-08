@@ -11,6 +11,7 @@ use App\Audit\ActorType;
 use App\Audit\Audit;
 use App\Models\Domain;
 use App\Models\Project;
+use App\Models\ReaderIdentity;
 use App\Models\User;
 use App\Serving\RoutingSnapshotLoader;
 use App\Support\SecretToken;
@@ -91,7 +92,7 @@ final readonly class ReaderHandoff
      *                        not read the project
      */
     public function mint(
-        User $user,
+        User|ReaderIdentity $subject,
         Domain $domain,
         Project $project,
         string $challenge,
@@ -132,6 +133,8 @@ final readonly class ReaderHandoff
             throw HandoffRefused::of(HandoffRejection::WrongAudience, 'cross-organisation handoff');
         }
 
+        $isMember = $subject instanceof User;
+
         $code = SecretToken::generate('docup_hc');
         $id = Uuid::toBytes(Uuid::v7());
 
@@ -140,7 +143,15 @@ final readonly class ReaderHandoff
             'organisation_id' => $project->organisation_id,
             'project_id' => $project->id,
             'domain_id' => $domain->id,
-            'user_id' => $user->id,
+            /*
+             * 🛑 Exactly one of the two, which the table's CHECK enforces.
+             * §8.12.1 makes the two principal populations "physically disjoint",
+             * so a handoff code naming both would be the one row where they met
+             * — and a `User|ReaderIdentity` parameter is how the type system
+             * says the same thing one layer up.
+             */
+            'user_id' => $isMember ? $subject->id : null,
+            'reader_identity_id' => $isMember ? null : $subject->id,
             'code_hash' => SecretToken::hash($code),
             'code_hash_prefix' => SecretToken::prefix($code),
             'challenge' => $challenge,
@@ -151,12 +162,22 @@ final readonly class ReaderHandoff
 
         Audit::record(
             action: 'reader.handoff.minted',
-            actorType: ActorType::User,
+            /*
+             * 🛑 A reader identity is **not** an `ActorType::User`. §8.22.5's
+             * actor vocabulary distinguishes who did a thing, and conflating a
+             * provider-vouched reader with a dashboard user would make
+             * "§8.12.1's populations are disjoint" false in the audit chain —
+             * the one place an auditor would go to check it.
+             */
+            actorType: $isMember ? ActorType::User : ActorType::System,
             organisationId: (string) $project->organisation_id,
-            actorId: $user->id,
+            actorId: $isMember ? $subject->id : null,
             subjectType: 'project',
             subjectId: $project->id,
-            payload: ['domain' => Uuid::toText($domain->id)],
+            payload: [
+                'domain' => Uuid::toText($domain->id),
+                'subject' => $isMember ? 'user' : 'reader_identity',
+            ],
         );
 
         return [
@@ -184,7 +205,7 @@ final readonly class ReaderHandoff
      * @param  string  $domainId  raw 16 bytes, from the resolved snapshot
      * @param  string  $verifier  from the `__Host-docup_state` cookie
      * @param  int|null  $now  unix seconds; null reads the clock
-     * @return array{userId: string, returnPath: string}
+     * @return array{userId: ?string, readerIdentityId: ?string, returnPath: string}
      *
      * @throws HandoffRefused for every one of {@see HandoffRejection}'s cases
      */
@@ -200,7 +221,10 @@ final readonly class ReaderHandoff
         $candidates = DB::table('reader_handoff_codes')
             ->where('code_hash_prefix', SecretToken::prefix($code))
             ->limit(8)
-            ->get(['id', 'code_hash', 'challenge', 'project_id', 'domain_id', 'user_id', 'return_path', 'expires_at', 'consumed_at']);
+            ->get([
+                'id', 'code_hash', 'challenge', 'project_id', 'domain_id',
+                'user_id', 'reader_identity_id', 'return_path', 'expires_at', 'consumed_at',
+            ]);
 
         $row = null;
 
@@ -257,7 +281,13 @@ final readonly class ReaderHandoff
         }
 
         return [
-            'userId' => (string) $row->user_id,
+            /*
+             * 🛑 Exactly one of the two is set, which the table's CHECK
+             * guarantees — so a caller reads whichever is not null and does not
+             * have to decide what both would mean.
+             */
+            'userId' => is_string($row->user_id) ? $row->user_id : null,
+            'readerIdentityId' => is_string($row->reader_identity_id) ? $row->reader_identity_id : null,
             /*
              * 🛑 Re-normalised on the way out. The column cannot hold an origin
              * because {@see self::safeReturnPath()} ran on the way in, and it
@@ -336,6 +366,32 @@ final readonly class ReaderHandoff
      *
      * @param  string  $domainId  raw 16 bytes
      */
+    /**
+     * 🛑 §8.12.18's start URL, for a project an identity provider guards.
+     *
+     * The same three parameters {@see self::startUrl()} carries, to a different
+     * leg on the same origin: `reader/handoff` requires a dashboard session and
+     * `_/auth/oidc/start` does not, because §8.12.1's two populations are
+     * disjoint and only one of them has one.
+     *
+     * Here rather than in the controller so both URLs are built by the class
+     * that owns the handoff's shape. A second place that assembled one would be
+     * a second place to forget the scheme — which Phase 22 did forget once,
+     * producing a schemeless `Location` a browser read as a path.
+     */
+    public function oidcStartUrl(string $domainId, string $challenge, string $returnPath): string
+    {
+        $dashboard = config('docup.origins.app');
+
+        return 'https://'.rtrim(is_string($dashboard) ? $dashboard : '', '/')
+            .'/_/auth/oidc/start?'
+            .http_build_query([
+                'domain' => Uuid::toText($domainId),
+                'challenge' => $challenge,
+                'return' => self::safeReturnPath($returnPath),
+            ], '', '&', PHP_QUERY_RFC3986);
+    }
+
     public function startUrl(string $domainId, string $challenge, string $returnPath): string
     {
         /*

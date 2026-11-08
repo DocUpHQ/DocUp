@@ -254,6 +254,16 @@ final readonly class ReaderResolver
              */
             remoteAddress: $request->ip(),
             sessionSubject: $sessionContext?->subject,
+            /*
+             * 🛑 §12.3 lets a rule name a specific binding, so a
+             * session-backed leaf has to say *which* one vouched for it —
+             * otherwise `{"driver": "portal_session"}` and
+             * `{"driver": "oidc"}` would both be satisfied by any session, and
+             * a project could not write one rule per audience.
+             *
+             * Null for a member, which is what makes `oidc` refuse them.
+             */
+            sessionBinding: $session === null ? null : $this->sessions->bindingFor($session),
         ));
 
         /*

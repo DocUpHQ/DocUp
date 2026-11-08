@@ -9,6 +9,7 @@ namespace App\Auth\Providers;
 
 use App\Access\AccessLeaf;
 use App\Auth\Providers\Drivers\IpAllowlistDriver;
+use App\Auth\Providers\Drivers\OidcDriver;
 use App\Auth\Providers\Drivers\PasswordDriver;
 use App\Auth\Providers\Drivers\PortalSessionDriver;
 use App\Auth\Providers\Drivers\PublicDriver;
@@ -52,12 +53,16 @@ final class DriverRegistry
     /**
      * §8.12.17's v1-mandatory set: "the six `any`-scope drivers plus `oidc`".
      *
-     * 🛑 `oidc` is **absent**, and that is §17's phase boundary rather than an
-     * omission: Phase 23's scope says "Explicitly not in scope: OIDC, SAML,
-     * LDAP". P24 adds it, and the framework-enforced protocol validation
-     * §8.12.18 requires arrives with it. A registry entry without that
-     * enforcement would be a driver that validates its own protocol, which the
-     * requirement forbids by name.
+     * 🛑 `oidc` arrived in **Phase 24**, with §8.12.18's framework-enforced
+     * protocol validation rather than before it. Phase 23 left it out on
+     * purpose — its scope said "Explicitly not in scope: OIDC, SAML, LDAP" —
+     * because a registry entry without that enforcement would be a driver that
+     * validates its own protocol, which the requirement forbids by name. The
+     * exchange lives in `App\Auth\Providers\Oidc` behind classes with no
+     * options, so {@see OidcDriver} conducts no protocol at all.
+     *
+     * `saml`, `ldap`, `mtls` and `header_trust` are still absent: §8.12.17 puts
+     * them after the cut line and §17.3 names the phase that carries each.
      *
      * @var array<string, class-string<AuthComponent>>
      */
@@ -68,6 +73,7 @@ final class DriverRegistry
         'shared_link' => SharedLinkDriver::class,
         'reader_token' => ReaderTokenDriver::class,
         'ip_allowlist' => IpAllowlistDriver::class,
+        'oidc' => OidcDriver::class,
     ];
 
     /**

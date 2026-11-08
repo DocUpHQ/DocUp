@@ -271,14 +271,22 @@ final readonly class GrantVerifier
      */
     public static function fromClaims(array $claims): ?Grant
     {
-        $text = static function (mixed $value): ?string {
+        /*
+         * 🛑 A UUID claim as the **raw 16 bytes** every id column holds.
+         *
+         * Named `$bytes` rather than `$text`, which is what it was called when
+         * Phase 24 found the bug below: a closure named for its input while
+         * returning the other representation is a closure that gets reused on a
+         * claim where the other representation is wrong.
+         */
+        $bytes = static function (mixed $value): ?string {
             return is_string($value) ? Uuid::tryToBytes($value) : null;
         };
 
-        $sessionId = $text($claims['sub'] ?? null);
-        $domainId = $text($claims['aud'] ?? null);
-        $projectId = $text($claims['pid'] ?? null);
-        $versionId = $text($claims['vid'] ?? null);
+        $sessionId = $bytes($claims['sub'] ?? null);
+        $domainId = $bytes($claims['aud'] ?? null);
+        $projectId = $bytes($claims['pid'] ?? null);
+        $versionId = $bytes($claims['vid'] ?? null);
         $slug = $claims['vsl'] ?? null;
         $epoch = $claims['ep'] ?? null;
         $issued = $claims['iat'] ?? null;
@@ -324,7 +332,7 @@ final readonly class GrantVerifier
         $leaf = is_string($claims['lf'] ?? null) ? AccessLeaf::tryFrom((string) $claims['lf']) : null;
 
         $prefix = $claims['pfx'] ?? null;
-        $ruleId = $text($claims['rid'] ?? null);
+        $ruleId = $bytes($claims['rid'] ?? null);
 
         /*
          * 🛑 Every entry must parse, and one that does not drops the **whole**
@@ -334,16 +342,45 @@ final readonly class GrantVerifier
          * and the difference would be invisible, because the shorter list only
          * ever refuses.
          */
+        /*
+         * 🛑 **UUID text, not bytes, and Phase 24 found this the hard way.**
+         *
+         * §8.12.6's requirement leaf is JSON an operator or an API wrote —
+         * `{"leaf": "binding", "binding_id": "<uuid>"}` — and
+         * {@see \App\Access\ReaderContext::satisfies()} compares it with
+         * `in_array(..., true)`. A strict comparison between 16 bytes and 36
+         * characters is always false, so parsing these as bytes made **every
+         * rule naming a binding unsatisfiable on the grant path** — which is
+         * every request after a reader's first, because the first mints the
+         * grant and the rest present it.
+         *
+         * The shape of the bug is Phase 23's, arriving by the other road: that
+         * phase found `ProviderOutcome` storing raw bytes against the same
+         * text and fixed the session path. This path was written in Phase 22,
+         * before any binding existed, so `bnd` was always empty and the
+         * mismatch could not show — the docblock on
+         * {@see Grant::$satisfiedBindings} says so in as many words ("Empty
+         * throughout Phase 22"). A field that is always empty is a field whose
+         * type nothing checks.
+         *
+         * Found by Phase 24's two-realm exit criterion: a reader's **second**
+         * read of their own project 404'd with `requirement_unsatisfied` while
+         * the first allowed. The two paths disagreeing is the only symptom this
+         * class of bug has.
+         */
         $bindings = [];
 
         foreach (is_array($claims['bnd'] ?? null) ? $claims['bnd'] : [] as $value) {
-            $binding = $text($value);
-
-            if ($binding === null) {
+            /*
+             * Validated as a UUID and kept as text. `Uuid::toText()` is
+             * idempotent, so this both checks the shape and normalises a claim
+             * that arrived in either form.
+             */
+            if (! is_string($value) || Uuid::tryToBytes($value) === null) {
                 return null;
             }
 
-            $bindings[] = $binding;
+            $bindings[] = Uuid::toText($value);
         }
 
         return new Grant(

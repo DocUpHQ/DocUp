@@ -1151,6 +1151,126 @@
       "input": "an IPv4-mapped IPv6 address ::ffff:127.0.0.1 presented against an ip_allowlist range of 127.0.0.0/8",
       "expect": "no match",
       "note": "🛑 The encoding a deny list written in dotted quads does not recognise, here in its mirror image: an allowlist comparison that normalised the mapped form would admit from a family the operator never entered. The comparison is on packed bytes with an explicit family check, so a v6 address never matches a v4 range in either direction. Compare git_url-016, the same encoding against the egress deny list."
+    },
+    {
+      "id": "oidc-001",
+      "category": "oidc",
+      "defends": "8.12.18",
+      "input": "an id_token with alg:none, in both serialisations - three segments with an empty signature and two segments with none",
+      "expect": "oidc.algorithm_not_allowed",
+      "note": "🛑 The allowlist is a const with no code path that extends it, and the check runs on the token header BEFORE any key is fetched - so this costs no outbound request. Both serialisations are tried by real attackers and the two-segment form is the one a naive segment count misses. No library will emit either, which is why the corpus has to assemble them by hand: a test that produced them by passing odd arguments to an encoder would be testing the encoder."
+    },
+    {
+      "id": "oidc-002",
+      "category": "oidc",
+      "defends": "8.12.18",
+      "input": "an id_token with alg:HS256, signed with the provider published RSA public key as the HMAC secret",
+      "expect": "oidc.algorithm_not_allowed",
+      "note": "🛑 The algorithm-confusion family, and the reason no HS* is in the allowlist. A published JWKS is public by definition, so a verifier that accepted a symmetric algorithm would let anybody who can read it mint an id_token. The same argument 8.12.11 makes for DocUp own grant - \"an edge-held HMAC key makes every edge node a minter\" - with more force, because the key is served to the world. Symmetric keys are also dropped from a key set before it is parsed, so there is no Key object for a confused verifier to reach."
+    },
+    {
+      "id": "oidc-003",
+      "category": "oidc",
+      "defends": "8.12.18",
+      "input": "an id_token whose iss is the configured issuer with .attacker.test appended",
+      "expect": "oidc.issuer_mismatch",
+      "note": "🛑 Exact, by hash_equals, and the suffix form is the one a str_contains or str_ends_with check admits - RFC 9700 4.4 names it. The comparison is transitive through two steps: the discovery document own issuer is checked against the operator configured value (Discovery 4.3), and the token is checked against the document. A trailing slash is also a different string, because exact means exact."
+    },
+    {
+      "id": "oidc-004",
+      "category": "oidc",
+      "defends": "8.12.18",
+      "input": "an id_token naming several audiences including this client, with no azp",
+      "expect": "oidc.audience_mismatch",
+      "note": "🛑 The case that is a VALID token for somebody else. OIDC Core 3.1.3.7 step 4 requires azp when there is more than one audience, and without the check a token minted for another client at the same provider is replayable here - correctly signed, unexpired, and not for DocUp. A single audience needs no azp, so the check is conditional in exactly the way the specification makes it."
+    },
+    {
+      "id": "oidc-005",
+      "category": "oidc",
+      "defends": "8.12.18",
+      "input": "an id_token with no at_hash, from a code-flow exchange",
+      "expect": "oidc.at_hash_invalid",
+      "note": "🛑 8.12.18 lists at_hash unconditionally where OIDC Core 3.3.2.11 requires it only for the hybrid flow, and the stricter reading is the right one: at_hash binds the id_token to the access token that arrived beside it, so a token PAIR cannot be assembled from two exchanges. Without it the access token DocUp holds is unbound from the identity DocUp believes it belongs to - and DocUp would call userinfo with it."
+    },
+    {
+      "id": "oidc-006",
+      "category": "oidc",
+      "defends": "8.12.18",
+      "input": "an id_token whose kid names a key the provider does not publish, presented repeatedly",
+      "expect": "oidc.key_not_pinned",
+      "note": "🛑 Two properties. The key is pinned, so a token cannot choose to be verified by a key it supplies and a provider holding ten keys does not get ten signature attempts. And the refresh is FLOORED: without a bound, an unknown kid is a free outbound request, so anybody who can reach a documentation host mints tokens with random kids and costs one HTTPS request each - a denial of service against the provider rate limit and against 8.3.9 egress budget. Five attempts cost two fetches, not five, and the next hundred inside the window cost none."
+    },
+    {
+      "id": "oidc-007",
+      "category": "oidc",
+      "defends": "8.12.18",
+      "input": "an id_token with no kid at all",
+      "expect": "oidc.key_not_pinned",
+      "note": "🛑 Reported as unpinnable rather than malformed, and the distinction is the requirement: \"JWKS pinned by kid\" cannot be satisfied by a token that names no key. Trying every published key instead - which some libraries do - gives an attacker as many signature attempts as the provider has keys."
+    },
+    {
+      "id": "oidc-008",
+      "category": "oidc",
+      "defends": "8.12.18",
+      "input": "the same state presented twice to the callback, concurrently",
+      "expect": "oidc.state_expired",
+      "note": "🛑 Single-use as one atomic conditional write: the guard is in the UPDATE own WHERE, so two concurrent callbacks cannot both proceed. A SELECT then an UPDATE has the race whose outcome is whether one authorisation code mints two sessions. The second caller cannot tell \"already consumed\" from \"expired\" from \"out of attempts\", which is correct - all three mean the state is spent."
+    },
+    {
+      "id": "oidc-009",
+      "category": "oidc",
+      "defends": "8.12.18",
+      "input": "a callback carrying id_token or access_token in the query",
+      "expect": "oidc.implicit_flow_refused",
+      "note": "🛑 \"No implicit flow\", and the refusal happens BEFORE the state is consumed. That ordering is the interesting part: a forged redirect carrying a token must not be able to spend a real reader in-flight exchange, which would turn a refusal into a denial of service against the reader it was aimed at."
+    },
+    {
+      "id": "oidc-010",
+      "category": "oidc",
+      "defends": "8.12.6",
+      "input": "a reader second request, served from a grant, against a rule naming a specific binding",
+      "expect": "200",
+      "note": "🛑 Phase 24 found this FAILING. GrantVerifier parsed the bnd claim as raw 16 bytes while 8.12.6 requirement JSON holds UUID text and ReaderContext::satisfies compares strictly - so every binding-named rule was unsatisfiable on the grant path, which is every request after the first. The case is here as a 200 rather than a refusal because the defect was a denial: the corpus is for inputs that must be handled correctly, and \"the same reader, the same URL, a different answer on the second request\" is one."
+    },
+    {
+      "id": "oidc-011",
+      "category": "oidc",
+      "defends": "8.12.5",
+      "input": "a project-scoped binding with a group mapping targeting the installation_owner role",
+      "expect": "binding.dashboard_role_not_permitted",
+      "note": "🛑 8.12.5 own sentence is the threat model: \"A project admin controls their own IdP; find-or-create-by-email would let any tenant mint an installation owner.\" A project admin configures a binding against a directory THEY control, so a project-scoped role mapping is not an escalation bug but an escalation feature - they would only have to add themselves to a group. Refused four times: the driver capability flag, the write-time validation invariant, a database CHECK, and again at login for a row predating all three."
+    },
+    {
+      "id": "oidc-012",
+      "category": "oidc",
+      "defends": "8.13.7",
+      "input": "a reader who logs in a second time after being removed from a mapped group at the identity provider",
+      "expect": "the group is removed",
+      "note": "🛑 \"Reconciled - added AND removed - on every login\", with the emphasis in the specification. The asymmetric implementation is what somebody writes without meaning to, and its failure mode is that leaving does not revoke: offboarding at the identity provider is the only offboarding most organisations perform. Only source=idp_mapping rows are touched, or a reconciliation would delete an operator manual grants."
+    },
+    {
+      "id": "oidc-013",
+      "category": "oidc",
+      "defends": "8.12.1",
+      "input": "an id_token with no sub and a well-formed email claim",
+      "expect": "oidc.subject_missing",
+      "note": "🛑 \"email MUST NEVER be used for linking or lookup.\" The refusal matters because email is the obvious fallback and it is the one 8.12.1 names: a reader identity keyed on an email address would let a tenant whose directory they control assert any address they like. The subject is also stored as a keyed digest, so the readable value exists nowhere in DocUp - and the display label refuses anything containing an @ for the same reason."
+    },
+    {
+      "id": "oidc-014",
+      "category": "oidc",
+      "defends": "8.3.9",
+      "input": "a binding whose issuer resolves to 169.254.169.254, or to a private address, or rebinds between resolution and connection",
+      "expect": "oidc.discovery_failed",
+      "note": "🛑 8.3.9 architecture test names this case by hand - \"a second outbound path gets written in a hurry, for a webhook or an avatar fetch or an OIDC discovery document\". An issuer URL is operator-supplied configuration naming a host DocUp will POST a client secret to, so it is exactly the input that one client exists for: resolve-then-pin, no redirects, a scheme allowlist and a byte cap. The egress rejection is translated rather than re-raised, because a reader login is not the place to report an operator misconfigured issuer in those terms."
+    },
+    {
+      "id": "oidc-015",
+      "category": "oidc",
+      "defends": "8.12.18",
+      "input": "a provider authorization_endpoint carrying its own response_type=token query parameter",
+      "expect": "code",
+      "note": "🛑 RFC 6749 3.1 permits a query on the authorization endpoint and some providers use one, so it is merged rather than clobbered - but DocUp parameters are merged OVER the provider, so an endpoint query cannot select the implicit flow or shadow redirect_uri. The harmless case (kc_idp_hint) survives; the dangerous one does not."
     }
   ]
 }
