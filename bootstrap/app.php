@@ -8,6 +8,7 @@ declare(strict_types=1);
 use App\Http\Middleware\AuthenticateApiToken;
 use App\Http\Middleware\EnforceSessionLifetime;
 use App\Http\Middleware\HandleInertiaRequests;
+use App\Http\Middleware\RequireMfaEnrolment;
 use App\Http\Middleware\RequireRecentAuthentication;
 use App\Http\Middleware\RequireTokenCapability;
 use App\Http\Middleware\ResolveOrganisation;
@@ -100,6 +101,18 @@ return Application::configure(basePath: dirname(__DIR__))
             // §8.13.3: on the whole group, because an idle or expired session
             // must end on ANY request, not only the routes someone remembered.
             EnforceSessionLifetime::class,
+            // 🛑 §8.13.4, on the whole group for the same reason and with the
+            // same failure mode: a person whose role obliges MFA must be held
+            // on ANY authenticated request, not on the routes somebody
+            // remembered to decorate. A per-route alias would be a list that
+            // the next phase's new page is missing from — and the symptom would
+            // be an administrator using the dashboard without a second factor,
+            // which looks exactly like it working.
+            //
+            // It no-ops when there is no dashboard `User`, which is every
+            // documentation-origin route: §8.12.1 keeps the two principal
+            // populations disjoint, so a reader is never `$request->user()`.
+            RequireMfaEnrolment::class,
         ]);
 
         // 🛑 An alias, not appended globally. Declaring the §8.2.1 tenancy

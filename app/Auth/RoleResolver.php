@@ -171,6 +171,115 @@ final class RoleResolver
     }
 
     /**
+     * 🛑 Every role this person holds, in **every** scope.
+     *
+     * Added in Phase 26a because §8.13.4 attaches MFA to the role rather than
+     * to the request: "required above `project_writer`". A person who
+     * administers one project is an administrator, and
+     * {@see self::rolesFor()} cannot answer that — it includes project-scope
+     * assignments only when it is handed a project, which is correct for
+     * "may they do X to this project" and wrong for "what are they".
+     *
+     * 🛑 Here rather than in {@see MfaEnforcement}, because this class is the
+     * sole reader of `role_assignments` and an architecture test enforces it.
+     * A query written elsewhere would be a second permission resolver, and the
+     * first thing it would get wrong is the installation scope's NULL
+     * `scope_id` — which a `WHERE scope_id = ?` silently filters away, taking
+     * the installation owner with it.
+     *
+     * @param  string|null  $organisationId  raw 16 bytes to limit the question
+     *                                       to the installation scope plus that
+     *                                       organisation and its projects, or
+     *                                       null for every scope anywhere
+     * @return list<Role>
+     */
+    public function rolesAnywhere(User $user, ?string $organisationId = null): array
+    {
+        if ($organisationId === null) {
+            /** @var list<object{role: string}> $rows */
+            $rows = DB::select(
+                'SELECT DISTINCT `role`
+                   FROM `role_assignments`
+                  WHERE `subject_type` = ?
+                    AND `subject_id` = ?
+                    AND (`expires_at` IS NULL OR `expires_at` > ?)',
+                ['user', $user->id, now()],
+            );
+        } else {
+            /** @var list<object{role: string}> $rows */
+            $rows = DB::select(
+                'SELECT DISTINCT `ra`.`role`
+                   FROM `role_assignments` AS `ra`
+                  WHERE `ra`.`subject_type` = ?
+                    AND `ra`.`subject_id` = ?
+                    AND (`ra`.`expires_at` IS NULL OR `ra`.`expires_at` > ?)
+                    AND (
+                          (`ra`.`scope_type` = ? AND `ra`.`scope_id` IS NULL)
+                       OR (`ra`.`scope_type` = ? AND `ra`.`scope_id` = ?)
+                       OR (`ra`.`scope_type` = ? AND `ra`.`scope_id` IN (
+                              SELECT `p`.`id` FROM `projects` AS `p`
+                               WHERE `p`.`organisation_id` = ? AND `p`.`deleted_at` IS NULL
+                          ))
+                    )',
+                [
+                    'user', $user->id, now(),
+                    'installation',
+                    'organisation', $organisationId,
+                    'project', $organisationId,
+                ],
+            );
+        }
+
+        $roles = [];
+
+        foreach ($rows as $row) {
+            $role = Role::tryFrom($row->role);
+
+            if ($role !== null) {
+                $roles[$role->value] = $role;
+            }
+        }
+
+        return array_values($roles);
+    }
+
+    /**
+     * Every organisation this person holds a role in, by organisation scope or
+     * by one of its projects.
+     *
+     * 🛑 Installation-scope assignments produce **no** organisation, and that
+     * is right rather than a gap: an installation owner belongs to no
+     * organisation in particular, so §8.13.4's per-organisation switch has
+     * nothing to attach to for them. The installation switch is what covers
+     * them, which is one of the reasons §8.13.4 asks for both.
+     *
+     * @return list<string> raw 16 bytes
+     */
+    public function organisationIdsFor(User $user): array
+    {
+        /** @var list<object{organisation_id: string|null}> $rows */
+        $rows = DB::select(
+            'SELECT DISTINCT `organisation_id`
+               FROM `role_assignments`
+              WHERE `subject_type` = ?
+                AND `subject_id` = ?
+                AND `organisation_id` IS NOT NULL
+                AND (`expires_at` IS NULL OR `expires_at` > ?)',
+            ['user', $user->id, now()],
+        );
+
+        $ids = [];
+
+        foreach ($rows as $row) {
+            if (is_string($row->organisation_id)) {
+                $ids[$row->organisation_id] = $row->organisation_id;
+            }
+        }
+
+        return array_values($ids);
+    }
+
+    /**
      * The union of capabilities for a target.
      *
      * @return list<Capability>

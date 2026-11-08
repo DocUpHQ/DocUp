@@ -16,6 +16,9 @@ use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Carbon;
+use Laravel\Fortify\Actions\RedirectIfTwoFactorAuthenticatable;
+use Laravel\Fortify\TwoFactorAuthenticatable;
 
 /**
  * A person who can sign in to the dashboard.
@@ -32,9 +35,29 @@ use Illuminate\Notifications\Notifiable;
  * Authentication itself is Phase 02 (SPEC 8.13). Phase 01 gives the table and
  * the model so the first administrator can exist before sign-in does.
  *
+ * 🛑 **`TwoFactorAuthenticatable` is not decoration (Phase 26a).** Phase 02
+ * enabled `Features::twoFactorAuthentication()`, published the columns and
+ * wired the challenge view — and left the trait off, which made the whole
+ * feature unreachable:
+ * {@see RedirectIfTwoFactorAuthenticatable} gates the
+ * challenge on `in_array(TwoFactorAuthenticatable::class,
+ * class_uses_recursive($user))`, so a user who enrolled would have been issued
+ * a secret, shown a QR code, and then signed in with a password alone for ever.
+ * A silent no-op in the authentication path, which is the class of defect
+ * §9.4's level-9 namespaces exist for.
+ *
  * @property-read string $id raw 16 bytes, per ADR 0006 — never the canonical form
  * @property string $name
  * @property string $email
+ * @property string|null $two_factor_secret encrypted by Fortify, never read here
+ * @property string|null $two_factor_recovery_codes encrypted by Fortify
+ * @property Carbon|null $two_factor_confirmed_at 🛑 §8.13.4's
+ *                                                only proof of
+ *                                                enrolment: a
+ *                                                secret alone is
+ *                                                somebody who
+ *                                                abandoned the QR
+ *                                                screen
  */
 #[Tenancy(
     TenancyPosture::Installation,
@@ -48,7 +71,7 @@ use Illuminate\Notifications\Notifiable;
 final class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
-    use HasFactory, HasUuidKey, Notifiable;
+    use HasFactory, HasUuidKey, Notifiable, TwoFactorAuthenticatable;
 
     /**
      * The attributes that should be cast.
@@ -63,6 +86,14 @@ final class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            /*
+             * 🛑 Not `encrypted`. Fortify encrypts and decrypts the two secret
+             * columns itself through `Fortify::currentEncrypter()`, so a cast
+             * here would encrypt an already-encrypted value on write and hand
+             * the decrypter ciphertext it cannot read — breaking enrolment with
+             * a `DecryptException` that names neither the cast nor the trait.
+             */
+            'two_factor_confirmed_at' => 'datetime',
         ];
     }
 }
