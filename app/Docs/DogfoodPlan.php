@@ -51,7 +51,7 @@ final class DogfoodPlan
                 'mount' => '',
                 'directory' => 'docs/operator',
                 'repository' => 'https://github.com/DocUpHQ/docup-docs-operator',
-                'pages' => ['index', 'installing', 'composition', 'redirects', 'access', 'providers', 'oidc', 'saml', 'assurance', 'operations'],
+                'pages' => ['index', 'installing', 'composition', 'redirects', 'access', 'providers', 'oidc', 'saml', 'directories', 'assurance', 'operations'],
             ],
             [
                 'key' => 'docup-author',
