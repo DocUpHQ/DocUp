@@ -1,0 +1,135 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# ------------------------------------------------------------------------------
+# A real Keycloak, for §17's Phase 24 exit criterion.
+# ------------------------------------------------------------------------------
+#
+# > "Two projects on one installation authenticate readers against two different
+# > Keycloak realms in one browser session."
+#
+# 🛑 **Why a real provider and not the fixture.** `tests/Feature/Oidc` drives the
+# whole flow against a stubbed transport, which proves everything that is
+# DocUp's — two bindings, two issuers, two sessions, no cross-talk, and §8.12.18's
+# eight checks. What it cannot prove is that DocUp speaks the protocol a real
+# provider speaks: the discovery document's actual shape, Keycloak's own
+# `at_hash`, the token endpoint's error bodies, and group claims as Keycloak
+# releases them. A fixture agrees with whatever DocUp believes.
+#
+# ADR 0008 measured the one question that could not wait — whether one fixed
+# `redirect_uri` serves readers from two custom domains — on this same Keycloak
+# version in Phase 00. This overlay is the rest of it.
+#
+# Usage:
+#   docker compose -f compose.yaml -f compose.oidc.yaml up -d
+#   bash deploy/oidc-test-setup.sh      # trust Keycloak's certificate
+#   bash deploy/verify-oidc.sh          # drive both realms
+#
+# The same shape as `compose.tls.yaml`, which stands up Pebble for Phase 19, and
+# for the same reason: an integration whose dependency is not in the shipped
+# compose file is an integration that cannot be run by accident.
+
+services:
+  keycloak:
+    # 🛑 Pinned by digest, and the version is **26.0.8** on purpose: it is the
+    # one ADR 0008 measured. §18.9's answer is recorded against a version, so a
+    # moving tag would mean the evidence drifted from the thing it describes.
+    #
+    # Resolved 2026-11-08; `docker inspect --format '{{index .RepoDigests 0}}'`
+    # after a pull is how to update it — and updating it means re-reading ADR
+    # 0008 rather than only bumping the line.
+    image: quay.io/keycloak/keycloak@sha256:09a381c715ab0b111835b70f2905955274843a219c6f27efb348e4d9f4086858
+
+    # `start-dev` because this is a fixture: an in-memory H2 database, no
+    # clustering, and realms imported on every start. A production Keycloak is
+    # not DocUp's business to document.
+    command:
+      - start-dev
+      - --import-realm
+      - --https-certificate-file=/opt/keycloak/conf/tls/keycloak.crt
+      - --https-certificate-key-file=/opt/keycloak/conf/tls/keycloak.key
+
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin-password-for-tests-only
+
+      # 🛑 The hostname Keycloak puts in its own `issuer`, and it must match what
+      # DocUp is configured with byte-for-byte — §8.12.18's "exact `iss`", and
+      # Discovery §4.3 requires the document to agree with the URL it was
+      # fetched from. Getting this wrong produces `oidc.issuer_mismatch` at a
+      # reader's first login and nowhere earlier.
+      KC_HOSTNAME: https://keycloak:8443
+      KC_HOSTNAME_STRICT: "false"
+
+      KC_HTTP_ENABLED: "false"
+      KC_HTTPS_PORT: "8443"
+
+    volumes:
+      - ./deploy/keycloak:/opt/keycloak/data/import:ro
+      # Written by deploy/oidc-test-setup.sh before the stack comes up.
+      - ./deploy/keycloak-tls:/opt/keycloak/conf/tls:ro
+
+    # 🛑 On the `app` network only. An identity provider has no business
+    # reaching the database, and §11.2 enforces the zones by network rather than
+    # by convention — the same placement `compose.tls.yaml` gives Pebble.
+    networks:
+      app:
+        aliases:
+          - keycloak
+
+    # 🛑 Published so the test driver — which runs on the host, not in a
+    # container — can reach it. The driver has to be outside: it plays the part
+    # of a browser, and §8.3.9 denies the application itself every address this
+    # stack listens on.
+    # 🛑 8444 on the host, because the shipped compose file already publishes
+    # the app's TLS port on 8443. The container port stays 8443, so the issuer
+    # Keycloak emits and the address DocUp resolves in-network are unchanged —
+    # and the test driver bridges the difference with curl's `--connect-to`,
+    # which keeps SNI, the Host header and certificate verification pointed at
+    # `keycloak:8443` while connecting elsewhere.
+    ports:
+      - "127.0.0.1:8444:8443"
+
+    healthcheck:
+      # `/realms/acme` rather than `/health`: it answers only once the realm
+      # import has finished, which is the state the test actually needs. A
+      # health endpoint that went green before the import would make the first
+      # run fail intermittently.
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/localhost/8443 &&
+          printf 'GET /realms/acme HTTP/1.0\r\nHost: keycloak\r\n\r\n' >&3
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+
+  app:
+    environment:
+      # The two realms' issuers, so `deploy/seed-oidc-fixture.php` does not have
+      # to hard-code a hostname this file chose.
+      #
+      # 🛑 There is no `DOCUP_OIDC_E2E` flag, deliberately. The TLS overlay has
+      # one because its integration lives in a Pest suite that would otherwise
+      # skip; this one lives in `deploy/verify-oidc.sh`, which has no skip to
+      # turn into a failure — it runs or it does not, and CI calls it directly.
+      DOCUP_OIDC_ISSUER_ACME: https://keycloak:8443/realms/acme
+      DOCUP_OIDC_ISSUER_GLOBEX: https://keycloak:8443/realms/globex
+
+      # 🛑 The suite and the running application share ONE database here, for
+      # the reason compose.tls.yaml gives at length: the driver signs in through
+      # the real FPM worker, so rows the test wrote must be visible to it.
+      DB_DATABASE: docup_test
+
+    volumes:
+      # 🛑 §8.3.9's carve-out for one hostname, by **mount** rather than by
+      # editing the committed file.
+      #
+      # Keycloak is on a private Docker address, which the hardened client
+      # refuses by design. The shipped `deploy/internal-destinations.conf` must
+      # stay empty — an architecture test asserts it — and a reader's login goes
+      # through the FPM worker, so the trick `AcmeIssuanceTest` uses (setting the
+      # config in the test process) cannot reach the code under test. A
+      # read-only mount over the file is the narrowest thing that can.
+      - ./deploy/keycloak/internal-destinations.conf:/app/deploy/internal-destinations.conf:ro

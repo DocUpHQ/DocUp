@@ -714,6 +714,150 @@ jobs:
           docker logs --tail 100 docup-proxy || true
           docker ps -a --filter label=docup.owner=build-runner || true
 
+  # ---------------------------------------------------------------------------
+  # 🛑 SPEC 17 Phase 24's exit criterion, against a REAL Keycloak.
+  # ---------------------------------------------------------------------------
+  #
+  # > "Two projects on one installation authenticate readers against two
+  # > different Keycloak realms in one browser session."
+  #
+  # `tests/Feature/Oidc` drives the same flow against a stubbed transport and
+  # proves everything that is DocUp's. What it cannot prove is that a real
+  # provider agrees — the discovery document's actual shape, Keycloak's own
+  # `at_hash`, the token endpoint's error bodies, and group claims as Keycloak
+  # releases them. A fixture agrees with whatever DocUp believes.
+  #
+  # Its own job rather than a step in `baseline gate`, for the reason the TLS
+  # and edge jobs are separate: it needs a service the shipped compose file does
+  # not start, and a failure here should name the integration rather than the
+  # suite.
+  oidc:
+    name: OIDC against a real Keycloak
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compose an environment
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          printf 'APP_KEY=base64:%s\n' "$(openssl rand -base64 32)" >> .env
+          printf 'APP_ENV=local\n' >> .env
+          printf 'DOCUP_AUDIT_KEY=%s\n' "$(openssl rand -hex 32)" >> .env
+          printf 'DOCUP_APP_HOST=docup.localhost\n' >> .env
+          printf 'DOCUP_DOCS_APEX=docup-docs.localhost\n' >> .env
+          printf 'DOCUP_PREVIEW_APEX=docup-previews.localhost\n' >> .env
+          printf 'DOCUP_ASSET_HOST=assets.docup-docs.localhost\n' >> .env
+
+      # 🛑 BEFORE the stack comes up. The certificate is a bind mount, so
+      # Keycloak needs it to exist at start-up — a container that starts without
+      # it fails with a TLS configuration error that names neither.
+      - name: Generate Keycloak's certificate
+        run: bash deploy/oidc-test-setup.sh
+
+      - name: Build the image
+        run: docker compose -f compose.yaml -f compose.oidc.yaml build app
+
+      - name: Install dependencies
+        run: |
+          docker compose -f compose.yaml -f compose.oidc.yaml run --rm --no-deps app \
+            composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Start the stack and Keycloak
+        run: docker compose -f compose.yaml -f compose.oidc.yaml up -d db cache keycloak app
+
+      # The same reasoning the TLS job gives: compose.oidc.yaml points the
+      # application at `docup_test` so the seeder and the running application
+      # share one database, and the image grants the `docup` user only `docup`.
+      - name: Create the shared test database
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if docker compose -f compose.yaml -f compose.oidc.yaml exec -T -e MYSQL_PWD=docup-root db \
+                 mysql -u root -e "CREATE DATABASE IF NOT EXISTS \`docup_test\`
+                                     DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+                                   GRANT ALL PRIVILEGES ON \`docup_test\`.* TO 'docup'@'%';
+                                   FLUSH PRIVILEGES;"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::could not create docup_test"
+          exit 1
+
+      - name: Migrate
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if docker compose -f compose.yaml -f compose.oidc.yaml exec -T app \
+                 php artisan migrate --force --no-interaction; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::migrations never succeeded"
+          exit 1
+
+      # 🛑 Waits for the REALM, not for a health endpoint. `--import-realm`
+      # finishes after the server starts listening, so a health check that went
+      # green first would make the seeder fail intermittently on a cold runner.
+      - name: Wait for Keycloak to import both realms
+        run: |
+          set -euo pipefail
+          for realm in acme globex; do
+            ok=0
+            for _ in $(seq 1 60); do
+              code="$(curl -sS -o /dev/null -w '%{http_code}' \
+                --connect-to "keycloak:8443:127.0.0.1:8444" \
+                --cacert deploy/keycloak-tls/keycloak.crt \
+                "https://keycloak:8443/realms/${realm}/.well-known/openid-configuration" || echo 000)"
+              if [ "$code" = 200 ]; then ok=1; break; fi
+              sleep 5
+            done
+            if [ "$ok" != 1 ]; then
+              echo "::error::realm ${realm} never answered"
+              docker compose -f compose.yaml -f compose.oidc.yaml logs keycloak --tail 60
+              exit 1
+            fi
+            echo "realm ${realm} is up"
+          done
+
+      # 🛑 Through the application's own egress client, with verification ON.
+      # §8.3.9 is what this proves: the certificate is trusted in the container,
+      # and the probe that follows reaches Keycloak the way a reader's login
+      # will. A curl from the runner would verify a different trust store.
+      - name: Trust Keycloak's certificate in the app container
+        run: |
+          DOCUP_COMPOSE="docker compose -f compose.yaml -f compose.oidc.yaml" \
+            bash deploy/oidc-test-setup.sh --trust
+
+      # Seeds two projects, two bindings and two rules, and PROBES each binding
+      # against the live realms — so a configuration that cannot reach Keycloak
+      # fails here, before any reader is involved, with a reason.
+      - name: Seed two projects against the two realms
+        id: seed
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml -f compose.oidc.yaml exec -T \
+            -e DB_DATABASE=docup_test -e APP_ENV=testing app \
+            php deploy/seed-oidc-fixture.php | tee /tmp/oidc-hosts.env
+          grep -q DOCUP_OIDC_HOST_ACME /tmp/oidc-hosts.env
+
+      - name: Two realms, one browser session (SPEC 17 Phase 24)
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2046
+          export $(grep -E '^DOCUP_OIDC_HOST_' /tmp/oidc-hosts.env | xargs)
+          bash deploy/verify-oidc.sh
+
+      - name: Logs, on failure
+        if: failure()
+        run: |
+          docker compose -f compose.yaml -f compose.oidc.yaml logs --tail 120 app
+          docker compose -f compose.yaml -f compose.oidc.yaml logs --tail 60 keycloak
+
   # 🛑 Phase 19's TLS automation, against a REAL certificate authority and the
   # stack's own proxy.
   #
