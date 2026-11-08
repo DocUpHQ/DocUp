@@ -123,6 +123,7 @@
     "minimum-stability": "stable",
     "prefer-stable": true,
     "suggest": {
+        "ext-ldap": "SPEC 8.12.4's `ldap` driver, which is installation-scope only. A SUGGEST rather than a require, per SPEC 11.2 and ADR 0007: hard-requiring it fails resolution on every installation that never configures LDAP, which is most of them. The shipped images carry it; a bare-metal installation without it gets a driver whose probe refuses with a clear message rather than a crash.",
         "laravel/reverb": "SPEC 8.5.22's optional WebSocket profile for build-log streaming. Not required: the core profile reads logs by offset polling, and an installation that never enables the profile should not carry a WebSocket server in its image or its SBOM."
     }
 }

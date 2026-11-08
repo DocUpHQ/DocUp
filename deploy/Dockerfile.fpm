@@ -57,8 +57,13 @@ RUN set -eux; \
         libfreetype6-dev \
         libsodium-dev \
         libwebp-dev \
+        libldap2-dev \
     ; \
     docker-php-ext-configure gd --with-jpeg --with-freetype --with-webp; \
+    # 🛑 ldap needs its library path named explicitly on Debian multiarch, or
+    # the build finds the headers and not the shared objects. The failure is at
+    # link time rather than at runtime, which is the better of the two.
+    docker-php-ext-configure ldap --with-libdir="lib/$(dpkg-architecture -q DEB_HOST_MULTIARCH)"; \
     docker-php-ext-install -j"$(nproc)" \
         pdo_mysql \
         intl \
@@ -66,6 +71,7 @@ RUN set -eux; \
         gd \
         bcmath \
         pcntl \
+        ldap \
     ; \
     pecl install redis pcov; \
     docker-php-ext-enable redis; \
@@ -94,7 +100,7 @@ RUN set -eux; \
 # load-bearing, and both are exactly what goes missing silently when a base
 # image's bundled set changes.
 RUN set -eux; \
-    for ext in pdo_mysql intl zip gd bcmath sodium pcntl redis; do \
+    for ext in pdo_mysql intl zip gd bcmath sodium pcntl redis ldap; do \
         php -m | grep -qxF "$ext" \
             || (echo "missing from the nginx-accel image: $ext" && exit 1); \
     done; \
