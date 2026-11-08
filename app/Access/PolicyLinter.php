@@ -592,8 +592,18 @@ final readonly class PolicyLinter
         }
 
         if ($before['admits'] !== $after['admits']) {
-            $beforeAdmits = is_array($before['admits']) ? $before['admits'] : [];
-            $afterAdmits = is_array($after['admits']) ? $after['admits'] : [];
+            /*
+             * 🛑 Narrowed to `list<string>` rather than cast, and §9.4's level 9
+             * on this namespace is what insisted. `breadth` comes back from a
+             * JSON column, so `admits` is `mixed`: an `is_array()` check leaves
+             * `array<mixed>`, and `array_diff` on that throws at runtime the
+             * moment one element is itself an array. A linter that crashed on a
+             * malformed stored observation would take the nightly job with it,
+             * and the observation is the one thing here that an earlier version
+             * of this code wrote.
+             */
+            $beforeAdmits = self::shapeList($before['admits']);
+            $afterAdmits = self::shapeList($after['admits']);
 
             /*
              * The exact comparison: the set of reader shapes the tree admits.
@@ -683,6 +693,33 @@ final readonly class PolicyLinter
         }
 
         return true;
+    }
+
+    /**
+     * Every string in a value read back from a JSON column.
+     *
+     * 🛑 The one place `breadth`'s stored shape is trusted, and it is trusted
+     * only this far. See the call site: §9.4 runs this namespace at level 9
+     * because a type error in it is a security bug, and `array_diff` over
+     * anything but strings is a crash in a scheduled job.
+     *
+     * @return list<string>
+     */
+    private static function shapeList(mixed $value): array
+    {
+        if (! is_array($value)) {
+            return [];
+        }
+
+        $shapes = [];
+
+        foreach ($value as $shape) {
+            if (is_string($shape)) {
+                $shapes[] = $shape;
+            }
+        }
+
+        return $shapes;
     }
 
     /**
