@@ -1271,6 +1271,174 @@
       "input": "a provider authorization_endpoint carrying its own response_type=token query parameter",
       "expect": "code",
       "note": "🛑 RFC 6749 3.1 permits a query on the authorization endpoint and some providers use one, so it is merged rather than clobbered - but DocUp parameters are merged OVER the provider, so an endpoint query cannot select the implicit flow or shadow redirect_uri. The harmless case (kc_idp_hint) survives; the dangerous one does not."
+    },
+    {
+      "id": "saml-015",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "unsigned",
+      "expect": "saml.signature_missing",
+      "note": "restates saml-001: no signature anywhere, refused before any field is read"
+    },
+    {
+      "id": "saml-016",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "response_signed_assertion_unsigned",
+      "expect": "saml.signature_missing",
+      "note": "restates saml-002: a signed Response carrying an unsigned Assertion - why 8.12.18's AND is load-bearing"
+    },
+    {
+      "id": "saml-017",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "signature_wrapping",
+      "expect": "saml.signature_missing",
+      "note": "restates saml-003: strip-and-hide XSW leaves the READ element unsigned, so this is not a wrapping report"
+    },
+    {
+      "id": "saml-018",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "signature_wrapping_reference",
+      "expect": "saml.signature_wrapped",
+      "note": "copy-the-signature XSW: the signature verifies over an element DocUp is not trusting - the distinct event 17 wants"
+    },
+    {
+      "id": "saml-019",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "alg_none",
+      "expect": "saml.algorithm_not_allowed",
+      "note": "restates saml-004: an algorithm outside the allowlist, refused before the signature is checked"
+    },
+    {
+      "id": "saml-020",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "two_assertions",
+      "expect": "saml.assertion_count_wrong",
+      "note": "restates saml-005: exactly one Assertion; two is an ambiguity the attacker chooses"
+    },
+    {
+      "id": "saml-021",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "wrong_audience",
+      "expect": "saml.audience_mismatch",
+      "note": "restates saml-006: an assertion minted for another service provider at the same IdP"
+    },
+    {
+      "id": "saml-022",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "wrong_destination",
+      "expect": "saml.destination_mismatch",
+      "note": "restates saml-007: a response captured at one service provider and replayed at another"
+    },
+    {
+      "id": "saml-023",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "expired_notonorafter",
+      "expect": "saml.conditions_expired",
+      "note": "restates saml-008: NotOnOrAfter has passed, beyond the skew"
+    },
+    {
+      "id": "saml-024",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "replayed_assertion_id",
+      "expect": "saml.assertion_replayed",
+      "note": "restates saml-009: the assertion-id replay cache, keyed on the certificate as well as the id"
+    },
+    {
+      "id": "saml-025",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "comment_truncation",
+      "expect": "saml.comment_in_value_refused",
+      "note": "restates saml-010: CVE-2017-11427 - the signed value and the read value differ"
+    },
+    {
+      "id": "saml-026",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "xxe_external_entity",
+      "expect": "saml.entity_declaration_refused",
+      "note": "restates saml-011: refused on the BYTES, before any DOMDocument exists"
+    },
+    {
+      "id": "saml-027",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "xxe_billion_laughs",
+      "expect": "saml.entity_declaration_refused",
+      "note": "entity expansion with no external entity at all - the half a network-level defence misses"
+    },
+    {
+      "id": "saml-028",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "encrypted_unsigned",
+      "expect": "saml.encrypted_without_signature",
+      "note": "restates saml-012: encryption is not authentication"
+    },
+    {
+      "id": "saml-029",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "idp_initiated",
+      "expect": "saml.in_response_to_unknown",
+      "note": "restates saml-013: IdP-initiated off by default IS a missing InResponseTo, not a separate flag"
+    },
+    {
+      "id": "saml-030",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "clock_skew_130s",
+      "expect": "saml.conditions_expired",
+      "note": "restates saml-014: the 120s ceiling, asserted at both edges"
+    },
+    {
+      "id": "saml-031",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "valid(overrides: Issuer)",
+      "expect": "saml.issuer_mismatch",
+      "note": "a multi-tenant IdP signing for several entity ids with one key: the certificate proves the provider, not the tenant"
+    },
+    {
+      "id": "saml-032",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "valid(overrides: AssertionIssuer)",
+      "expect": "saml.issuer_mismatch",
+      "note": "the Assertion's issuer swapped while the Response's stays - the claims come from the Assertion"
+    },
+    {
+      "id": "saml-033",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "a RelayState DocUp never issued",
+      "expect": "saml.relay_state_unknown",
+      "note": "the ACS resolves the exchange before parsing, so a forged POST costs one indexed read"
+    },
+    {
+      "id": "saml-034",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "the same response POSTed twice",
+      "expect": "saml.relay_state_expired",
+      "note": "the single-use latch: one captured assertion gets exactly one try"
+    },
+    {
+      "id": "saml-035",
+      "category": "saml",
+      "defends": "8.12.18",
+      "builder": "exchange A's assertion with exchange B's RelayState",
+      "expect": "saml.in_response_to_unknown",
+      "note": "RelayState is an index into verified state, never a carrier - the stored row holds the request id"
     }
   ]
 }

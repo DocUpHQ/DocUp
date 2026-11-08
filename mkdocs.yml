@@ -35,6 +35,7 @@ nav:
       - Who may read it: operator/docs/access.md
       - Private without an IdP: operator/docs/providers.md
       - Connecting an IdP: operator/docs/oidc.md
+      - Connecting SAML: operator/docs/saml.md
       - Running it: operator/docs/operations.md
   - Writing for DocUp:
       - Overview: author/docs/index.md
