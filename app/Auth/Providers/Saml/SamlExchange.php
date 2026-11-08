@@ -126,7 +126,7 @@ final readonly class SamlExchange
             'binding_id' => $bindingId,
             'domain_id' => $domainId,
             'project_id' => $projectId,
-            'request_id' => $requestId,
+            'in_response_to' => $requestId,
             'relay_state_hash' => SecretToken::hash($relayState),
             'relay_state_hash_prefix' => SecretToken::prefix($relayState),
             'handoff_challenge' => $handoffChallenge,
@@ -174,7 +174,7 @@ final readonly class SamlExchange
      *     binding_id: string,
      *     domain_id: string,
      *     project_id: string,
-     *     request_id: string,
+     *     in_response_to: string,
      *     handoff_challenge: string,
      *     return_path: string,
      * }
@@ -246,7 +246,7 @@ final readonly class SamlExchange
      *     binding_id: string,
      *     domain_id: string,
      *     project_id: string,
-     *     request_id: string,
+     *     in_response_to: string,
      *     handoff_challenge: string,
      *     return_path: string,
      *     expires_at: string,
@@ -258,7 +258,7 @@ final readonly class SamlExchange
             ->where('relay_state_hash_prefix', SecretToken::prefix($relayState))
             ->get([
                 'id', 'organisation_id', 'binding_id', 'domain_id', 'project_id',
-                'relay_state_hash', 'request_id', 'handoff_challenge', 'return_path',
+                'relay_state_hash', 'in_response_to', 'handoff_challenge', 'return_path',
                 'expires_at',
             ]);
 
@@ -275,7 +275,7 @@ final readonly class SamlExchange
                 'binding_id' => (string) $candidate->binding_id,
                 'domain_id' => (string) $candidate->domain_id,
                 'project_id' => (string) $candidate->project_id,
-                'request_id' => (string) $candidate->request_id,
+                'in_response_to' => (string) $candidate->in_response_to,
                 'handoff_challenge' => (string) $candidate->handoff_challenge,
                 'return_path' => (string) $candidate->return_path,
                 'expires_at' => (string) $candidate->expires_at,

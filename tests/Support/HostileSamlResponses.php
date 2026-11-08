@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace Tests\Support;
 
+use App\Auth\Providers\Saml\AuthnRequest;
 use RobRichards\XMLSecLibs\XMLSecurityDSig;
 use RobRichards\XMLSecLibs\XMLSecurityKey;
 
@@ -58,11 +59,35 @@ final class HostileSamlResponses
 
     public const string ASSERTION = 'urn:oasis:names:tc:SAML:2.0:assertion';
 
-    /** Where DocUp's assertion consumer service lives, for `Destination`. */
-    public const string ACS = 'https://docup.localhost/_/auth/saml/acs';
+    /**
+     * 🛑 Where DocUp's assertion consumer service lives, read from
+     * **DocUp's own configuration** rather than written out here.
+     *
+     * These were constants spelling `https://docup.localhost/…`, and they were
+     * wrong in a way that only CI could see: `phpunit.xml` sets
+     * `DOCUP_APP_HOST=docup.test` while the compose environment sets
+     * `docup.localhost`, and phpunit's `<env>` does not override a variable the
+     * real environment already holds. So every assertion this fixture built was
+     * addressed to the right host locally and the wrong one in CI, where twelve
+     * tests failed on `saml.destination_mismatch` — a refusal that is correct,
+     * about a fixture that was not.
+     *
+     * Reading `AuthnRequest` is also the honest shape: this class stands in for
+     * an identity provider **configured for this installation**, and such a
+     * provider is configured with the ACS DocUp publishes. A fixture that could
+     * disagree with the application about its own address is a fixture that
+     * tests the disagreement.
+     */
+    public static function acs(): string
+    {
+        return AuthnRequest::acsUrl();
+    }
 
-    /** DocUp's own entity id, for `Audience`. */
-    public const string AUDIENCE = 'https://docup.localhost/saml/metadata';
+    /** DocUp's own entity id, for `Audience`. Read from configuration, as above. */
+    public static function audience(): string
+    {
+        return AuthnRequest::entityId();
+    }
 
     public const string ISSUER = 'https://idp.example.test/realms/acme';
 
@@ -575,7 +600,7 @@ final class HostileSamlResponses
         $response->setAttribute('ID', 'response-1');
         $response->setAttribute('Version', '2.0');
         $response->setAttribute('IssueInstant', self::instant($now));
-        $response->setAttribute('Destination', $overrides['Destination'] ?? self::ACS);
+        $response->setAttribute('Destination', $overrides['Destination'] ?? self::acs());
 
         if ($requestId !== null) {
             $response->setAttribute('InResponseTo', $requestId);
@@ -648,7 +673,7 @@ final class HostileSamlResponses
 
         $confirmationData = $document->createElementNS(self::ASSERTION, 'saml:SubjectConfirmationData');
         $confirmationData->setAttribute('NotOnOrAfter', self::instant($now + 300));
-        $confirmationData->setAttribute('Recipient', $overrides['Destination'] ?? self::ACS);
+        $confirmationData->setAttribute('Recipient', $overrides['Destination'] ?? self::acs());
 
         if ($requestId !== null) {
             $confirmationData->setAttribute('InResponseTo', $requestId);
@@ -664,7 +689,7 @@ final class HostileSamlResponses
 
         $restriction = $document->createElementNS(self::ASSERTION, 'saml:AudienceRestriction');
         $audience = $document->createElementNS(self::ASSERTION, 'saml:Audience');
-        $audience->appendChild($document->createTextNode($overrides['Audience'] ?? self::AUDIENCE));
+        $audience->appendChild($document->createTextNode($overrides['Audience'] ?? self::audience()));
         $restriction->appendChild($audience);
         $conditions->appendChild($restriction);
         $assertion->appendChild($conditions);

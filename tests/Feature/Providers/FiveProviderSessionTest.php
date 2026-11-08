@@ -478,7 +478,7 @@ final class FiveProviderSessionTest extends TestCase
                 ->where('binding_id', $this->sites['saml']['binding'])
                 ->whereNull('consumed_at')
                 ->orderByDesc('created_at')
-                ->value('request_id'),
+                ->value('in_response_to'),
         );
 
         $this->assertNotSame('', $requestId);

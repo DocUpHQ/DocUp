@@ -170,8 +170,8 @@ final class ResponseValidatorTest extends TestCase
                 xml: $document,
                 certificate: $this->idp->certificate(),
                 issuer: HostileSamlResponses::ISSUER,
-                audience: HostileSamlResponses::AUDIENCE,
-                destination: HostileSamlResponses::ACS,
+                audience: HostileSamlResponses::audience(),
+                destination: HostileSamlResponses::acs(),
                 /* No request was sent, which is what IdP-initiated means. */
                 inResponseTo: null,
             );
@@ -189,8 +189,8 @@ final class ResponseValidatorTest extends TestCase
                 xml: $this->idp->valid(),
                 certificate: $this->idp->certificate(),
                 issuer: HostileSamlResponses::ISSUER,
-                audience: HostileSamlResponses::AUDIENCE,
-                destination: HostileSamlResponses::ACS,
+                audience: HostileSamlResponses::audience(),
+                destination: HostileSamlResponses::acs(),
                 inResponseTo: 'some-other-request',
             );
             $this->fail('a response to another request was accepted');
@@ -265,7 +265,7 @@ final class ResponseValidatorTest extends TestCase
      */
     public function test_a_refused_response_does_not_consume_the_assertion_id(): void
     {
-        $audience = HostileSamlResponses::AUDIENCE;
+        $audience = HostileSamlResponses::audience();
 
         /* Refused on the audience, which is checked before the cache is written. */
         try {
@@ -274,7 +274,7 @@ final class ResponseValidatorTest extends TestCase
                 certificate: $this->idp->certificate(),
                 issuer: HostileSamlResponses::ISSUER,
                 audience: 'https://somebody-else.example.test/saml/metadata',
-                destination: HostileSamlResponses::ACS,
+                destination: HostileSamlResponses::acs(),
                 inResponseTo: 'docup-request-1',
             );
             $this->fail('a wrong audience was accepted');
@@ -290,7 +290,7 @@ final class ResponseValidatorTest extends TestCase
         $claims = $this->validate($this->idp->valid(assertionId: 'assertion-precious'));
 
         $this->assertSame('assertion-precious', $claims['id']);
-        $this->assertSame($audience, HostileSamlResponses::AUDIENCE);
+        $this->assertSame($audience, HostileSamlResponses::audience());
     }
 
     /**
@@ -310,8 +310,8 @@ final class ResponseValidatorTest extends TestCase
             xml: $other->valid(assertionId: 'shared-id'),
             certificate: $other->certificate(),
             issuer: HostileSamlResponses::ISSUER,
-            audience: HostileSamlResponses::AUDIENCE,
-            destination: HostileSamlResponses::ACS,
+            audience: HostileSamlResponses::audience(),
+            destination: HostileSamlResponses::acs(),
             inResponseTo: 'docup-request-1',
         );
 
@@ -327,8 +327,8 @@ final class ResponseValidatorTest extends TestCase
             xml: $xml,
             certificate: $this->idp->certificate(),
             issuer: HostileSamlResponses::ISSUER,
-            audience: HostileSamlResponses::AUDIENCE,
-            destination: HostileSamlResponses::ACS,
+            audience: HostileSamlResponses::audience(),
+            destination: HostileSamlResponses::acs(),
             inResponseTo: 'docup-request-1',
         );
     }

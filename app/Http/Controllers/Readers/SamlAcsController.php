@@ -173,7 +173,7 @@ final readonly class SamlAcsController
                 issuer: $issuer,
                 audience: AuthnRequest::entityId(),
                 destination: AuthnRequest::acsUrl(),
-                inResponseTo: $exchange['request_id'],
+                inResponseTo: $exchange['in_response_to'],
             );
 
             /*

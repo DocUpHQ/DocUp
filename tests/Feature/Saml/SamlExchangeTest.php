@@ -178,7 +178,7 @@ final class SamlExchangeTest extends TestCase
 
         $this->assertSame($this->bindingId, $first['binding_id']);
         $this->assertSame($this->domain->id, $first['domain_id']);
-        $this->assertSame('request-abc', $first['request_id']);
+        $this->assertSame('request-abc', $first['in_response_to']);
 
         try {
             $exchange->consume($relayState);
@@ -250,7 +250,7 @@ final class SamlExchangeTest extends TestCase
      * Asserted so that a future change which "hardens" the column has to
      * confront the reasoning rather than discover it.
      */
-    public function test_the_request_id_is_stored_in_the_clear(): void
+    public function test_the_in_response_to_value_is_stored_in_the_clear(): void
     {
         $exchange = app(SamlExchange::class);
 
@@ -260,7 +260,7 @@ final class SamlExchangeTest extends TestCase
             'request-ghi',
             (string) DB::table('saml_auth_requests')
                 ->where('relay_state_hash_prefix', SecretToken::prefix($relayState))
-                ->value('request_id'),
+                ->value('in_response_to'),
         );
     }
 

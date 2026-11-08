@@ -186,7 +186,7 @@ final class SamlAcsTest extends TestCase
     {
         $opened = $this->open();
 
-        $response = $this->acs($this->idp->valid($opened['request_id']), $opened['relay_state']);
+        $response = $this->acs($this->idp->valid($opened['in_response_to']), $opened['relay_state']);
 
         $this->assertSame(302, $response->getStatusCode());
 
@@ -225,7 +225,7 @@ final class SamlAcsTest extends TestCase
     {
         $opened = $this->open();
 
-        $response = $this->acs($this->idp->unsigned($opened['request_id']), $opened['relay_state']);
+        $response = $this->acs($this->idp->unsigned($opened['in_response_to']), $opened['relay_state']);
 
         $this->assertSame(404, $response->getStatusCode());
         $this->assertSame('', $response->getContent());
@@ -267,7 +267,7 @@ final class SamlAcsTest extends TestCase
 
         $this->assertSame(
             302,
-            $this->acs($this->idp->valid($first['request_id']), $first['relay_state'])->getStatusCode(),
+            $this->acs($this->idp->valid($first['in_response_to']), $first['relay_state'])->getStatusCode(),
         );
 
         /*
@@ -279,7 +279,7 @@ final class SamlAcsTest extends TestCase
          */
         $second = $this->open();
 
-        $replay = $this->idp->valid($second['request_id'], assertionId: 'assertion-1');
+        $replay = $this->idp->valid($second['in_response_to'], assertionId: 'assertion-1');
 
         $response = $this->acs($replay, $second['relay_state']);
 
@@ -396,7 +396,7 @@ final class SamlAcsTest extends TestCase
         $first = $this->open();
         $second = $this->open();
 
-        $response = $this->acs($this->idp->valid($first['request_id']), $second['relay_state']);
+        $response = $this->acs($this->idp->valid($first['in_response_to']), $second['relay_state']);
 
         $this->assertSame(404, $response->getStatusCode());
         $this->assertAudited([SamlRejection::InResponseToUnknown->auditAction()]);
@@ -413,7 +413,7 @@ final class SamlAcsTest extends TestCase
     public function test_the_same_response_cannot_be_posted_twice(): void
     {
         $opened = $this->open();
-        $xml = $this->idp->valid($opened['request_id']);
+        $xml = $this->idp->valid($opened['in_response_to']);
 
         $this->assertSame(302, $this->acs($xml, $opened['relay_state'])->getStatusCode());
 
@@ -460,7 +460,7 @@ final class SamlAcsTest extends TestCase
          * runs — including the CSRF check this route opts out of.
          */
         $response = $this->post('/_/auth/saml/acs', [
-            'SAMLResponse' => base64_encode($this->idp->valid($opened['request_id'])),
+            'SAMLResponse' => base64_encode($this->idp->valid($opened['in_response_to'])),
             'RelayState' => $opened['relay_state'],
         ]);
 
@@ -482,7 +482,7 @@ final class SamlAcsTest extends TestCase
      * It is stored in the clear precisely so the validator can compare against
      * it, so reading it here is reading what the controller reads.
      *
-     * @return array{relay_state: string, request_id: string}
+     * @return array{relay_state: string, in_response_to: string}
      */
     private function open(): array
     {
@@ -498,7 +498,7 @@ final class SamlAcsTest extends TestCase
             returnPath: '/',
         );
 
-        return ['relay_state' => $relayState, 'request_id' => $requestId];
+        return ['relay_state' => $relayState, 'in_response_to' => $requestId];
     }
 
     /**
@@ -535,7 +535,7 @@ final class SamlAcsTest extends TestCase
     {
         $opened = $this->open();
 
-        $response = $this->acs($build($opened['request_id']), $opened['relay_state']);
+        $response = $this->acs($build($opened['in_response_to']), $opened['relay_state']);
 
         $this->assertSame(404, $response->getStatusCode(), '🛑 §8.12.23: the project deny status');
         $this->assertSame('', $response->getContent(), '🛑 §8.12.23: and no detail');

@@ -81,9 +81,18 @@ return new class extends Migration
              * things, or a second comparison path — a worse shape bought with
              * no security.
              *
+             * 🛑 Named `in_response_to` rather than `request_id`, and §9.1.1 is
+             * why. That rule makes every column named `*_id` a `BINARY(16)`
+             * UUIDv7 and CI enforces it — which it should, because the one place
+             * an identifier column quietly becomes a string is the place a join
+             * silently stops working. This value is not a DocUp identifier at
+             * all: it is the string a response's `InResponseTo` attribute must
+             * equal. Naming it after the attribute it is compared against says
+             * so, and stops the column claiming to be something it is not.
+             *
              * Unique, so an `InResponseTo` can never name two exchanges.
              */
-            $table->string('request_id', 64)->collation('ascii_bin');
+            $table->string('in_response_to', 64)->collation('ascii_bin');
 
             /*
              * 🛑 `RelayState`, hashed, and it is the lookup key.
@@ -114,7 +123,7 @@ return new class extends Migration
             $table->datetime('updated_at', 3)->nullable();
 
             $table->unique('relay_state_hash', 'saml_auth_requests_relay_unique');
-            $table->unique('request_id', 'saml_auth_requests_request_unique');
+            $table->unique('in_response_to', 'saml_auth_requests_in_response_to_unique');
             $table->index('expires_at', 'saml_auth_requests_expiry_index');
 
             $table->foreign('organisation_id')->references('id')->on('organisations')->cascadeOnDelete();
@@ -130,7 +139,7 @@ return new class extends Migration
             ['binding_id', 'operational', 'not_applicable', null, '🛑 §8.12.19: RESTRICT, not cascade'],
             ['domain_id', 'operational', 'not_applicable', null, '🛑 §8.12.10: the return address, server-side'],
             ['project_id', 'operational', 'not_applicable', null, null],
-            ['request_id', 'operational', 'not_applicable', null, '🛑 §8.12.18: what InResponseTo must match; not a secret'],
+            ['in_response_to', 'operational', 'not_applicable', null, '🛑 §8.12.18: what InResponseTo must match; not an identifier (§9.1.1)'],
             ['relay_state_hash', 'secret', 'not_applicable', null, '🛑 §9.1.4: CSPRNG, stored hashed'],
             ['relay_state_hash_prefix', 'secret', 'not_applicable', null, 'the lookup prefix'],
             ['handoff_challenge', 'secret', 'not_applicable', null, "§8.12.10's challenge, carried through"],
