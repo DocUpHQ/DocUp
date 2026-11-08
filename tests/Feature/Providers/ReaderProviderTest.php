@@ -14,6 +14,7 @@ use App\Auth\Providers\BindingRefused;
 use App\Auth\Providers\BindingRejection;
 use App\Auth\Providers\Bindings;
 use App\Auth\Providers\BindingState;
+use App\Auth\Providers\Drivers\LdapDriver;
 use App\Auth\Providers\Drivers\PasswordDriver;
 use App\Auth\Providers\ReaderCredentials;
 use App\Credentials\SecretRedactor;
@@ -574,14 +575,16 @@ final class ReaderProviderTest extends TestCase
         $bindings = app(Bindings::class);
 
         /*
-         * 🛑 `oidc` was on this list in Phase 23 and left it in Phase 24,
-         * which is the phase boundary moving rather than the gate weakening:
-         * §8.12.17 puts `oidc` in the v1-mandatory set and §17 gives it P24,
-         * so a registry that refused it after P24 would be the thing to fix.
-         * The four that remain are §8.12.17's post-cut-line drivers plus a name
-         * that will never be registered.
+         * 🛑 This list shrinks as phases land, and each departure is the phase
+         * boundary moving rather than the gate weakening. `oidc` left in P24,
+         * `saml` in P25, `ldap` in P26b — §8.12.17 names the driver and §17
+         * names the phase, so a registry that still refused one after its phase
+         * would be the thing to fix.
+         *
+         * What remains is §8.12.17's two still-unbuilt drivers plus a name that
+         * will never be registered.
          */
-        foreach (['ldap', 'mtls', 'header_trust', 'made_up'] as $type) {
+        foreach (['mtls', 'header_trust', 'made_up'] as $type) {
             try {
                 $bindings->create('project', $this->project->id, $type, 'nope-'.$type);
                 $this->fail('"'.$type.'" was accepted and no driver is registered for it');
@@ -593,6 +596,44 @@ final class ReaderProviderTest extends TestCase
                 );
             }
         }
+    }
+
+    /**
+     * 🛑 §8.12.4's installation-scope-only rule, now that a driver exists to
+     * test it with.
+     *
+     * Phase 23's note on the test above said what it could not yet assert:
+     * "None of the three ships in Phase 23, so what is asserted is the
+     * **mechanism**." `ldap` ships in Phase 26b, so the rule itself is
+     * assertable — and the refusal is now `ScopeNotPermitted` rather than
+     * `UnknownDriver`, which is a **stronger** refusal from a more specific
+     * check.
+     *
+     * > "`ldap`, `mtls` and `header_trust` MUST be **installation-scope only**
+     * > — they reach into the operator's internal network or depend on facts
+     * > only the TLS terminator can establish, so project-scope configuration
+     * > would convert tenant self-service into an SSRF or header-spoofing
+     * > primitive."
+     *
+     * A project administrator who could configure this would be a tenant who
+     * could point DocUp's own server at any host on the operator's network.
+     */
+    public function test_ldap_is_refused_at_project_scope(): void
+    {
+        $bindings = app(Bindings::class);
+
+        try {
+            $bindings->create('project', $this->project->id, 'ldap', 'our directory');
+            $this->fail('🛑 §8.12.4: a project-scoped `ldap` binding is an SSRF primitive');
+        } catch (BindingRefused $refused) {
+            $this->assertSame(BindingRejection::ScopeNotPermitted, $refused->rejection);
+        }
+
+        /* And the same type IS permitted at installation scope, or the rule is a ban. */
+        $this->assertFalse(
+            LdapDriver::allowsProjectScope(),
+            'the capability is what `permittedAt()` reads',
+        );
     }
 
     /** 🛑 §8.12.16's mandatory expiry, refused at write time. */

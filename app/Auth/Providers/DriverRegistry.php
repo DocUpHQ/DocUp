@@ -9,6 +9,7 @@ namespace App\Auth\Providers;
 
 use App\Access\AccessLeaf;
 use App\Auth\Providers\Drivers\IpAllowlistDriver;
+use App\Auth\Providers\Drivers\LdapDriver;
 use App\Auth\Providers\Drivers\OidcDriver;
 use App\Auth\Providers\Drivers\PasswordDriver;
 use App\Auth\Providers\Drivers\PortalSessionDriver;
@@ -69,8 +70,15 @@ final class DriverRegistry
      * `AssertionReplayCache` — is `final` and takes no options, so
      * `SamlDriver` conducts no protocol and cannot weaken any of it.
      *
-     * `ldap`, `mtls` and `header_trust` are still absent: §8.12.17 puts them
-     * after the cut line and §17.3 names the phase that carries each.
+     * 🛑 `ldap` arrived in **Phase 26b**, which is the phase §17.3 names for
+     * it, under the same condition and with one addition: it is
+     * **installation-scope only** (§8.12.4), which {@see LdapDriver::allowsProjectScope()}
+     * returns false for and {@see self::permittedAt()} enforces. §8.12.18's four
+     * LDAP requirements live in `App\Auth\Providers\Ldap` behind `final`
+     * classes with no options — so `LdapDriver` conducts no protocol either.
+     *
+     * `mtls` and `header_trust` are still absent: §8.12.17 puts them after the
+     * cut line and §17.3 names the phase that carries each.
      *
      * @var array<string, class-string<AuthComponent>>
      */
@@ -83,6 +91,7 @@ final class DriverRegistry
         'ip_allowlist' => IpAllowlistDriver::class,
         'oidc' => OidcDriver::class,
         'saml' => SamlDriver::class,
+        'ldap' => LdapDriver::class,
     ];
 
     /**
