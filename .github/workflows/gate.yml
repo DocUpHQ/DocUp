@@ -41,6 +41,23 @@ permissions:
 env:
   COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.GITHUB_TOKEN }}"}}'
 
+  # 🛑 AND the parallelism, which is what actually fixes it. The token above was
+  # the first diagnosis and it was wrong: authentication raises the REQUEST
+  # quota, and the next run failed the same way with 87 dropped downloads in one
+  # job — `curl error 56 Connection died` eighty-one times and `curl error 28`
+  # six times. Many packages failing at once, not a sequence of refusals.
+  #
+  # That is a CONNECTION-level fault, not a quota one. Composer's downloader
+  # opens 12 simultaneous HTTP connections by default, and `api.github.com`
+  # drops some of them under that load from a shared runner IP — which also
+  # explains why it struck a different job each run and why the token made no
+  # difference.
+  #
+  # Six halves the concurrency. The token stays because it is correct on its own
+  # terms and costs nothing: a higher request quota is worth having whether or
+  # not it was the cause.
+  COMPOSER_MAX_PARALLEL_HTTP: '6'
+
 concurrency:
   group: gate-${{ github.ref }}
   cancel-in-progress: true
@@ -458,7 +475,7 @@ jobs:
       - name: Install dependencies
         run: |
           docker compose -f '${{ matrix.compose }}' run --rm --no-deps \
-            -e COMPOSER_AUTH app \
+            -e COMPOSER_AUTH -e COMPOSER_MAX_PARALLEL_HTTP app \
             composer install --no-interaction --prefer-dist --no-progress
 
       - name: Start the stack
