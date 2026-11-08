@@ -5,7 +5,7 @@
 
 declare(strict_types=1);
 
-namespace App\Auth\Providers\Oidc;
+namespace App\Auth\Providers\Federation;
 
 /**
  * §8.13.7's three JIT provisioning modes, per binding.
@@ -30,7 +30,7 @@ enum ProvisioningMode: string
 {
     /**
      * No reader identity is created. A subject with no existing identity is
-     * refused — see {@see OidcRejection::ProvisioningDisabled}, which is
+     * refused — see `ProvisioningRejection::ProvisioningDisabled`, which is
      * audited rather than silent, because "somebody who should have access
      * does not" is a thing the operator needs to find out.
      */

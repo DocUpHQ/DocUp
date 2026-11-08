@@ -11,4 +11,5 @@ nav:
   - Who may read it: access.html
   - Private without an IdP: providers.html
   - Connecting an IdP: oidc.html
+  - Connecting SAML: saml.html
   - Running it: operations.html

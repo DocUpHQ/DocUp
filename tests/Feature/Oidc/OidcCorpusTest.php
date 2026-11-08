@@ -9,8 +9,8 @@ namespace Tests\Feature\Oidc;
 
 use App\Auth\Providers\BindingRefused;
 use App\Auth\Providers\BindingRejection;
+use App\Auth\Providers\Federation\GroupMappings;
 use App\Auth\Providers\Oidc\Discovery;
-use App\Auth\Providers\Oidc\GroupMappings;
 use App\Auth\Providers\Oidc\OidcRefused;
 use App\Auth\Providers\Oidc\OidcRejection;
 use App\Auth\Scope;

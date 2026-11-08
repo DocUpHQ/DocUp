@@ -96,6 +96,49 @@ verbosity into a build failure would be worse than a truncated log.
 containers from the application container would itself be evidence the separation had
 been lost.
 
+### Phase 25 restated the `saml` expectations, and the corpus became a gate
+
+`saml-001` to `-014` were authored in Phase 00 and say only `reject` — the same
+shortcoming Phase 05 found in `git_url`, and here it matters more, because §17 makes
+this category a **release gate**: "adding a case that passes incorrectly fails CI."
+
+`reject` cannot tell fourteen controls apart. One surviving control would keep every
+case green while thirteen had regressed, which is exactly what "passes incorrectly"
+means. So `saml-015` to `-035` restate each vector against the exact
+`App\Auth\Providers\Saml\SamlRejection` identifier it must produce, and
+`tests/Feature/Saml/SamlCorpusTest.php` enforces four things a review cannot:
+
+1. every `expect` is an identifier the enum really has, so a rename breaks the build
+   rather than orphaning a case;
+2. **a case numbered above the originals may not say `reject`** — "do not weaken a
+   case" is not "may stay coarse for ever", and the boundary is where Phase 00 ends;
+3. every case names a proof that exists, and every proof a case;
+4. §17's seven named failures are each proved **at the route**, because an audit event
+   is something an HTTP request raises — a controller that swallowed the reason or
+   recorded one shared action would keep an exception-level test green.
+
+The originals are kept, per rule 1: they are coarse, not wrong, and they still pass.
+Each original and its restatement share one proof, because they are one vector asserted
+at two precisions.
+
+🛑 Five of the twenty-one are **new vectors**, not restatements, and each came out of
+building Phase 25 rather than out of a list:
+
+- `saml-018` is the second signature-wrapping variant. `saml-003` hides the real
+  assertion and leaves the read element unsigned, so it is correctly a
+  `signature_missing` — the *wrapped* report needs an attack that keeps the signature
+  valid and misdirects its reference. Two variants, two outcomes; reporting either as
+  the other would tell an operator they were being attacked in a way they were not.
+- `saml-027` is entity expansion with **no external entity**, which a network-level
+  defence does not see at all.
+- `saml-031` and `-032` are a multi-tenant identity provider signing for several entity
+  ids with one key: the certificate then proves "this provider" and not "this tenant",
+  so `<Issuer>` is checked on the Response *and* the Assertion. The two elements are
+  separately signed and therefore separately forgeable.
+- `saml-033` to `-035` are the exchange rather than the document: a forged `RelayState`,
+  the same response POSTed twice, and one exchange's assertion presented with another's
+  `RelayState`.
+
 ## Adding a case
 
 Append to `corpus.json`. Give it the next free `id` in its category, name the requirement

@@ -104,32 +104,48 @@ final readonly class AuthStartController
          * 🛑 Which leg of the dashboard to send the reader to, decided here
          * because this is where the project is already resolved.
          *
-         * An active `oidc` binding means the project's readers authenticate at
-         * an identity provider, so the member handoff — which is behind `auth`
-         * — would bounce them to a dashboard login they have no account for.
-         * With no such binding, nothing changes from Phase 22.
+         * An active `oidc` or `saml` binding means the project's readers
+         * authenticate at an identity provider, so the member handoff — which
+         * is behind `auth` — would bounce them to a dashboard login they have
+         * no account for. With no such binding, nothing changes from Phase 22.
          *
          * 🛑 The PKCE verifier cookie is set either way and the final hop is
          * `/_/auth/callback` either way, so §8.12.10's mechanism is untouched:
-         * the OIDC legs end by minting the same handoff code this origin is
-         * already waiting for. That is what kept this a choice of URL rather
-         * than a second session mechanism.
+         * every provider leg ends by minting the same handoff code this origin
+         * is already waiting for. That is what kept this a choice of URL rather
+         * than a second session mechanism — and it is why adding SAML in Phase
+         * 25 was one more entry in the list below rather than a new flow.
+         *
+         * 🛑 **First match wins, and the order is §8.12.3's.**
+         * `contextsFor()` returns bindings most-specific-of-type first, so a
+         * project that brings its own provider is served by it rather than by an
+         * installation-wide one. Where a project has *both* an `oidc` and a
+         * `saml` binding the list's order decides, which is a deterministic
+         * answer rather than a good one — §8.12.3 gives no precedence between
+         * two different types at the same specificity, and inventing one here
+         * would be this file deciding policy. The operator's remedy is to not
+         * configure two.
          */
         $project = $match->mount->project;
 
-        $viaProvider = false;
+        $viaProvider = null;
 
         foreach ($this->bindings->contextsFor($project->id, $project->organisationId, $project->authzEpoch) as $binding) {
-            if ($binding->type === 'oidc' && $binding->isUsable()) {
-                $viaProvider = true;
+            if (($binding->type === 'oidc' || $binding->type === 'saml') && $binding->isUsable()) {
+                $viaProvider = $binding->type;
                 break;
             }
         }
 
         $redirect = new RedirectResponse(
-            $viaProvider
-                ? $this->handoff->oidcStartUrl($snapshot->domainId, $pkce->challenge, $returnPath)
-                : $this->handoff->startUrl($snapshot->domainId, $pkce->challenge, $returnPath),
+            $viaProvider === null
+                ? $this->handoff->startUrl($snapshot->domainId, $pkce->challenge, $returnPath)
+                : $this->handoff->providerStartUrl(
+                    $viaProvider,
+                    $snapshot->domainId,
+                    $pkce->challenge,
+                    $returnPath,
+                ),
         );
 
         return $redirect

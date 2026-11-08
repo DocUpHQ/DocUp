@@ -13,12 +13,12 @@ use App\Auth\Providers\AuthComponent;
 use App\Auth\Providers\BindingContext;
 use App\Auth\Providers\BindingRefused;
 use App\Auth\Providers\BindingRejection;
+use App\Auth\Providers\Federation\ProvisioningMode;
 use App\Auth\Providers\Oidc\AuthorisationRequest;
 use App\Auth\Providers\Oidc\Discovery;
 use App\Auth\Providers\Oidc\IdTokenVerifier;
 use App\Auth\Providers\Oidc\JwksStore;
 use App\Auth\Providers\Oidc\OidcRefused;
-use App\Auth\Providers\Oidc\ProvisioningMode;
 use App\Auth\Providers\ProbeResult;
 use App\Auth\Providers\ReaderPresentation;
 
@@ -95,9 +95,9 @@ final class OidcDriver implements AuthComponent
          * So the flag says "this driver *can* map roles"; the **scope** check
          * is what says whether this binding may. Both are required and they
          * answer different questions —
-         * {@see \App\Auth\Providers\Oidc\GroupMappings::add()} refuses the
+         * {@see \App\Auth\Providers\Federation\GroupMappings::add()} refuses the
          * project case, a database CHECK refuses it again, and
-         * {@see \App\Auth\Providers\Oidc\ReaderProvisioning} refuses it a
+         * {@see \App\Auth\Providers\Federation\ReaderProvisioning} refuses it a
          * fourth time at login for rows that predate the others.
          *
          * Returning false here would be simpler and wrong: it would make

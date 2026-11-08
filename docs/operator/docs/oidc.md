@@ -193,7 +193,10 @@ DocUp will **not** fall back to another provider or to public —
 
 ## What is not here
 
-SAML and LDAP are later phases. SCIM is too: group membership today is whatever
-your provider asserts at login, reconciled then, which means a change at the
-provider reaches DocUp when the reader next signs in rather than when you make
-it.
+[SAML](saml.md) is the other protocol, and it is here now — the groups and
+provisioning half of this page applies to it unchanged, because it is the same
+code.
+
+LDAP is a later phase. So is SCIM: group membership today is whatever your
+provider asserts at login, reconciled then, which means a change at the provider
+reaches DocUp when the reader next signs in rather than when you make it.

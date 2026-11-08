@@ -12,7 +12,7 @@ use App\Artifacts\Publisher;
 use App\Auth\OrganisationContext;
 use App\Auth\Providers\Bindings;
 use App\Auth\Providers\BindingState;
-use App\Auth\Providers\Oidc\GroupMappings;
+use App\Auth\Providers\Federation\GroupMappings;
 use App\Auth\Providers\Oidc\OidcRejection;
 use App\Egress\DnsResolver;
 use App\Egress\Transport;

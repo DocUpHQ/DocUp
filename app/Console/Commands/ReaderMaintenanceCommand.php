@@ -7,7 +7,9 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Auth\Providers\Oidc\OidcExchange;
 use App\Auth\Providers\ReaderCredentials;
+use App\Auth\Providers\Saml\SamlExchange;
 use App\Readers\Grants\GrantKeys;
 use App\Readers\ReaderHandoff;
 use App\Readers\ReaderSessions;
@@ -38,6 +40,17 @@ use Illuminate\Console\Command;
  *   operator asked "who had access to this and when did it lapse" needs the row
  *   to answer, and §8.22's chain holds the issue and the revoke but not the
  *   scope.
+ * - 🛑 **Abandoned provider exchanges**, deleted (Phase 25). An `oidc` or
+ *   `saml` login writes one row before the reader leaves for the identity
+ *   provider, and a reader who closes the tab leaves it behind — so the two
+ *   tables grow by one row per *abandoned* login and never shrink.
+ *
+ *   🛑 This is retention and **not** authorisation: both `consume()` methods
+ *   check the expiry inside the latch, so an unswept row authorises nothing.
+ *   Phase 24 wrote `OidcExchange::sweep()` and never scheduled it, which went
+ *   unnoticed because an unswept row is harmless — the kind of omission that
+ *   surfaces as a table an operator finds two years later. Phase 25 would have
+ *   doubled it.
  * - 🛑 **The key rotation advanced.** This is the one that matters: {@see KeyState}
  *   has four states and three of the transitions are time-based, so a key sits
  *   in `retiring` forever on an installation where nobody runs a command. The
@@ -55,6 +68,8 @@ final class ReaderMaintenanceCommand extends Command
         ReaderHandoff $handoff,
         GrantKeys $keys,
         ReaderCredentials $credentials,
+        OidcExchange $oidc,
+        SamlExchange $saml,
     ): int {
         $this->line('sessions_swept='.$sessions->sweep());
         $this->line('handoff_codes_swept='.$handoff->sweep());
@@ -67,6 +82,16 @@ final class ReaderMaintenanceCommand extends Command
          * that presents a credential, so nothing here authorises or refuses.
          */
         $this->line('credentials_swept='.$credentials->sweep());
+
+        /*
+         * 🛑 One row per abandoned login, in each of two tables. Both sweeps
+         * keep rows for an hour past expiry rather than deleting on the stroke:
+         * a refusal an operator is investigating should still have the row it
+         * was judged against, and §8.22's chain names the binding but not the
+         * domain or the project the exchange carried.
+         */
+        $this->line('oidc_requests_swept='.$oidc->sweep());
+        $this->line('saml_requests_swept='.$saml->sweep());
 
         if ($this->option('no-rotate')) {
             return self::SUCCESS;

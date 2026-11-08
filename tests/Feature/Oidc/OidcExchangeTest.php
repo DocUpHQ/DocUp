@@ -264,18 +264,25 @@ final class OidcExchangeTest extends TestCase
             ->where('state_hash_prefix', SecretToken::prefix($opened['state']));
 
         /* A live exchange survives a sweep, whatever else the table holds. */
-        $before = $exchange->sweep();
+        $exchange->sweep();
 
         $this->assertSame(1, $mine->count(), 'the sweep removed a live exchange');
 
         $mine->update(['expires_at' => now()->subDays(2)->format('Y-m-d H:i:s.v')]);
 
         /*
-         * One more row swept than last time, and it is this one — asserted by
-         * its absence rather than by the return value, because the count is
-         * global and the row is not.
+         * 🛑 **At least one**, and a delta against the first sweep's count would
+         * be wrong — which is the bug the row-scoping fix left behind. The
+         * first sweep has already removed every *other* expired row, so the
+         * second one legitimately returns 1 however many the first returned;
+         * asserting `>= $before` made the test fail the moment the Keycloak
+         * integration left six expired rows for the first sweep to find.
+         *
+         * What is actually being claimed is "this row was swept", and the line
+         * below claims it by absence. The return value only has to show the
+         * sweep counted what it deleted.
          */
-        $this->assertGreaterThanOrEqual($before, $exchange->sweep());
+        $this->assertGreaterThanOrEqual(1, $exchange->sweep());
         $this->assertSame(0, $mine->count(), 'the sweep left an expired exchange behind');
     }
 

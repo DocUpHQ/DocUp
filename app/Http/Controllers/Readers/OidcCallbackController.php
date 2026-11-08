@@ -9,6 +9,10 @@ namespace App\Http\Controllers\Readers;
 
 use App\Auth\OrganisationContext;
 use App\Auth\Providers\Bindings;
+use App\Auth\Providers\Federation\ProvisioningMode;
+use App\Auth\Providers\Federation\ProvisioningRefused;
+use App\Auth\Providers\Federation\ProvisioningRejection;
+use App\Auth\Providers\Federation\ReaderProvisioning;
 use App\Auth\Providers\Oidc\AuthorisationRequest;
 use App\Auth\Providers\Oidc\Discovery;
 use App\Auth\Providers\Oidc\IdTokenVerifier;
@@ -17,8 +21,6 @@ use App\Auth\Providers\Oidc\OidcExchange;
 use App\Auth\Providers\Oidc\OidcRefused;
 use App\Auth\Providers\Oidc\OidcRejection;
 use App\Auth\Providers\Oidc\ProviderMetadata;
-use App\Auth\Providers\Oidc\ProvisioningMode;
-use App\Auth\Providers\Oidc\ReaderProvisioning;
 use App\Auth\Providers\Oidc\TokenEndpoint;
 use App\Models\Domain;
 use App\Models\Project;
@@ -166,13 +168,26 @@ final readonly class OidcCallbackController
              */
             $claims = $this->verifyWithStoredNonce($tokens, $exchange, $metadata, $binding->id, $clientId);
 
-            /* 5. Provision, reconcile, and mint. */
+            /*
+             * 5. Provision, reconcile, and mint.
+             *
+             * 🛑 Wrapped in its own try, because §8.13.7's provisioning is
+             * shared with SAML and therefore speaks `ProvisioningRefused`
+             * rather than this protocol's vocabulary. The translation is
+             * {@see self::asOidc()} and it keeps Phase 24's audit actions
+             * byte-identical — an operator's saved
+             * `oidc.provisioning_disabled.refused` query still matches.
+             */
             $identity = $this->provisioning->provision(
                 binding: $binding,
                 mode: ProvisioningMode::fromConfig($binding->string('provisioning')),
                 claims: $claims,
                 groupsClaim: $binding->string('groups_claim') ?? 'groups',
             );
+        } catch (ProvisioningRefused $refused) {
+            OidcAudit::refused($this->asOidc($refused), $binding, $exchange['organisation_id']);
+
+            return ReaderRejection::notFound();
         } catch (OidcRefused $refused) {
             /*
              * 🛑 The row stays consumed. A failed exchange must not be
@@ -303,5 +318,30 @@ final readonly class OidcCallbackController
         $nonce = $claims['nonce'] ?? null;
 
         return is_string($nonce) && $nonce !== '' ? $nonce : null;
+    }
+
+    /**
+     * 🛑 Provisioning's protocol-free refusal, in this protocol's words.
+     *
+     * §17 requires each failure to raise a distinct audit event, and an
+     * operator triaging an OIDC problem filters for `oidc.*` — so a shared
+     * `federation.*` action reaching the chain would be a refusal they never
+     * see. The mapping is total by construction: every case
+     * `ProvisioningRejection` can *throw* is named, and the compiler is the
+     * thing that notices when a fourth is added.
+     *
+     * `DashboardRoleNotPermitted` is absent on purpose — it is audited inside
+     * the reconciliation and never thrown, because §8.12.5's fourth
+     * enforcement skips the mapping rather than refusing the reader.
+     */
+    private function asOidc(ProvisioningRefused $refused): OidcRefused
+    {
+        $rejection = match ($refused->rejection) {
+            ProvisioningRejection::SubjectMissing => OidcRejection::SubjectMissing,
+            ProvisioningRejection::ProvisioningDisabled,
+            ProvisioningRejection::DashboardRoleNotPermitted => OidcRejection::ProvisioningDisabled,
+        };
+
+        return OidcRefused::of($rejection, $refused->getMessage());
     }
 }

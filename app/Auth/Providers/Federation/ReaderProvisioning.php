@@ -5,7 +5,7 @@
 
 declare(strict_types=1);
 
-namespace App\Auth\Providers\Oidc;
+namespace App\Auth\Providers\Federation;
 
 use App\Audit\ActorType;
 use App\Audit\Audit;
@@ -38,6 +38,22 @@ use Illuminate\Support\Facades\DB;
  * deleted every assignment it did not assert would delete an operator's manual
  * grants and an invitation's, which is why §10.1 gives `role_assignments` a
  * `source` column at all. The sweep is scoped to what this binding created.
+ *
+ * ## 🛑 One implementation, two protocols
+ *
+ * Phase 24 built this inside `App\Auth\Providers\Oidc` because OIDC was the
+ * only caller; Phase 25 moved it here unchanged, because SAML provisions the
+ * same way and a *second* implementation of §8.13.7 would be a second answer to
+ * whether a departed employee still has access. That is the class of question
+ * §4.3's "one `ArtifactIngestor`, one `Resolver`, one `EffectiveAccess`"
+ * invariants exist to keep single-valued.
+ *
+ * 🛑 What makes the sharing honest is that **nothing here is protocol-shaped**.
+ * The input is a flat map of already-verified facts and the name of the member
+ * holding the groups — `sub` and `groups` for an id_token, the `NameID` and an
+ * attribute name for an assertion. This class never sees a token, a signature
+ * or an XML document, so it cannot be the place where one protocol's validation
+ * is weaker than the other's.
  */
 final readonly class ReaderProvisioning
 {
@@ -47,12 +63,13 @@ final readonly class ReaderProvisioning
     ) {}
 
     /**
-     * Find or create the reader identity a verified token names, and reconcile.
+     * Find or create the reader identity these verified facts name, and reconcile.
      *
-     * @param  array<string, mixed>  $claims  the **verified** claim set
+     * @param  array<string, mixed>  $claims  the **verified** facts: an id_token's
+     *                                        claims, or an assertion's subject and attributes
      * @return ReaderIdentity the identity this reader is
      *
-     * @throws OidcRefused
+     * @throws ProvisioningRefused
      */
     public function provision(
         BindingContext $binding,
@@ -67,7 +84,10 @@ final readonly class ReaderProvisioning
 
         if (! is_string($subject) || $subject === '') {
             /* Already checked by the verifier; narrowed rather than assumed. */
-            throw OidcRefused::of(OidcRejection::SubjectMissing, 'the verified claims carry no `sub`');
+            throw ProvisioningRefused::of(
+                ProvisioningRejection::SubjectMissing,
+                'the verified facts carry no subject',
+            );
         }
 
         $identity = $this->findOrCreate($binding, $mode, $subject, $claims, $now);
@@ -84,7 +104,7 @@ final readonly class ReaderProvisioning
      *
      * @param  array<string, mixed>  $claims
      *
-     * @throws OidcRefused
+     * @throws ProvisioningRefused
      */
     private function findOrCreate(
         BindingContext $binding,
@@ -132,8 +152,8 @@ final readonly class ReaderProvisioning
              * SCIM deletion) ended this reader — and a login is not an appeal.
              */
             if ($identity->deprovisioned_at !== null) {
-                throw OidcRefused::of(
-                    OidcRejection::ProvisioningDisabled,
+                throw ProvisioningRefused::of(
+                    ProvisioningRejection::ProvisioningDisabled,
                     'this reader identity is deprovisioned',
                 );
             }
@@ -155,8 +175,8 @@ final readonly class ReaderProvisioning
              * somebody is this event — not a support ticket from a reader who
              * saw a 404.
              */
-            throw OidcRefused::of(
-                OidcRejection::ProvisioningDisabled,
+            throw ProvisioningRefused::of(
+                ProvisioningRejection::ProvisioningDisabled,
                 'no reader identity exists and this binding does not create them',
             );
         }
@@ -261,7 +281,7 @@ final readonly class ReaderProvisioning
                  *
                  * A `role` mapping cannot be written against a project-scoped
                  * binding — refused by the capability flag, by
-                 * {@see GroupMappings::add()} and by a database CHECK. This
+                 * `GroupMappings::add()` and by a database CHECK. This
                  * catches the row that predates all three, and it catches the
                  * other half too: a role mapping reached by a *reader* login
                  * grants nothing, because §8.12.1 forbids a reader holding a
@@ -272,12 +292,12 @@ final readonly class ReaderProvisioning
                  * refusing the login would punish the wrong party.
                  */
                 Audit::record(
-                    action: OidcRejection::DashboardRoleNotPermitted->auditAction(),
+                    action: ProvisioningRejection::DashboardRoleNotPermitted->auditAction(),
                     actorType: ActorType::System,
                     organisationId: $binding->organisationId,
                     subjectType: 'auth_provider_binding',
                     subjectId: $binding->id,
-                    reasonCode: OidcRejection::DashboardRoleNotPermitted->value,
+                    reasonCode: ProvisioningRejection::DashboardRoleNotPermitted->value,
                     payload: [
                         'binding' => Uuid::toText($binding->id),
                         'scope' => $mapping['binding_scope_type'],

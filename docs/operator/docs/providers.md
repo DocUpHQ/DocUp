@@ -224,9 +224,12 @@ revoke, but not the scope.
 
 ## What is not here
 
-SAML and LDAP are later phases. Nothing on this page depends on them, and when
-they arrive they are additional bindings resolved by the same rules.
+LDAP is a later phase. Nothing on this page depends on it, and when it arrives
+it is an additional binding resolved by the same rules.
 
-**OIDC has arrived** — see [Connecting an IdP](oidc.md). It changes nothing on
-this page: a project with a password binding and an installation with an
-identity provider have both, because resolution is per type.
+**OIDC and SAML have arrived** — see [Connecting an IdP](oidc.md) and
+[Connecting SAML](saml.md). They change nothing on this page: a project with a
+password binding and an installation with an identity provider have both,
+because §8.12.3 resolves the most specific binding **of each type**. A project
+that brings its own `oidc` does not shadow the installation's `password`, and
+nor does the reverse.
