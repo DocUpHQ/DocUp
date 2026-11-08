@@ -79,6 +79,24 @@ enum Capability: string
     case ProjectVisibilityUpdate = 'project.visibility.update';
 
     /**
+     * 🛑 §8.12.25's policy simulator, held apart from {@see self::ProjectView}.
+     *
+     * The simulator answers "as this identity, on this URL", and answering it
+     * means naming the organisation's reader identities and their reconciled
+     * groups (§8.13.7) — a membership list of everybody who has ever signed in
+     * to the documentation. §8.22.7 classifies those groups `pseudonymous`, and
+     * `project.view` is held by `project_reader`, whose whole job is to read a
+     * project in the dashboard rather than to audit who else can.
+     *
+     * So this is its own capability for the reason
+     * {@see self::ProjectVisibilityUpdate} is: the two actions have different
+     * blast radii and conflating them would make the narrower role the wider
+     * one. §4.3 forbids inventing a capability before the thing it governs
+     * exists, which is why it arrives in Phase 26a and not in Phase 02.
+     */
+    case ProjectPolicySimulate = 'project.policy.simulate';
+
+    /**
      * §8.2.9: the single audited flag that opts a project out of
      * organisation-level role inheritance. It is the only escape from additive
      * inheritance, which is why it is its own capability and not folded into
@@ -147,6 +165,7 @@ enum Capability: string
             self::ProjectDelete => 'Delete a project.',
             self::ProjectRoleAssign => 'Assign project-scoped roles.',
             self::ProjectVisibilityUpdate => 'Change who may read a project (§8.2.10 kill switch).',
+            self::ProjectPolicySimulate => 'Prove what any identity may read, with the policy simulator (§8.12.25).',
             self::ProjectInheritanceOverride => 'Opt a project out of organisation role inheritance (§8.2.9).',
             self::ProjectVersionPublish => 'Publish an artifact tree to a project version.',
             self::ProjectVersionRollback => 'Roll a version back to an earlier revision, pinning it (§8.8.5).',

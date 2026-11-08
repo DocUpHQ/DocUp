@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace App\Auth\Providers;
 
 use App\Access\ReaderContext;
+use App\Readers\ReaderSessions;
 
 /**
  * What a reader presented, as the only thing a driver may look at.
@@ -71,6 +72,37 @@ final readonly class ReaderPresentation
     public static function none(): self
     {
         return new self;
+    }
+
+    /**
+     * The same presentation with the session's two facts filled in.
+     *
+     * 🛑 The caller that knows what the reader presented is **not** the caller
+     * that knows what their session says, and this method is that seam rather
+     * than a longer constructor call. The transport reads cookies, headers and
+     * the remote address; resolving a session handle to a subject and a binding
+     * takes a database read that the transport has no business doing twice.
+     *
+     * Added in Phase 26a, when §8.12.25's simulator needed to supply the
+     * credential half from an operator's choice and let the identity half be
+     * derived from a stored identity exactly as a live request derives it. A
+     * simulator that constructed the whole presentation would have had to know
+     * which subject a session yields, which is precisely the knowledge
+     * {@see ReaderSessions::contextFor()} exists to hold.
+     *
+     * @param  string|null  $sessionBinding  raw 16 bytes, or null for a
+     *                                       dashboard member's session
+     */
+    public function withSession(?string $sessionSubject, ?string $sessionBinding): self
+    {
+        return new self(
+            bearer: $this->bearer,
+            shareSecret: $this->shareSecret,
+            password: $this->password,
+            remoteAddress: $this->remoteAddress,
+            sessionSubject: $sessionSubject,
+            sessionBinding: $sessionBinding,
+        );
     }
 
     /**
