@@ -79,6 +79,27 @@ final class LdapSignInTest extends TestCase
         Storage::fake('artifacts');
         Cache::flush();
 
+        /*
+         * 🛑 No Vite manifest, because these tests are about the CONTROLLER
+         * and not the asset pipeline.
+         *
+         * Rendering a real Inertia page reaches `@vite` in the root view,
+         * which throws `ViteManifestNotFoundException` wherever
+         * `public/build/manifest.json` has not been built. The `baseline
+         * gate` job builds the front end and these passed there; the
+         * `LDAP against a real OpenLDAP` job does not, and should not --
+         * an integration job for a directory has no business depending on
+         * the asset build. Found by CI, which is the only place the two
+         * jobs differ.
+         *
+         * 🛑 And the branding assertion is undiminished:
+         * {@see self::test_the_form_carries_no_project_or_organisation_branding()}
+         * reads the whole response body, which still carries the page
+         * payload Inertia serialises into `data-page`. What goes missing is
+         * a script tag.
+         */
+        $this->withoutVite();
+
         $this->fixtures = sys_get_temp_dir().'/docup-ldapui-'.getmypid();
 
         if (! is_dir($this->fixtures)) {
