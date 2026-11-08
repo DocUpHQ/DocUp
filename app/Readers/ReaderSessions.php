@@ -245,29 +245,139 @@ final readonly class ReaderSessions
      */
     public function bindingFor(SessionRecord $session): ?string
     {
+        $identity = $this->identityFor($session);
+
+        return is_string($identity['binding_id'] ?? null) ? $identity['binding_id'] : null;
+    }
+
+    /**
+     * The session's reader identity, as the two facts the serving path needs.
+     *
+     * 🛑 **One query for both**, where Phase 24 and Phase 26b each wanted their
+     * own. `bindingFor()` needed the binding and the group elevation below
+     * needs the groups, and they are two columns of the same row on the hottest
+     * path in the product — so this is the read and both callers share it.
+     *
+     * 🛑 **Deliberately NOT memoised**, and the first version of this method
+     * was. A field on this class would be a field on whatever lifetime the
+     * container gives it: under FrankenPHP worker mode or in the queue worker a
+     * shared instance would hold one reader's groups across requests, and
+     * §8.12.14 names that failure by hand — "a stale read in the unsafe
+     * direction serves private bytes with no decision at all, which is a worse
+     * class of bug than a stale allow for an already-authorised reader".
+     *
+     * Two indexed primary-key lookups on one row is the cost, and it is the
+     * right trade: §8.12.14's own argument is that the fast path and the slow
+     * path should be the same path.
+     *
+     * @return array{binding_id?: string, reader_groups?: string}
+     */
+    private function identityFor(SessionRecord $session): array
+    {
         if ($session->readerIdentityId === null) {
-            return null;
+            return [];
         }
 
-        $bindingId = $this->context->acrossAllOrganisations(
-            static fn (): mixed => DB::table('reader_identities')
-                ->where('id', $session->readerIdentityId)
-                ->value('binding_id'),
+        $key = $session->readerIdentityId;
+
+        /*
+         * 🛑 Spanning every organisation, as `contextFor()` does and for the
+         * reason stated there: a reader is not a tenant, the documentation
+         * origin declares no organisation context, and this is a primary-key
+         * lookup whose key came from the session row — so it cannot return
+         * another tenant's anything.
+         */
+        $row = $this->context->acrossAllOrganisations(
+            static fn (): ?object => DB::table('reader_identities')
+                ->where('id', $key)
+                ->first(['binding_id', 'reader_groups']),
         );
 
-        return is_string($bindingId) ? $bindingId : null;
+        $identity = [];
+
+        if ($row !== null) {
+            if (is_string($row->binding_id)) {
+                $identity['binding_id'] = $row->binding_id;
+            }
+
+            if (is_string($row->reader_groups)) {
+                $identity['reader_groups'] = $row->reader_groups;
+            }
+        }
+
+        return $identity;
+    }
+
+    /**
+     * 🛑 §12.3's `members` rung, by **group** — the half of its own definition
+     * that nothing implemented until Phase 26b.
+     *
+     * §12.3 defines `members` as "a reader whose identity maps to a role
+     * assignment **or group** on this organisation". Phase 24 built the group
+     * half's write side — §8.13.7 reconciles `reader_groups` on every login,
+     * added **and** removed — and Phase 26a found that no decision path ever
+     * read the column. So an operator could map an IdP group to a reader group,
+     * watch it land on the identity, and find their `members` rule still
+     * refusing every reader it was written for.
+     *
+     * 🛑 Phase 26b needs it for its own first exit criterion: "an LDAP group
+     * removal drops access on the next decision" is a statement about groups
+     * deciding access, which they could not do.
+     *
+     * **Any** mapped group is enough, and that is the faithful reading rather
+     * than a lenient one: a `provider_group_mappings` row is organisation-scoped
+     * and an operator wrote it deliberately, so a group on the identity *is*
+     * "a group on this organisation". §12.3's stronger rung is untouched —
+     * `restricted` still requires a rule naming the resource explicitly — so
+     * this admits a mapped reader to `members` content and no further.
+     *
+     * @param  array{binding_id?: string, reader_groups?: string}  $identity
+     */
+    private static function hasGroups(array $identity): bool
+    {
+        $stored = $identity['reader_groups'] ?? null;
+
+        if (! is_string($stored) || $stored === '') {
+            return false;
+        }
+
+        $decoded = json_decode($stored, true);
+
+        if (! is_array($decoded)) {
+            return false;
+        }
+
+        foreach ($decoded as $group) {
+            if (is_string($group) && $group !== '') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function contextFor(SessionRecord $session, ?Project $project = null): ReaderContext
     {
         if ($session->userId === null) {
             /*
-             * A provider-authenticated reader (P23). `authenticated` and never
-             * more: §12.3's `members` rung is about this installation's own
-             * role assignments, and a reader vouched for by somebody else's
-             * directory holds none of them.
+             * A provider-authenticated reader (P23).
+             *
+             * 🛑 **AMENDED (Phase 26b).** P23's note here read: "`authenticated`
+             * and never more: §12.3's `members` rung is about this
+             * installation's own role assignments, and a reader vouched for by
+             * somebody else's directory holds none of them." Half of that is
+             * right and the half that was wrong made §12.3 smaller than it is.
+             *
+             * §12.3 defines `members` as "a reader whose identity maps to a
+             * role assignment **or group** on this organisation". The role half
+             * is indeed unreachable for a reader — §8.12.1 forbids a reader
+             * identity holding a role assignment at all — but the **group**
+             * half is exactly for this population, and it is what §8.13.7's
+             * reconciliation exists to feed. See {@see self::hasGroups()}.
              */
-            return ReaderContext::authenticated($session->id);
+            return self::hasGroups($this->identityFor($session))
+                ? ReaderContext::member($session->id)
+                : ReaderContext::authenticated($session->id);
         }
 
         /*
