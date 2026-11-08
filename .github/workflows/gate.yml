@@ -824,6 +824,144 @@ jobs:
   # ---------------------------------------------------------------------------
   # 🛑 SPEC 17 Phase 24's exit criterion, against a REAL Keycloak.
   # ---------------------------------------------------------------------------
+  # 🛑 SPEC 17's Phase 26b exit criterion 1, against a REAL directory.
+  #
+  # > "An LDAP group removal drops access on the next decision."
+  #
+  # `tests/Feature/Ldap/LdapBoundaryTest.php` proves everything that is DocUp's
+  # with no server at all — filter escaping against a hostile username, the TLS
+  # and referral options, the installation-scope narrowing, the sorting of
+  # operator faults from reader faults. What it cannot prove is that DocUp
+  # speaks the protocol a real directory speaks: that StartTLS verifies with
+  # `LDAP_OPT_X_TLS_HARD` set, that a simple bind as the reader's own DN is what
+  # checks their password, that `memberOf` arrives as a list, and that removing
+  # a member from a group changes what the next bind sees.
+  #
+  # 🛑 **And without this job the integration would SKIP.**
+  # `LdapDirectoryTest` gates on `DOCUP_LDAP_E2E`, so on a runner with no
+  # directory it skips — and Phase 06's recorded lesson is that "a skip is not a
+  # pass". Phase 07 put the build sandbox in CI for exactly that reason; this is
+  # the same move, one phase later, for a driver that shipped in Phase 23 with
+  # no sign-in path at all.
+  #
+  # Its own job rather than a step in `baseline gate`, like the OIDC, TLS and
+  # edge jobs: it needs a service the shipped compose file does not start, and a
+  # failure here should name the integration rather than the suite.
+  # ---------------------------------------------------------------------------
+  ldap:
+    name: LDAP against a real OpenLDAP
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compose an environment
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          printf 'APP_KEY=base64:%s\n' "$(openssl rand -base64 32)" >> .env
+          printf 'APP_ENV=local\n' >> .env
+          printf 'DOCUP_AUDIT_KEY=%s\n' "$(openssl rand -hex 32)" >> .env
+          printf 'DOCUP_APP_HOST=docup.localhost\n' >> .env
+          printf 'DOCUP_DOCS_APEX=docup-docs.localhost\n' >> .env
+          printf 'DOCUP_PREVIEW_APEX=docup-previews.localhost\n' >> .env
+          printf 'DOCUP_ASSET_HOST=assets.docup-docs.localhost\n' >> .env
+
+      # 🛑 BEFORE the stack comes up. The certificate is a bind mount and the
+      # entrypoint refuses to start without it — slapd reads
+      # `olcTLSCertificateFile` at start-up, so writing it later would leave the
+      # first handshake unprotected.
+      - name: Generate the directory's certificate
+        run: bash deploy/ldap-test-setup.sh
+
+      - name: Build the images
+        run: docker compose -f compose.yaml -f compose.ldap.yaml build app openldap
+
+      - name: Install dependencies
+        run: |
+          docker compose -f compose.yaml -f compose.ldap.yaml run --rm --no-deps app \
+            composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Start the stack and the directory
+        run: docker compose -f compose.yaml -f compose.ldap.yaml up -d db cache openldap app
+
+      # The same reasoning the OIDC job gives: compose.ldap.yaml points the
+      # application at `docup_test` so the suite and the running application
+      # share one database, and the image grants the `docup` user only `docup`.
+      - name: Create the shared test database
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if docker compose -f compose.yaml -f compose.ldap.yaml exec -T -e MYSQL_PWD=docup-root db \
+                 mysql -u root -e "CREATE DATABASE IF NOT EXISTS \`docup_test\`
+                                     DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+                                   GRANT ALL PRIVILEGES ON \`docup_test\`.* TO 'docup'@'%';
+                                   FLUSH PRIVILEGES;"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::could not create docup_test"
+          exit 1
+
+      - name: Migrate
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if docker compose -f compose.yaml -f compose.ldap.yaml exec -T -e DB_DATABASE=docup_test app \
+                 php artisan migrate --force --no-interaction; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::migrations never succeeded"
+          exit 1
+
+      # 🛑 Waits for the healthcheck, which is a real search over StartTLS and
+      # not a port probe — the entrypoint builds the directory BEFORE slapd
+      # starts, so an open port would go green while the tree was still absent
+      # and the first run on a cold runner would be the flaky one.
+      - name: Wait for the directory
+        run: |
+          set -euo pipefail
+          id="$(docker compose -f compose.yaml -f compose.ldap.yaml ps -q openldap)"
+          for _ in $(seq 1 40); do
+            state="$(docker inspect --format '{{.State.Health.Status}}' "$id" 2>/dev/null || echo starting)"
+            if [ "$state" = healthy ]; then
+              echo 'the directory is up'
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::the directory never became healthy"
+          docker compose -f compose.yaml -f compose.ldap.yaml logs openldap --tail 60
+          exit 1
+
+      # 🛑 Through DocUp's own connection class, with every SPEC 8.12.18 option
+      # in force. The script's `--trust` leg both installs the anchor and PROVES
+      # `LdapConnection` can verify the directory — so a trust-store problem
+      # fails here, before any reader is involved, with a reason. A curl would
+      # verify a different store.
+      - name: Trust the directory's certificate in the app container
+        run: |
+          DOCUP_COMPOSE="docker compose -f compose.yaml -f compose.ldap.yaml" \
+            bash deploy/ldap-test-setup.sh --trust
+
+      # 🛑 DOCUP_LDAP_E2E=1 turns a skip into a failure, which is the whole
+      # reason this job exists.
+      - name: SPEC 17's Phase 26b exit criterion 1, end to end
+        run: |
+          set -o pipefail
+          docker compose -f compose.yaml -f compose.ldap.yaml exec -T \
+            -e DB_DATABASE=docup_test -e DOCUP_LDAP_E2E=1 -e NO_COLOR=1 app \
+            ./vendor/bin/pest tests/Feature/Ldap --colors=never
+
+      - name: Logs, on failure
+        if: failure()
+        run: docker compose -f compose.yaml -f compose.ldap.yaml logs --tail 200
+
+  # ---------------------------------------------------------------------------
   #
   # > "Two projects on one installation authenticate readers against two
   # > different Keycloak realms in one browser session."
