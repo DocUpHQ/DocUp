@@ -10,4 +10,5 @@ nav:
   - Redirects and crawlers: redirects.html
   - Who may read it: access.html
   - Private without an IdP: providers.html
+  - Connecting an IdP: oidc.html
   - Running it: operations.html

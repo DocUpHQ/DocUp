@@ -348,7 +348,7 @@ return new class extends Migration
          * fifteen alone.
          */
         DataClassification::annotate('reader_identities', [
-            ['reader_groups', 'pseudonymous', 'platform', null, "🛑 §8.13.7: reconciled on every login, added AND removed"],
+            ['reader_groups', 'pseudonymous', 'platform', null, '🛑 §8.13.7: reconciled on every login, added AND removed'],
         ]);
 
         DataClassification::annotate('reader_handoff_codes', [
