@@ -68,7 +68,18 @@ final class AuthenticateApiToken
             return $optional ? $next($request) : $this->unauthorised();
         }
 
-        $token = $this->tokens->find($plaintext);
+        /*
+         * 🛑 The address is passed because §8.13.6's CIDR binding is
+         * enforced in the resolver, and `find()` has no default for it —
+         * Phase 26b found that column written at mint and read by nothing, and
+         * an optional parameter is how that state comes back.
+         *
+         * `$request->ip()` is the CLIENT's address only because
+         * {@see TrustEdgeProxies} runs first and §8.9.4's trusted-proxy list
+         * is configured; with nothing trusted it is the direct peer, which is
+         * the safe reading rather than the useful one.
+         */
+        $token = $this->tokens->find($plaintext, $request->ip());
 
         if (! $token instanceof ApiToken) {
             return $this->unauthorised();

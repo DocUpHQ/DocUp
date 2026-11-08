@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace App\Auth\Providers\Drivers;
 
 use App\Access\AccessLeaf;
+use App\Auth\CidrRange;
 use App\Auth\Providers\AttemptResult;
 use App\Auth\Providers\AuthComponent;
 use App\Auth\Providers\BindingContext;
@@ -15,6 +16,7 @@ use App\Auth\Providers\BindingRefused;
 use App\Auth\Providers\BindingRejection;
 use App\Auth\Providers\ProbeResult;
 use App\Auth\Providers\ReaderPresentation;
+use App\Http\Middleware\OnlyFromLoopback;
 
 /**
  * 🛑 §8.12.17's `ip_allowlist`, and the whole reason §8.12.7 exists:
@@ -110,7 +112,7 @@ final class IpAllowlistDriver implements AuthComponent
                 throw BindingRefused::of(BindingRejection::ConfigInvalid, 'every range must be a string');
             }
 
-            $parsed = self::parse(trim($range));
+            $parsed = CidrRange::canonicalise($range);
 
             if ($parsed === null) {
                 throw BindingRefused::of(
@@ -126,7 +128,7 @@ final class IpAllowlistDriver implements AuthComponent
              * the network would make the dashboard show a range that is not the
              * one in force.
              */
-            $normalised[] = $parsed['canonical'];
+            $normalised[] = $parsed;
         }
 
         return ['ranges' => array_values(array_unique($normalised))];
@@ -166,14 +168,12 @@ final class IpAllowlistDriver implements AuthComponent
             return AttemptResult::unsatisfied();
         }
 
-        foreach ($ranges as $range) {
-            if (self::covers($range, $address)) {
-                /*
-                 * 🛑 No subject. An address is not a person; see the class
-                 * note and §20.3's rule about where a raw IP may exist.
-                 */
-                return AttemptResult::satisfiedBy(AccessLeaf::Gate);
-            }
+        if (CidrRange::anyCovers($ranges, $address)) {
+            /*
+             * 🛑 No subject. An address is not a person; see the class note and
+             * §20.3's rule about where a raw IP may exist.
+             */
+            return AttemptResult::satisfiedBy(AccessLeaf::Gate);
         }
 
         return AttemptResult::unsatisfied();
@@ -182,133 +182,22 @@ final class IpAllowlistDriver implements AuthComponent
     /**
      * Whether a CIDR range covers an address.
      *
-     * 🛑 Compared on **packed bytes**, not strings, and the same family only.
-     * `::ffff:10.0.0.1` and `10.0.0.1` are one address spelled two ways — the
-     * technique `OnlyFromLoopback` already uses — and a string comparison would
-     * let the second form walk past a range written in the first.
+     * 🛑 The **same family only**, so an IPv4-mapped IPv6 address never
+     * matches an IPv4 range. That is `provider-013` in the permanent abuse
+     * corpus and it is a decision, not a consequence: an allow list must refuse
+     * a spelling the operator did not enter, while a deny list must recognise
+     * every one of them. {@see CidrRange}'s class note has the argument.
+     *
+     * Kept as a named method on this driver, delegating to the one matcher,
+     * because {@see OnlyFromLoopback} and this phase's
+     * token binding both call it and §8.12.17's gate is the reason it exists.
+     * The implementation moved to {@see CidrRange} in Phase 26b, when §8.13.6's
+     * CIDR-bound API token needed the same comparison: the three subtleties
+     * that make it correct — packed bytes, same family, masked host bits — are
+     * each a bypass if two copies disagree about one of them.
      */
     public static function covers(string $range, string $address): bool
     {
-        $parsed = self::parse($range);
-        $packed = @inet_pton($address);
-
-        if ($parsed === null || $packed === false) {
-            return false;
-        }
-
-        /*
-         * 🛑 Different families never match. Without this an IPv4 address and
-         * an IPv6 range would be compared over the shorter length and a /0-ish
-         * prefix would appear to cover everything.
-         */
-        if (strlen($packed) !== strlen($parsed['packed'])) {
-            return false;
-        }
-
-        $bits = $parsed['bits'];
-        $fullBytes = intdiv($bits, 8);
-        $remainder = $bits % 8;
-
-        if ($fullBytes > 0 && ! hash_equals(
-            substr($parsed['packed'], 0, $fullBytes),
-            substr($packed, 0, $fullBytes),
-        )) {
-            return false;
-        }
-
-        if ($remainder === 0) {
-            return true;
-        }
-
-        $mask = (0xFF << (8 - $remainder)) & 0xFF;
-
-        return (ord($packed[$fullBytes]) & $mask) === (ord($parsed['packed'][$fullBytes]) & $mask);
-    }
-
-    /**
-     * Parse an address or CIDR range into its network, prefix and canonical
-     * spelling.
-     *
-     * A bare address is a host route — `/32` for IPv4 and `/128` for IPv6 —
-     * which is what an operator typing one address means.
-     *
-     * @return array{packed: string, bits: int, canonical: string}|null
-     */
-    private static function parse(string $range): ?array
-    {
-        if ($range === '') {
-            return null;
-        }
-
-        $slash = strrpos($range, '/');
-        $address = $slash === false ? $range : substr($range, 0, $slash);
-        $packed = @inet_pton($address);
-
-        if ($packed === false) {
-            return null;
-        }
-
-        $width = strlen($packed) * 8;
-
-        if ($slash === false) {
-            $bits = $width;
-        } else {
-            $suffix = substr($range, $slash + 1);
-
-            if ($suffix === '' || preg_match('/^\d{1,3}$/', $suffix) !== 1) {
-                return null;
-            }
-
-            $bits = (int) $suffix;
-
-            if ($bits > $width) {
-                return null;
-            }
-        }
-
-        /*
-         * 🛑 Host bits are **zeroed**, so `10.0.0.1/8` stores as `10.0.0.0/8`.
-         * The canonical form is what the dashboard shows and what the
-         * comparison uses, and an operator should never see a range in the UI
-         * that differs from the one in force.
-         */
-        $network = self::maskTo($packed, $bits);
-
-        $printable = @inet_ntop($network);
-
-        if ($printable === false) {
-            return null;
-        }
-
-        return [
-            'packed' => $network,
-            'bits' => $bits,
-            'canonical' => $printable.'/'.$bits,
-        ];
-    }
-
-    /** Zero every bit after the prefix. */
-    private static function maskTo(string $packed, int $bits): string
-    {
-        $bytes = str_split($packed);
-
-        foreach ($bytes as $index => $byte) {
-            $offset = $index * 8;
-
-            if ($offset >= $bits) {
-                $bytes[$index] = "\0";
-
-                continue;
-            }
-
-            $remaining = $bits - $offset;
-
-            if ($remaining < 8) {
-                $mask = (0xFF << (8 - $remaining)) & 0xFF;
-                $bytes[$index] = chr(ord($byte) & $mask);
-            }
-        }
-
-        return implode('', $bytes);
+        return CidrRange::covers($range, $address);
     }
 }
