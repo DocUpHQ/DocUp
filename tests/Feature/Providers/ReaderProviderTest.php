@@ -14,7 +14,9 @@ use App\Auth\Providers\BindingRefused;
 use App\Auth\Providers\BindingRejection;
 use App\Auth\Providers\Bindings;
 use App\Auth\Providers\BindingState;
+use App\Auth\Providers\Drivers\HeaderTrustDriver;
 use App\Auth\Providers\Drivers\LdapDriver;
+use App\Auth\Providers\Drivers\MtlsDriver;
 use App\Auth\Providers\Drivers\PasswordDriver;
 use App\Auth\Providers\ReaderCredentials;
 use App\Credentials\SecretRedactor;
@@ -565,10 +567,15 @@ final class ReaderProviderTest extends TestCase
      * 🛑 §8.12.4: "`ldap`, `mtls` and `header_trust` MUST be installation-scope
      * only."
      *
-     * None of the three ships in Phase 23, so what is asserted is the
-     * **mechanism** that will refuse them: a driver whose
+     * None of the three shipped in Phase 23, so what this asserted was the
+     * **mechanism** that would refuse them: a driver whose
      * `allowsProjectScope()` is false is refused at project scope, and the
      * registry refuses a type it does not know at all.
+     *
+     * 🛑 All three ship now, so this test is down to its last case — and that
+     * is the test narrowing correctly rather than weakening.
+     * {@see self::test_the_three_edge_drivers_are_refused_at_project_scope()}
+     * makes the assertion Phase 23 said it could not.
      */
     public function test_an_unknown_driver_type_is_refused_at_write_time(): void
     {
@@ -581,10 +588,13 @@ final class ReaderProviderTest extends TestCase
          * names the phase, so a registry that still refused one after its phase
          * would be the thing to fix.
          *
-         * What remains is §8.12.17's two still-unbuilt drivers plus a name that
-         * will never be registered.
+         * `mtls` and `header_trust` left in P26b as well, which empties the
+         * list of real drivers entirely. What remains is a name that will never
+         * be registered — and it stays, because "the registry refuses a type it
+         * does not know" is still a rule and this is the only thing left
+         * asserting it.
          */
-        foreach (['mtls', 'header_trust', 'made_up'] as $type) {
+        foreach (['made_up', 'ldap_v2', 'kerberos'] as $type) {
             try {
                 $bindings->create('project', $this->project->id, $type, 'nope-'.$type);
                 $this->fail('"'.$type.'" was accepted and no driver is registered for it');
@@ -605,9 +615,9 @@ final class ReaderProviderTest extends TestCase
      * Phase 23's note on the test above said what it could not yet assert:
      * "None of the three ships in Phase 23, so what is asserted is the
      * **mechanism**." `ldap` ships in Phase 26b, so the rule itself is
-     * assertable — and the refusal is now `ScopeNotPermitted` rather than
-     * `UnknownDriver`, which is a **stronger** refusal from a more specific
-     * check.
+     * assertable for all three — and the refusal is now `ScopeNotPermitted`
+     * rather than `UnknownDriver`, which is a **stronger** refusal from a more
+     * specific check.
      *
      * > "`ldap`, `mtls` and `header_trust` MUST be **installation-scope only**
      * > — they reach into the operator's internal network or depend on facts
@@ -618,22 +628,37 @@ final class ReaderProviderTest extends TestCase
      * A project administrator who could configure this would be a tenant who
      * could point DocUp's own server at any host on the operator's network.
      */
-    public function test_ldap_is_refused_at_project_scope(): void
+    public function test_the_three_edge_drivers_are_refused_at_project_scope(): void
     {
         $bindings = app(Bindings::class);
 
-        try {
-            $bindings->create('project', $this->project->id, 'ldap', 'our directory');
-            $this->fail('🛑 §8.12.4: a project-scoped `ldap` binding is an SSRF primitive');
-        } catch (BindingRefused $refused) {
-            $this->assertSame(BindingRejection::ScopeNotPermitted, $refused->rejection);
+        /*
+         * 🛑 All three, not just `ldap`. The requirement names three drivers
+         * and the reason differs between them — `ldap` reaches into the
+         * operator's network, the other two depend on the terminator — so a
+         * test covering one would leave the other two resting on a capability
+         * method nobody asserted.
+         */
+        foreach (['ldap', 'mtls', 'header_trust'] as $type) {
+            try {
+                $bindings->create('project', $this->project->id, $type, 'tenant '.$type);
+                $this->fail('🛑 §8.12.4: a project-scoped `'.$type.'` binding is a tenant primitive');
+            } catch (BindingRefused $refused) {
+                $this->assertSame(
+                    BindingRejection::ScopeNotPermitted,
+                    $refused->rejection,
+                    '`'.$type.'` must be refused for its SCOPE, not for being unknown',
+                );
+            }
         }
 
-        /* And the same type IS permitted at installation scope, or the rule is a ban. */
-        $this->assertFalse(
-            LdapDriver::allowsProjectScope(),
-            'the capability is what `permittedAt()` reads',
-        );
+        /* The capability is what `permittedAt()` reads, so assert it directly too. */
+        foreach ([LdapDriver::class, MtlsDriver::class, HeaderTrustDriver::class] as $driver) {
+            $this->assertFalse(
+                $driver::allowsProjectScope(),
+                $driver.' would be configurable by a tenant',
+            );
+        }
     }
 
     /** 🛑 §8.12.16's mandatory expiry, refused at write time. */

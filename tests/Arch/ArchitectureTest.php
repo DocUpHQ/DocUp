@@ -10,6 +10,7 @@ namespace Tests\Arch;
 use App\Access\AccessLeaf;
 use App\Artifacts\RejectionCode;
 use App\Auth\Providers\DriverRegistry;
+use App\Auth\Providers\EdgeAssertion;
 use App\Auth\Providers\Oidc\IdTokenVerifier;
 use App\Builds\BuildEnvironment;
 use App\Builds\Toolchain\ToolchainPresets;
@@ -2731,6 +2732,159 @@ final class ArchitectureTest extends TestCase
             3,
             substr_count($source, 'HEADER_X_FORWARDED_'),
             'SPEC 8.9.4: a fourth trusted forwarded header is one nobody reviewed',
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.9.4 again, and now for the two drivers that read a header on
+     * purpose: no header an operator can configure as an asserted IDENTITY may
+     * be one that names a host.
+     *
+     * Phase 26b's `mtls` and `header_trust` read operator-named headers, which
+     * is the one place in the product where a header decides who a reader is.
+     * The requirement is about the PROJECT, so the two must not meet: a
+     * configuration naming `X-Forwarded-Host` as the subject header would put
+     * an attacker-chosen hostname where a reader's name belongs, and an
+     * operator debugging that is one step from trusting it for routing.
+     *
+     * Behavioural rather than a source scan, because the rule is a property of
+     * `EdgeAssertion::mayRead()` and the way it comes back is somebody widening
+     * the pattern rather than deleting the denylist.
+     */
+    public function test_no_asserted_identity_header_can_name_a_host(): void
+    {
+        $forbidden = [
+            'Host',
+            'host',
+            'X-Forwarded-Host',
+            'x-forwarded-host',
+            'X-Original-Host',
+            'X-Forwarded-Server',
+            'X-Host',
+            'Forwarded',
+            ':authority',
+            'X-Original-URL',
+            'X-Rewrite-URL',
+            /* And an address is a SPEC 8.12.17 `{gate}` input, never an identity. */
+            'X-Forwarded-For',
+            'X-Real-IP',
+            /* Nor may a credential header be re-read as a name. */
+            'Authorization',
+            'Cookie',
+        ];
+
+        foreach ($forbidden as $header) {
+            $this->assertFalse(
+                EdgeAssertion::mayRead($header),
+                'SPEC 8.9.4: `'.$header.'` would let a header name a host or carry a credential',
+            );
+        }
+
+        /*
+         * 🛑 And the other half, because "refuses everything" would satisfy the
+         * assertions above and leave both drivers unable to authenticate
+         * anybody. These are the names the terminators in the operator
+         * documentation actually use.
+         */
+        foreach ([
+            'X-Auth-Request-User',
+            'X-Remote-User',
+            'X-Client-Cert',
+            'X-Client-Verify',
+            'X-SSL-Client-Cert',
+            'X-DocUp-Assertion',
+        ] as $header) {
+            $this->assertTrue(
+                EdgeAssertion::mayRead($header),
+                '`'.$header.'` is a name an operator documentation tells them to use',
+            );
+        }
+    }
+
+    /**
+     * 🛑 **One reader of a request in the whole authentication layer**, and it
+     * is the one whose job is to refuse an untrusted one.
+     *
+     * `ReaderPresentation` says why in its own class note: "a driver handed a
+     * `Request` could branch on anything, and the first thing one would branch
+     * on is a header that an attacker sets". That was a comment until Phase
+     * 26b gave two drivers a reason to want a request — `mtls` and
+     * `header_trust` both authenticate from a header — so it is asserted now
+     * rather than hoped for.
+     *
+     * `EdgeAssertion` is the allowlisted exception because it exists to turn a
+     * request into the four facts SPEC 8.12.4 calls "facts only the TLS
+     * terminator can establish", and to yield NOTHING when the hop is not
+     * trusted.
+     */
+    public function test_only_the_edge_assertion_reads_a_request_in_the_auth_layer(): void
+    {
+        $permitted = ['app/Auth/Providers/EdgeAssertion.php'];
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            if (! str_starts_with($relative, 'app/Auth/') || in_array($relative, $permitted, true)) {
+                continue;
+            }
+
+            $source = $this->code($file);
+
+            foreach ([
+                'use Illuminate\Http\Request;',
+                'use Symfony\Component\HttpFoundation\Request;',
+            ] as $import) {
+                if (str_contains($source, $import)) {
+                    $offenders[] = $relative;
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'SPEC 8.12.23 decides by authorisation state and never by what the client sent; '
+                .'only EdgeAssertion may hold a request: '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 An edge assertion cannot be CONSTRUCTED without the hop that carried
+     * it, which is what makes a forged identity header unrepresentable rather
+     * than merely refused.
+     *
+     * Asserted structurally because a behavioural test would only prove that
+     * today's one call site checks the hop. A private constructor proves that
+     * no future call site can skip it — and the two public builders are
+     * `none()`, which asserts nothing, and `from()`, which starts by refusing
+     * an untrusted peer.
+     */
+    public function test_an_edge_assertion_cannot_be_built_without_its_hop(): void
+    {
+        $class = new \ReflectionClass(EdgeAssertion::class);
+
+        $this->assertTrue(
+            $class->getConstructor()?->isPrivate(),
+            'SPEC 8.12.4: a public constructor would let a caller assert an identity with no hop',
+        );
+
+        $builders = array_values(array_map(
+            static fn (\ReflectionMethod $method): string => $method->getName(),
+            array_filter(
+                $class->getMethods(\ReflectionMethod::IS_PUBLIC),
+                static fn (\ReflectionMethod $method): bool => $method->isStatic()
+                    && $method->getReturnType() instanceof \ReflectionNamedType
+                    && $method->getReturnType()->getName() === EdgeAssertion::class,
+            ),
+        ));
+
+        sort($builders);
+
+        $this->assertSame(
+            ['from', 'none'],
+            $builders,
+            'SPEC 8.12.4: a third way to build an assertion is a third place the hop can be forgotten',
         );
     }
 }

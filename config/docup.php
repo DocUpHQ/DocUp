@@ -202,6 +202,89 @@ return [
 
     /*
     |---------------------------------------------------------------------------
+    | Reader authentication (SPEC 8.12.4, SPEC 8.12.17)
+    |---------------------------------------------------------------------------
+    | 🛑 Everything here is OFF unless an operator turns it on, and that is the
+    | specification's own instruction rather than a cautious default: SPEC
+    | 8.12.17 marks `header_trust` "installation only, off by default", and it is
+    | the only one of eleven drivers so marked.
+    |
+    | `mtls` and `header_trust` authenticate a reader from a fact the TLS
+    | terminator established and forwarded in a header. DocUp never terminates
+    | TLS (SPEC 11.3), so there is no way for it to check that fact itself - and
+    | an installation that has not said WHICH hop may assert must not believe
+    | any of them. Hence the hard prerequisite below.
+    |
+    | 🛑 None of these headers resolves a project. SPEC 8.9.4: "No request
+    | header MUST act as a project, version or tenant selector, in any
+    | environment." The project comes from the Host and the path, and
+    | `EdgeAssertion` refuses to read a header whose name is any spelling of the
+    | host. These name a READER.
+    */
+    'auth' => [
+        /*
+        | SPEC 8.12.4's installation-level restriction on which driver types a
+        | project administrator may configure. EMPTY means "every registered
+        | type", which is the only safe default for an allowlist of features:
+        | an empty-means-nothing default would leave a fresh installation unable
+        | to configure any authentication at all, and the first thing an
+        | operator would reach for is the flag that disables the check.
+        |
+        | 🛑 `header_trust` is NOT governed by this list, in either direction -
+        | see `DriverRegistry::REQUIRES_NAMING`. It must be named explicitly and
+        | the permissive default does not reach it.
+        */
+        'permitted_types' => array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string) env('DOCUP_PERMITTED_AUTH_TYPES', '')),
+        ))),
+
+        /*
+        | SPEC 8.12.17's `header_trust`: an identity the terminator asserts.
+        |
+        | 🛑 The secret header is not optional and the driver's probe fails
+        | without it. A terminator that sets the subject header only for an
+        | AUTHENTICATED reader passes an unauthenticated reader's own header
+        | through untouched - which is oauth2-proxy's default - so the subject
+        | header alone is forgeable with one curl. The shared secret is what
+        | distinguishes the terminator's assertion from a client's copy of it.
+        |
+        | Set the same value at the terminator and on the binding, e.g.
+        |   proxy_set_header X-DocUp-Assertion "<the binding's secret>";
+        */
+        'asserted_identity' => [
+            'subject_header' => env('DOCUP_ASSERTED_SUBJECT_HEADER', ''),
+            'secret_header' => env('DOCUP_ASSERTED_SECRET_HEADER', ''),
+        ],
+
+        /*
+        | SPEC 8.12.17's `mtls`: a client certificate the terminator verified.
+        |
+        | 🛑 The verdict header is not optional either, and the bypass it closes
+        | is worth knowing: nginx's `ssl_verify_client optional` forwards
+        | `$ssl_client_escaped_cert` EVEN WHEN VERIFICATION FAILED. A driver
+        | reading only the certificate would accept a self-signed one an
+        | attacker minted with the right issuer DN, because the issuer DN is a
+        | field in a document the attacker wrote. One line at the terminator:
+        |   proxy_set_header X-Client-Verify $ssl_client_verify;    # nginx
+        |   header_up X-Client-Verify SUCCESS                       # Caddy
+        |
+        | `format` names how the terminator spells a certificate in a header.
+        | nginx's `$ssl_client_escaped_cert` is `escaped_pem`; Caddy's and
+        | HAProxy's base64 DER is `der_base64`. Stated rather than sniffed: a
+        | sniffer that guesses wrong on one certificate in a thousand produces
+        | one reader who cannot read anything and no diagnosis.
+        */
+        'client_certificate' => [
+            'header' => env('DOCUP_CLIENT_CERTIFICATE_HEADER', ''),
+            'format' => env('DOCUP_CLIENT_CERTIFICATE_FORMAT', 'escaped_pem'),
+            'verdict_header' => env('DOCUP_CLIENT_CERTIFICATE_VERDICT_HEADER', ''),
+            'verdict_success' => env('DOCUP_CLIENT_CERTIFICATE_VERDICT_SUCCESS', 'SUCCESS'),
+        ],
+    ],
+
+    /*
+    |---------------------------------------------------------------------------
     | Search (SPEC 8.16.1, ADR 0004)
     |---------------------------------------------------------------------------
     | MySQL FULLTEXT is the shipped default so that a default installation needs

@@ -12,6 +12,7 @@ use App\Access\AccessSurface;
 use App\Access\EffectiveAccess;
 use App\Access\PolicySimulator;
 use App\Access\ReaderContext;
+use App\Auth\Providers\EdgeAssertion;
 use App\Auth\Providers\ProviderResolver;
 use App\Auth\Providers\ReaderPresentation;
 use App\Http\Controllers\Readers;
@@ -244,6 +245,16 @@ final readonly class ReaderResolver
                  * the same reason.
                  */
                 remoteAddress: $request->ip(),
+                /*
+                 * 🛑 §8.12.4's "facts only the TLS terminator can establish",
+                 * for `mtls` and `header_trust`. The whole of the safety is in
+                 * {@see EdgeAssertion::from()}: a request that did not arrive
+                 * through a hop this installation declared its own yields
+                 * {@see EdgeAssertion::none()}, so a forged certificate or
+                 * identity header is not refused later by a driver — it never
+                 * becomes an assertion at all.
+                 */
+                edge: EdgeAssertion::from($request),
             ),
             credentialRejected: $credentialRejected || $sessionRejected,
         );
