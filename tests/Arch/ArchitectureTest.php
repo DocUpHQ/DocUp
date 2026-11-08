@@ -2570,4 +2570,79 @@ final class ArchitectureTest extends TestCase
                 .implode('; ', array_unique($offenders)),
         );
     }
+
+    /**
+     * 🛑 The configured Inertia page directory exists **with the case it is
+     * configured with**.
+     *
+     * A platform-dependent trap, found in Phase 26a and worth a permanent
+     * tripwire because of how it hides. `inertiajs/inertia-laravel` defaults
+     * `pages.paths` to `resource_path('js/pages')` — lowercase — while this
+     * repository uses Laravel's own `resources/js/Pages`. On a
+     * case-insensitive filesystem (Windows, macOS as shipped) the lookup
+     * succeeds; on Linux it does not.
+     *
+     * The first test here to call `assertInertia()` therefore passed on a
+     * developer's machine and failed in CI with "Inertia page component file
+     * [X] does not exist" for a file that plainly existed — for any page, with
+     * nothing wrong with the page, the route or the controller.
+     * `config/inertia.php` corrects the path; this is what stops it drifting
+     * back.
+     *
+     * 🛑 The check is a **directory listing**, and the two cheaper versions
+     * were both tried and both useless. `is_dir()` returns true for the wrong
+     * case on any case-insensitive filesystem. `realpath()` was the next
+     * attempt and is no better here: under a Docker Desktop bind mount a Linux
+     * container inherits the host's case-insensitivity, so `realpath()` returns
+     * the spelling it was *asked* for rather than the one on disk — the planted
+     * lowercase path passed. `scandir()` reports the real entry names on every
+     * filesystem, because the names are what it is listing.
+     */
+    public function test_the_inertia_page_directory_is_configured_with_its_real_case(): void
+    {
+        $paths = config('inertia.pages.paths');
+
+        $this->assertIsArray($paths);
+        $this->assertNotSame([], $paths, 'Inertia has no page path configured at all');
+
+        foreach ($paths as $configured) {
+            $this->assertIsString($configured);
+
+            $normalised = rtrim(str_replace(DIRECTORY_SEPARATOR, '/', $configured), '/');
+            $parent = dirname($normalised);
+            $name = basename($normalised);
+
+            $this->assertDirectoryExists($parent, 'the Inertia page path has no parent directory');
+
+            $entries = scandir($parent);
+
+            $this->assertNotFalse($entries);
+
+            $this->assertContains(
+                $name,
+                $entries,
+                'the configured Inertia page directory is not on disk under that exact name, '
+                    .'which resolves on a case-insensitive filesystem and fails on Linux: '
+                    .$configured.' — the parent holds '.implode(', ', array_values(array_diff(
+                        $entries,
+                        ['.', '..'],
+                    ))),
+            );
+        }
+
+        /*
+         * And every page a controller renders is under it. Asserted by finding
+         * the components rather than by trusting the directory, because the
+         * directory existing is not the property that matters — the property is
+         * that `assertInertia()` can resolve what `Inertia::render()` names.
+         */
+        $root = rtrim(str_replace(DIRECTORY_SEPARATOR, '/', (string) $paths[0]), '/');
+        $pages = glob($root.'/*/*.vue') ?: [];
+
+        $this->assertGreaterThan(
+            0,
+            count($pages),
+            'no Inertia pages found under the configured path, so the assertion helper is untested',
+        );
+    }
 }
