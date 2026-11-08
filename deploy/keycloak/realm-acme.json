@@ -36,6 +36,41 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "https://docup.localhost/saml/metadata",
+      "name": "DocUp (SAML)",
+      "enabled": true,
+      "protocol": "saml",
+      "frontchannelLogout": true,
+      "redirectUris": [
+        "https://docup.localhost/_/auth/saml/acs"
+      ],
+      "attributes": {
+        "saml.server.signature": "true",
+        "saml.assertion.signature": "true",
+        "saml.signature.algorithm": "RSA_SHA256",
+        "saml.client.signature": "false",
+        "saml.encrypt": "false",
+        "saml_name_id_format": "persistent",
+        "saml_force_name_id_format": "true",
+        "saml.authnstatement": "true",
+        "saml_assertion_consumer_url_post": "https://docup.localhost/_/auth/saml/acs"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "saml",
+          "protocolMapper": "saml-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "false",
+            "single": "false",
+            "attribute.name": "groups",
+            "attribute.nameformat": "Basic"
+          }
+        }
+      ]
     }
   ],
   "groups": [
