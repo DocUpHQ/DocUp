@@ -118,7 +118,15 @@ final class HeaderTrustTest extends TestCase
 
         /* And the flag still does what it is for, on a driver that is not off by default. */
         Config::set('docup.auth.permitted_types', ['password']);
-        $this->assertNotNull(DriverRegistry::permittedAt('mtls', 'installation'));
+
+        /*
+         * 🛑 The driver's own type, not `assertNotNull`. `permittedAt()` returns
+         * a non-nullable `AuthComponent`, so a null check is an assertion level
+         * 8 proves can never fail — and CI proved exactly that about the first
+         * version of this line. Asserting the type asserts something: that the
+         * registry returned `mtls` and not merely something.
+         */
+        $this->assertSame('mtls', DriverRegistry::permittedAt('mtls', 'installation')::type());
     }
 
     /** 🛑 §8.12.4: installation scope only — "header-spoofing primitive" by name. */
@@ -128,7 +136,10 @@ final class HeaderTrustTest extends TestCase
 
         $this->refusedAt('project', BindingRejection::ScopeNotPermitted);
 
-        $this->assertNotNull(DriverRegistry::permittedAt('header_trust', 'organisation'));
+        $this->assertSame(
+            'header_trust',
+            DriverRegistry::permittedAt('header_trust', 'organisation')::type(),
+        );
     }
 
     public function test_it_maps_no_dashboard_roles(): void
@@ -538,6 +549,18 @@ final class HeaderTrustTest extends TestCase
         );
     }
 
+    /**
+     * @param  'installation'|'organisation'|'project'  $scope  🛑 the literal
+     *                                                          union
+     *                                                          {@see DriverRegistry::permittedAt()}
+     *                                                          declares. A bare
+     *                                                          `string` here
+     *                                                          widens it at the
+     *                                                          one call site
+     *                                                          that must not,
+     *                                                          and level 8 says
+     *                                                          so.
+     */
     private function refusedAt(string $scope, BindingRejection $expected): void
     {
         try {

@@ -17,11 +17,13 @@ use App\Auth\Role;
 use App\Auth\Scope;
 use App\Egress\IpAddressClassifier;
 use App\Http\Middleware\OnlyFromLoopback;
+use App\Models\ApiToken;
 use App\Models\Invitation;
 use App\Models\Organisation;
 use App\Models\User;
 use App\Support\Uuid;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
@@ -501,6 +503,31 @@ final class InvitationAndTokenTest extends TestCase
 
         $this->assertSame(0, Invitation::query()->count());
     }
+
+    /**
+     * A token's expiry, narrowed.
+     *
+     * 🛑 `ApiToken::$expires_at` is typed `Carbon|null` because the
+     * column is nullable, and level 8 refuses `->copy()` on it — correctly:
+     * a null there would be a token with no expiry at all, which §8.13.6
+     * forbids. So the narrowing is an assertion of that requirement rather than
+     * a cast to silence the analyser, and CI is what pointed it out: the
+     * repo-wide level 8 covers `tests/`, and a locally-scoped run over `app/`
+     * cannot see it.
+     */
+    private function expiryOf(ApiToken $token): Carbon
+    {
+        $expiry = $token->expires_at;
+
+        $this->assertInstanceOf(
+            Carbon::class,
+            $expiry,
+            '§8.13.6: a minted token always carries an expiry',
+        );
+
+        return $expiry;
+    }
+
     // ------------------------------------- §8.13.6 overlap rotation and binding
 
     /**
@@ -539,7 +566,7 @@ final class InvitationAndTokenTest extends TestCase
         $this->assertNotNull($tokens->find($newPlaintext, self::OFFICE), 'the new secret does not work');
 
         /* 2. One second after the OLD one's expiry: only the successor. */
-        $this->travelTo($old->expires_at->copy()->addSecond());
+        $this->travelTo($this->expiryOf($old)->copy()->addSecond());
 
         $this->assertNull(
             $tokens->find($oldPlaintext, self::OFFICE),
@@ -551,7 +578,7 @@ final class InvitationAndTokenTest extends TestCase
         );
 
         /* 3. After the successor's expiry too: neither. */
-        $this->travelTo($new->expires_at->copy()->addSecond());
+        $this->travelTo($this->expiryOf($new)->copy()->addSecond());
 
         $this->assertNull($tokens->find($oldPlaintext, self::OFFICE));
         $this->assertNull($tokens->find($newPlaintext, self::OFFICE), '🛑 §17: and neither afterwards');
@@ -576,7 +603,7 @@ final class InvitationAndTokenTest extends TestCase
             expiresAt: now()->addDays(10),
         );
 
-        $expiry = $old->expires_at->copy();
+        $expiry = $this->expiryOf($old)->copy();
 
         app(ApiTokens::class)->rotate($old, $this->admin);
 
@@ -592,7 +619,7 @@ final class InvitationAndTokenTest extends TestCase
          */
         $this->assertSame(
             $expiry->format('Y-m-d H:i:s'),
-            $old->expires_at->format('Y-m-d H:i:s'),
+            $this->expiryOf($old)->format('Y-m-d H:i:s'),
             'rotation moved the predecessor\'s expiry',
         );
 
