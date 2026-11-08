@@ -104,9 +104,43 @@ enum AccessReason: string
      */
     case AuthenticationRequired = 'authentication_required';
 
+    /**
+     * 🛑 §8.12.20's break-glass read override admitted this request, and
+     * **no policy rule did**.
+     *
+     * Its own case rather than {@see self::Allowed}, and that is the whole
+     * reason the override is implemented as a conjunct of the decision function
+     * rather than as an elevation of the reader's level. §8.12.20 requires the
+     * activation audited and alerted, which presumes every *use* of it is
+     * distinguishable afterwards:
+     *
+     * - `X-DocUp-Decision` reads `allow:break_glass`, not `allow:allowed`.
+     * - §20.3's decision log records the override as the admitting cause, so
+     *   "what did they read while the window was open" has an answer.
+     * - §9.3.2's public-cache directive can never attach to it, because the
+     *   cacheability test asks for the admitting rule and there is none.
+     *
+     * An override that looked like an ordinary allow would satisfy the feature
+     * and defeat the requirement.
+     */
+    case BreakGlass = 'break_glass';
+
     /** Whether this outcome is an allow. */
     public function isAllow(): bool
     {
-        return $this === self::Allowed;
+        return $this === self::Allowed || $this === self::BreakGlass;
+    }
+
+    /**
+     * 🛑 Whether this allow came from §8.12.20's override rather than from
+     * policy.
+     *
+     * Read where an allow has to be treated differently for being one: the
+     * decision log's attribution, and anything that would otherwise reason
+     * about "which rule admitted them" and find none.
+     */
+    public function isOverride(): bool
+    {
+        return $this === self::BreakGlass;
     }
 }

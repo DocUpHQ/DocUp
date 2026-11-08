@@ -280,6 +280,50 @@ final class RoleResolver
     }
 
     /**
+     * 🛑 Every installation owner, by id.
+     *
+     * Read by §8.12.20's break-glass alert, which has to reach the people
+     * who can act on it rather than a mailing list somebody configured once.
+     *
+     * Here rather than at the call site because "who holds this role" is this
+     * class's single question, and a second query over `role_assignments`
+     * elsewhere is a second place to forget the expiry clause — an expired
+     * assignment is not a role, and an alert sent to somebody whose ownership
+     * lapsed last month is a disclosure.
+     *
+     * @return list<string> raw 16 bytes
+     */
+    public function installationOwnerIds(): array
+    {
+        /** @var list<object{subject_id: string}> $rows */
+        $rows = DB::select(
+            'SELECT DISTINCT `subject_id`
+               FROM `role_assignments`
+              WHERE `subject_type` = ?
+                AND `role` = ?
+                AND `scope_type` = ?
+                AND (`expires_at` IS NULL OR `expires_at` > ?)',
+            ['user', Role::InstallationOwner->value, 'installation', now()],
+        );
+
+        $ids = [];
+
+        foreach ($rows as $row) {
+            /*
+             * 🛑 No `is_string()` guard, unlike {@see self::organisationIdsFor()}
+             * twenty lines down, and the asymmetry is the column rather than
+             * carelessness: `subject_id` is `BINARY(16) NOT NULL` while
+             * `organisation_id` is nullable, so there the narrowing is live and
+             * here level 9 proves it always true. A guard an analyser can
+             * disprove is a guard that reads as a protection and is not one.
+             */
+            $ids[$row->subject_id] = $row->subject_id;
+        }
+
+        return array_values($ids);
+    }
+
+    /**
      * The union of capabilities for a target.
      *
      * @return list<Capability>

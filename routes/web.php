@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 use App\Http\Controllers\Api\ProjectController as ApiProjectController;
 use App\Http\Controllers\Api\ProjectVersionController as ApiProjectVersionController;
+use App\Http\Controllers\BreakGlassController;
 use App\Http\Controllers\Health\LiveController;
 use App\Http\Controllers\Health\ReadyController;
 use App\Http\Controllers\Health\SelfTestController;
@@ -206,6 +207,33 @@ Route::middleware(['auth', 'tenant'])
          */
         Route::get('projects/{project}/policy/simulate', PolicySimulatorController::class)
             ->name('projects.policy.simulate');
+
+        /*
+         * 🛑 §8.12.20's break-glass read override.
+         *
+         * A POST, although the override only ever *reads* documentation: it
+         * writes a grant, raises an operator alert and consumes one of three
+         * hourly activations. A GET would make it reachable from a link, which
+         * is the one shape this button must never have.
+         *
+         * 🛑 `stepup` with no capability name, which {@see \App\Http\Middleware\RequireRecentAuthentication::windowFor()}
+         * resolves to the ROUTINE fifteen minutes — so the five-minute
+         * window §8.12.20 actually needs is enforced by {@see \App\Access\BreakGlass}
+         * reading the session stamp itself. The middleware is here for the
+         * redirect to the confirmation page, which is UX the service cannot
+         * provide; it is not the control.
+         */
+        Route::post('projects/{project}/break-glass', [BreakGlassController::class, 'store'])
+            ->middleware('stepup:5')
+            ->name('projects.break-glass.store');
+
+        /*
+         * 🛑 No step-up on the close, deliberately: closing an override
+         * NARROWS access, and a control harder to turn off than on is one
+         * nobody turns off.
+         */
+        Route::delete('break-glass/{grant}', [BreakGlassController::class, 'destroy'])
+            ->name('break-glass.destroy');
     });
 
 /*

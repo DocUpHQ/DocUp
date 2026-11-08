@@ -250,8 +250,10 @@ final readonly class ProviderOutcome
      *                                       established, or null for a reader
      *                                       with none
      */
-    public function toReaderContext(?ReaderContext $session = null): ReaderContext
-    {
+    public function toReaderContext(
+        ?ReaderContext $session = null,
+        ?string $breakGlassId = null,
+    ): ReaderContext {
         $leaves = $this->leaves;
         $bindings = $this->bindings;
 
@@ -327,6 +329,17 @@ final readonly class ProviderOutcome
              */
             subject: $session !== null && $session->subject !== null ? $session->subject : $this->subject,
             scopes: $this->scopes,
+            /*
+             * 🛑 §8.12.20's open window, passed straight through.
+             *
+             * Resolved by {@see \App\Readers\ReaderResolver::establishAs()},
+             * which is the only caller that knows the session — and
+             * therefore the only one that knows which dashboard user is
+             * reading. Merged with nothing and derived from nothing: an
+             * override is a fact about a person and a project, not something
+             * a credential can imply.
+             */
+            breakGlassId: $breakGlassId,
         );
     }
 }

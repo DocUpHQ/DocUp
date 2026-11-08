@@ -86,6 +86,24 @@ final class ReaderContext
         public readonly ?CredentialScope $scope = null,
         public readonly ?string $subject = null,
         public readonly array $scopes = [],
+        /*
+         * 🛑 §8.12.20's open break-glass window, as the grant's id (raw 16
+         * bytes) or null.
+         *
+         * Part of the reader's **established context** rather than a parameter
+         * of the request, because that is what it is: a fact about who this
+         * reader is right now, resolved once where the session is known and
+         * carried into the one decision function unchanged. The alternative —
+         * a flag on {@see AccessRequest} — would have put it beside the
+         * resource's properties, where it would read as a property of the
+         * resource.
+         *
+         * 🛑 It is an **id**, not a boolean, so §20.3's log can record
+         * which window admitted a read. A boolean would answer "was an override
+         * used" and not "which one", and with three activations an hour
+         * permitted those are different questions.
+         */
+        public readonly ?string $breakGlassId = null,
     ) {}
 
     /**
