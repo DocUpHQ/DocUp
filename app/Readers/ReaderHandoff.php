@@ -371,20 +371,29 @@ final readonly class ReaderHandoff
      *
      * The same three parameters {@see self::startUrl()} carries, to a different
      * leg on the same origin: `reader/handoff` requires a dashboard session and
-     * `_/auth/oidc/start` does not, because §8.12.1's two populations are
+     * `_/auth/<driver>/start` does not, because §8.12.1's two populations are
      * disjoint and only one of them has one.
      *
-     * Here rather than in the controller so both URLs are built by the class
-     * that owns the handoff's shape. A second place that assembled one would be
-     * a second place to forget the scheme — which Phase 22 did forget once,
-     * producing a schemeless `Location` a browser read as a path.
+     * Here rather than in the controller so every one of these URLs is built by
+     * the class that owns the handoff's shape. A second place that assembled
+     * one would be a second place to forget the scheme — which Phase 22 did
+     * forget once, producing a schemeless `Location` a browser read as a path.
+     *
+     * 🛑 **The driver comes from an allowlist, not from the binding's string.**
+     * `auth_provider_bindings.type` is a free column precisely so third-party
+     * drivers need no migration (§8.12.2), so interpolating it into a path
+     * would let a driver name decide a URL. Phase 24 avoided the question by
+     * hard-coding `oidc`; Phase 25 needs two, and an allowlist is how it stays
+     * a choice between known legs rather than a template.
+     *
+     * @param  'oidc'|'saml'  $driver
      */
-    public function oidcStartUrl(string $domainId, string $challenge, string $returnPath): string
+    public function providerStartUrl(string $driver, string $domainId, string $challenge, string $returnPath): string
     {
         $dashboard = config('docup.origins.app');
 
         return 'https://'.rtrim(is_string($dashboard) ? $dashboard : '', '/')
-            .'/_/auth/oidc/start?'
+            .'/_/auth/'.$driver.'/start?'
             .http_build_query([
                 'domain' => Uuid::toText($domainId),
                 'challenge' => $challenge,

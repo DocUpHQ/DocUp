@@ -5,7 +5,7 @@
 
 declare(strict_types=1);
 
-namespace App\Auth\Providers\Oidc;
+namespace App\Auth\Providers\Federation;
 
 use App\Access\DecisionLog;
 

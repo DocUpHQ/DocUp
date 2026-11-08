@@ -120,6 +120,44 @@ final class ResponseValidatorTest extends TestCase
     }
 
     /**
+     * 🛑 §8.12.18's issuer check: an assertion from another tenant of the
+     * same provider.
+     *
+     * The response is perfectly signed — by the certificate this binding is
+     * configured with — and still refused, which is the whole point. A
+     * multi-tenant identity provider signing for several entity ids with one
+     * key makes the certificate prove "this provider" and not "this tenant", so
+     * the signature alone cannot distinguish tenant A's assertion from tenant
+     * B's.
+     */
+    public function test_a_response_from_another_entity_id_is_refused(): void
+    {
+        $this->assertRefusal(
+            SamlRejection::IssuerMismatch,
+            $this->idp->valid(overrides: ['Issuer' => 'https://idp.example.test/realms/globex']),
+            '🛑 §8.12.18: an assertion issued for another entity id is not the one this binding names',
+        );
+    }
+
+    /**
+     * 🛑 And the **Assertion's** issuer is checked, not only the Response's.
+     *
+     * The two elements are separately signed and therefore separately
+     * forgeable, so a Response naming the configured provider may carry an
+     * Assertion naming another — and the claims come from the Assertion. This
+     * is the same argument that makes §8.12.18's signature requirement read
+     * "Response **and** Assertion", applied to the issuer.
+     */
+    public function test_an_assertion_from_another_entity_id_is_refused(): void
+    {
+        $this->assertRefusal(
+            SamlRejection::IssuerMismatch,
+            $this->idp->valid(overrides: ['AssertionIssuer' => 'https://idp.example.test/realms/globex']),
+            '🛑 §8.12.18: the claims come from the Assertion, so its issuer is the one that counts',
+        );
+    }
+
+    /**
      * 🛑 §8.12.18's "IdP-initiated off by default", which is the same fact as a
      * missing `InResponseTo`.
      */
@@ -131,6 +169,7 @@ final class ResponseValidatorTest extends TestCase
             $this->validator->validate(
                 xml: $document,
                 certificate: $this->idp->certificate(),
+                issuer: HostileSamlResponses::ISSUER,
                 audience: HostileSamlResponses::AUDIENCE,
                 destination: HostileSamlResponses::ACS,
                 /* No request was sent, which is what IdP-initiated means. */
@@ -149,6 +188,7 @@ final class ResponseValidatorTest extends TestCase
             $this->validator->validate(
                 xml: $this->idp->valid(),
                 certificate: $this->idp->certificate(),
+                issuer: HostileSamlResponses::ISSUER,
                 audience: HostileSamlResponses::AUDIENCE,
                 destination: HostileSamlResponses::ACS,
                 inResponseTo: 'some-other-request',
@@ -232,6 +272,7 @@ final class ResponseValidatorTest extends TestCase
             $this->validator->validate(
                 xml: $this->idp->valid(assertionId: 'assertion-precious'),
                 certificate: $this->idp->certificate(),
+                issuer: HostileSamlResponses::ISSUER,
                 audience: 'https://somebody-else.example.test/saml/metadata',
                 destination: HostileSamlResponses::ACS,
                 inResponseTo: 'docup-request-1',
@@ -268,6 +309,7 @@ final class ResponseValidatorTest extends TestCase
         $claims = $this->validator->validate(
             xml: $other->valid(assertionId: 'shared-id'),
             certificate: $other->certificate(),
+            issuer: HostileSamlResponses::ISSUER,
             audience: HostileSamlResponses::AUDIENCE,
             destination: HostileSamlResponses::ACS,
             inResponseTo: 'docup-request-1',
@@ -284,6 +326,7 @@ final class ResponseValidatorTest extends TestCase
         return $this->validator->validate(
             xml: $xml,
             certificate: $this->idp->certificate(),
+            issuer: HostileSamlResponses::ISSUER,
             audience: HostileSamlResponses::AUDIENCE,
             destination: HostileSamlResponses::ACS,
             inResponseTo: 'docup-request-1',

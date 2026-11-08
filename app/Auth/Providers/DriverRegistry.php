@@ -14,6 +14,7 @@ use App\Auth\Providers\Drivers\PasswordDriver;
 use App\Auth\Providers\Drivers\PortalSessionDriver;
 use App\Auth\Providers\Drivers\PublicDriver;
 use App\Auth\Providers\Drivers\ReaderTokenDriver;
+use App\Auth\Providers\Drivers\SamlDriver;
 use App\Auth\Providers\Drivers\SharedLinkDriver;
 
 /**
@@ -61,8 +62,15 @@ final class DriverRegistry
      * exchange lives in `App\Auth\Providers\Oidc` behind classes with no
      * options, so {@see OidcDriver} conducts no protocol at all.
      *
-     * `saml`, `ldap`, `mtls` and `header_trust` are still absent: §8.12.17 puts
-     * them after the cut line and §17.3 names the phase that carries each.
+     * 🛑 `saml` arrived in **Phase 25**, which is the phase §17.3 names for
+     * it, and under the same condition `oidc` had to meet: §8.12.18's
+     * validation is enforced by the framework and not by the driver. The whole
+     * XML boundary — `SafeXml`, `SignatureVerifier`, `ResponseValidator`,
+     * `AssertionReplayCache` — is `final` and takes no options, so
+     * `SamlDriver` conducts no protocol and cannot weaken any of it.
+     *
+     * `ldap`, `mtls` and `header_trust` are still absent: §8.12.17 puts them
+     * after the cut line and §17.3 names the phase that carries each.
      *
      * @var array<string, class-string<AuthComponent>>
      */
@@ -74,6 +82,7 @@ final class DriverRegistry
         'reader_token' => ReaderTokenDriver::class,
         'ip_allowlist' => IpAllowlistDriver::class,
         'oidc' => OidcDriver::class,
+        'saml' => SamlDriver::class,
     ];
 
     /**

@@ -68,6 +68,7 @@ final readonly class ResponseValidator
      *
      * @param  string  $xml  the raw response, already base64-decoded
      * @param  string  $certificate  PEM, from the binding's sealed config
+     * @param  string  $issuer  the binding's configured `idp_entity_id`
      * @param  string  $audience  this installation's SAML entity id
      * @param  string  $destination  this installation's ACS URL
      * @param  string|null  $inResponseTo  the request id DocUp sent, or null —
@@ -81,6 +82,7 @@ final readonly class ResponseValidator
     public function validate(
         string $xml,
         string $certificate,
+        string $issuer,
         string $audience,
         string $destination,
         ?string $inResponseTo,
@@ -116,7 +118,11 @@ final readonly class ResponseValidator
         $this->signatures->assertCovers($response, $certificate);
         $this->signatures->assertCovers($assertion, $certificate);
 
-        /* 6. Everything the signatures now make worth reading. */
+        /*
+         * 6. Everything the signatures now make worth reading — and nothing
+         * before them, which is the ordering §8.12.18 is really about.
+         */
+        $this->assertIssuer($response, $assertion, $issuer);
         $this->assertDestination($response, $destination);
         $this->assertInResponseTo($response, $assertion, $inResponseTo);
         $this->assertAudience($assertion, $audience);
@@ -142,6 +148,47 @@ final readonly class ResponseValidator
             'subject' => $subject,
             'attributes' => $this->attributes($assertion),
         ];
+    }
+
+    /**
+     * 🛑 §8.12.18's issuer check, on the Response **and** the Assertion.
+     *
+     * Both, because they are separately signed and therefore separately
+     * forgeable: a Response issued by the configured provider may carry an
+     * Assertion issued by another, and an SP that checked only the outer
+     * element would trust the inner one's claims. The same argument that makes
+     * the *signature* requirement read "Response **and** Assertion".
+     *
+     * 🛑 Required on the Assertion and tolerated-if-absent on the Response:
+     * SAML Core §3.2.2 makes `<Issuer>` optional on a Response and mandatory on
+     * an Assertion, so demanding it on both would refuse conforming providers.
+     * What is *not* tolerated is a present-and-wrong one.
+     *
+     * @throws SamlRefused
+     */
+    private function assertIssuer(\DOMElement $response, \DOMElement $assertion, string $expected): void
+    {
+        if ($expected === '') {
+            throw SamlRefused::of(SamlRejection::ConfigInvalid, 'the binding names no identity provider');
+        }
+
+        $outer = SafeXml::child($response, SamlNamespaces::ASSERTION, 'Issuer');
+
+        if ($outer !== null && ! hash_equals($expected, SafeXml::text($outer))) {
+            throw SamlRefused::of(
+                SamlRejection::IssuerMismatch,
+                'the response names an identity provider this binding is not configured for',
+            );
+        }
+
+        $inner = SafeXml::child($assertion, SamlNamespaces::ASSERTION, 'Issuer');
+
+        if ($inner === null || ! hash_equals($expected, SafeXml::text($inner))) {
+            throw SamlRefused::of(
+                SamlRejection::IssuerMismatch,
+                'the assertion names an identity provider this binding is not configured for',
+            );
+        }
     }
 
     /** @throws SamlRefused */

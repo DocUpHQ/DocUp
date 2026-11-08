@@ -15,7 +15,10 @@ use App\Http\Controllers\ProjectVisibilityController;
 use App\Http\Controllers\Readers\HandoffController;
 use App\Http\Controllers\Readers\OidcCallbackController;
 use App\Http\Controllers\Readers\OidcStartController;
+use App\Http\Controllers\Readers\SamlAcsController;
+use App\Http\Controllers\Readers\SamlStartController;
 use App\Http\Controllers\SchemaController;
+use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -122,6 +125,32 @@ Route::middleware(['auth'])
 */
 Route::get('_/auth/oidc/start', OidcStartController::class)->name('reader.oidc.start');
 Route::get('_/auth/oidc/callback', OidcCallbackController::class)->name('reader.oidc.callback');
+
+/*
+| 🛑 §8.12.18's SAML legs, beside OIDC's and for the same reasons: on the
+| dashboard origin, unauthenticated, one fixed URL for every binding and every
+| custom domain — which ADR 0013 measured on Keycloak 26.0.8 with an
+| unregistered ACS refused as the control.
+|
+| 🛑 **The ACS is a POST, and it is exempt from CSRF.** A SAML response
+| arrives as a cross-origin form the identity provider auto-submits, so there is
+| no DocUp token to present and no DocUp session cookie in the request; the
+| check would refuse every genuine login. What replaces it is stronger than a
+| token and is §8.12.18's own requirement: the POST must carry a `RelayState`
+| naming a single-use exchange DocUp opened, the response must be signed twice
+| by the binding's configured certificate, and its `InResponseTo` must be the
+| request id stored in that row. The controller's docblock sets out why a forged
+| or captured POST fails.
+|
+| 🛑 The exemption is **named here, on this one route**, rather than added to
+| `validateCsrfTokens(except:)` in `bootstrap/app.php`. An `except` list is a
+| pattern list that grows, and a pattern is easy to widen by accident; a
+| `withoutMiddleware` on a single route cannot cover a route nobody intended.
+*/
+Route::get('_/auth/saml/start', SamlStartController::class)->name('reader.saml.start');
+Route::post('_/auth/saml/acs', SamlAcsController::class)
+    ->withoutMiddleware(ValidateCsrfToken::class)
+    ->name('reader.saml.acs');
 
 Route::middleware(['auth', 'tenant'])
     ->prefix('o/{organisation}')

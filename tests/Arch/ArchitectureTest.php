@@ -1715,6 +1715,19 @@ final class ArchitectureTest extends TestCase
             'code_verifier' => 'handles PKCE itself',
             'grant_type' => 'calls a token endpoint itself',
             'id_token' => 'reads a provider token itself',
+            /*
+             * 🛑 Phase 25's half. SAML is where this requirement earns its
+             * keep: every notorious service-provider vulnerability of the last
+             * decade — XML signature wrapping, comment truncation, XXE — was an
+             * SP validating its own XML, and most were reachable by
+             * configuration. A driver that touched any of these would be a
+             * driver with its own XML boundary.
+             */
+            'XMLSecurityDSig' => 'verifies an XML signature itself',
+            'SAMLResponse' => 'reads a provider response itself',
+            'loadXML' => 'parses provider XML itself',
+            'C14N' => 'canonicalises itself',
+            'InResponseTo' => 'binds a response itself',
         ];
 
         $offenders = [];
@@ -1740,6 +1753,96 @@ final class ArchitectureTest extends TestCase
             $offenders,
             'SPEC 8.12.18: a driver that validates its own protocol is a driver whose '
                 .'validation can be skipped: '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.12.18, the other direction: the boundary offers nothing to
+     * opt out of.
+     *
+     * `test_no_driver_conducts_its_own_protocol` asserts the enforcement is not
+     * *in* a driver. This asserts it cannot be *switched off* from one — which
+     * is the half "not driver-optional" actually names, and the half a namespace
+     * check cannot see.
+     *
+     * Two properties, both structural:
+     *
+     * 1. Every class in the boundary is `final`, so no subclass can override a
+     *    check. A `class SamlValidatorThatSkipsSignatures extends
+     *    ResponseValidator` is the whole vulnerability in one line.
+     * 2. None of them takes a parameter, constant or property whose name is a
+     *    bypass. `$strict`, `$allowUnsigned`, `$skipSignature`, `$insecure`,
+     *    `$validateSignature` — every library that ever shipped one had the
+     *    stripped-signature bug available by configuration, which is the
+     *    history this requirement is written against.
+     *
+     * 🛑 Asserted by name rather than by behaviour on purpose. A test that
+     * checked "an unsigned assertion is refused" passes while an option to
+     * accept one sits unused in the signature; the next caller is the problem,
+     * and a name is what the next caller would reach for.
+     */
+    public function test_the_saml_boundary_offers_nothing_to_opt_out_of(): void
+    {
+        $boundary = [
+            'app/Auth/Providers/Saml/SafeXml.php',
+            'app/Auth/Providers/Saml/SignatureVerifier.php',
+            'app/Auth/Providers/Saml/ResponseValidator.php',
+            'app/Auth/Providers/Saml/AssertionReplayCache.php',
+            'app/Auth/Providers/Saml/AuthnRequest.php',
+            'app/Auth/Providers/Saml/SamlExchange.php',
+        ];
+
+        $bypasses = [
+            'strict',
+            'allowUnsigned',
+            'allow_unsigned',
+            'skipSignature',
+            'skip_signature',
+            'insecure',
+            'validateSignature',
+            'validate_signature',
+            'requireSignature',
+            'wantAssertionsSigned',
+            'disableXxe',
+            'relaxed',
+            'lenient',
+        ];
+
+        $offenders = [];
+
+        foreach ($boundary as $relative) {
+            $path = base_path($relative);
+
+            if (! is_file($path)) {
+                $offenders[] = $relative.' is missing from the boundary';
+
+                continue;
+            }
+
+            $source = $this->code($path);
+
+            if (! str_contains($source, 'final class') && ! str_contains($source, 'final readonly class')) {
+                $offenders[] = $relative.' is not final, so a subclass can override a check';
+            }
+
+            foreach ($bypasses as $name) {
+                /*
+                 * `$name` for a parameter or property and `NAME` for a
+                 * constant. Matching the bare word would hit prose in a
+                 * docblock — and `code()` strips comments, so what is left is
+                 * the declaration.
+                 */
+                if (str_contains($source, '$'.$name) || str_contains($source, strtoupper($name).' =')) {
+                    $offenders[] = $relative.' offers `'.$name.'`, which is an opt-out';
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'SPEC 8.12.18: validation that can be switched off is driver-optional '
+                .'validation: '.implode('; ', $offenders),
         );
     }
 
@@ -1783,23 +1886,40 @@ final class ArchitectureTest extends TestCase
     }
 
     /**
-     * 🛑 SPEC 8.12.18: one reader of the OIDC exchange table.
+     * 🛑 SPEC 8.12.18: one reader of each provider exchange table.
      *
-     * `state` and `nonce` are single-use, and single use is one atomic
-     * conditional write. A second place that consumed a row would be a second
-     * answer to "has this been used" — the same argument SPEC 12.3 makes for
-     * one decider and SPEC 8.12.10 for the handoff code.
+     * A `state`, a `nonce` and a `RelayState` are single-use, and single use is
+     * one atomic conditional write. A second place that consumed a row would be
+     * a second answer to "has this been used" — the same argument SPEC 12.3
+     * makes for one decider and SPEC 8.12.10 for the handoff code.
+     *
+     * 🛑 Owned **per table**, not by one shared namespace, and that is the
+     * half of this test that does work. `App\Auth\Providers\Saml` must not
+     * reach into OIDC's table and vice versa: two protocols sharing a consumer
+     * would be the single-use latch written twice, which is exactly what this
+     * exists to prevent. `provider_group_mappings` is owned by `Federation`,
+     * where Phase 25 moved SPEC 8.13.7's one implementation.
      */
-    public function test_only_the_oidc_namespace_reads_the_exchange_table(): void
+    public function test_only_one_namespace_reads_each_exchange_table(): void
     {
-        $permitted = [
-            'app/Auth/Providers/Oidc/',
+        /*
+         * Permitted everywhere: the schema that creates the table, the models
+         * that map it, and the scheduled sweep — which is retention rather than
+         * authorisation, because both `consume()` methods check the expiry
+         * inside their own latch.
+         */
+        $shared = [
             'app/Models/',
             'database/migrations/',
             'database/factories/',
             'database/seeders/',
-            /* The scheduled sweep names the command, not the table. */
             'app/Console/Commands/ReaderMaintenanceCommand.php',
+        ];
+
+        $owners = [
+            'oidc_authorisation_requests' => 'app/Auth/Providers/Oidc/',
+            'saml_auth_requests' => 'app/Auth/Providers/Saml/',
+            'provider_group_mappings' => 'app/Auth/Providers/Federation/',
         ];
 
         $offenders = [];
@@ -1807,7 +1927,7 @@ final class ArchitectureTest extends TestCase
         foreach ($this->sourceFiles() as $file) {
             $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
 
-            foreach ($permitted as $prefix) {
+            foreach ($shared as $prefix) {
                 if (str_starts_with($relative, $prefix)) {
                     continue 2;
                 }
@@ -1815,7 +1935,11 @@ final class ArchitectureTest extends TestCase
 
             $source = $this->code($file);
 
-            foreach (['oidc_authorisation_requests', 'provider_group_mappings'] as $table) {
+            foreach ($owners as $table => $owner) {
+                if (str_starts_with($relative, $owner)) {
+                    continue;
+                }
+
                 if (str_contains($source, "'".$table."'") || str_contains($source, '"'.$table.'"')) {
                     $offenders[] = $relative.' reads '.$table;
                 }
@@ -1825,7 +1949,7 @@ final class ArchitectureTest extends TestCase
         $this->assertSame(
             [],
             $offenders,
-            'SPEC 8.12.18: a second consumer of an authorisation request is a second '
+            'SPEC 8.12.18: a second consumer of an authentication request is a second '
                 .'answer to "is this state spent": '.implode('; ', $offenders),
         );
     }

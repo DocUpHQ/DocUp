@@ -160,6 +160,23 @@ enum SamlRejection: string
     /** The response is not a SAML `Response` at all, or will not parse. */
     case ResponseMalformed = 'saml.response_malformed';
 
+    /**
+     * 🛑 `<Issuer>` is not the entity id this binding is configured for.
+     *
+     * The SAML face of `OidcRejection::IssuerMismatch`, and §8.12.18 asks for
+     * the same thing on both sides — OIDC's "exact `iss`".
+     *
+     * 🛑 Not redundant with the signature check, and the case where it
+     * matters is the one worth stating: a multi-tenant identity provider that
+     * signs for several entity ids with **one** key. The certificate then proves
+     * only "this provider", not "this tenant of this provider", so without this
+     * check tenant A's correctly signed assertion would be accepted for a
+     * binding configured against tenant B. Compared byte-for-byte, because
+     * §8.3.6 makes an entity id an opaque URI and normalising one would be
+     * inventing an equivalence SAML does not define.
+     */
+    case IssuerMismatch = 'saml.issuer_mismatch';
+
     /** `Status` is not `Success` — the IdP refused, and said so. */
     case StatusNotSuccess = 'saml.status_not_success';
 
@@ -168,6 +185,47 @@ enum SamlRejection: string
 
     /** `SubjectConfirmation` is missing, not bearer, or does not match. */
     case SubjectConfirmationInvalid = 'saml.subject_confirmation_invalid';
+
+    /**
+     * 🛑 A `RelayState` naming no exchange DocUp opened.
+     *
+     * SAML's analogue of OIDC's `state`, and the same refusal
+     * `App\Auth\Providers\Oidc\OidcRejection::StateUnknown` makes: the value
+     * round-trips through the identity provider, so on the way back it is
+     * reader-supplied. ADR 0013 measured that Keycloak returns it unmodified —
+     * which is what makes it usable as an index, and exactly why an
+     * *unrecognised* one has to be refused rather than ignored.
+     *
+     * Distinct from {@see self::InResponseToUnknown}: that one is "DocUp did not
+     * ask for this *assertion*", this one is "DocUp did not open this
+     * *exchange*". A response can fail the second while passing the first —
+     * a genuine assertion presented through a fabricated `RelayState` — and an
+     * operator needs to see which.
+     */
+    case RelayStateUnknown = 'saml.relay_state_unknown';
+
+    /**
+     * 🛑 A `RelayState` whose exchange is spent, expired or out of attempts.
+     *
+     * Three causes, one case, deliberately — the shape
+     * `App\Auth\Providers\Oidc\OidcExchange::consume()` argues for. The caller
+     * cannot tell them apart because all three mean "this exchange is over",
+     * and a vocabulary that distinguished them would tell a replayer whether
+     * their captured `RelayState` was ever valid.
+     */
+    case RelayStateExpired = 'saml.relay_state_expired';
+
+    /**
+     * 🛑 §8.13.7's `disabled`, or an identity an operator deprovisioned.
+     *
+     * The SAML face of `ProvisioningRejection::ProvisioningDisabled`, which the
+     * shared provisioning raises and this protocol's callback translates. It
+     * has to exist as a *SAML* case rather than being audited in federation's
+     * own vocabulary, because §17 wants the refusals an operator sees under one
+     * prefix they can filter — and "the reader signed in and DocUp would not
+     * create them" is a login refusal like any other.
+     */
+    case ProvisioningDisabled = 'saml.provisioning_disabled';
 
     /** The binding's configuration is unusable — no certificate, no entity id. */
     case ConfigInvalid = 'saml.config_invalid';

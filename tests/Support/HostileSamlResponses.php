@@ -623,7 +623,18 @@ final class HostileSamlResponses
         $assertion->setIdAttribute('ID', true);
 
         $issuer = $document->createElementNS(self::ASSERTION, 'saml:Issuer');
-        $issuer->appendChild($document->createTextNode($overrides['Issuer'] ?? self::ISSUER));
+
+        /*
+         * 🛑 `AssertionIssuer` overrides this one **alone**, so a fixture can
+         * leave the Response naming the configured provider while the Assertion
+         * names another. That is the attack worth building: the two elements are
+         * separately signed and therefore separately forgeable, and a service
+         * provider that checked only the outer one would read its claims from
+         * an assertion somebody else issued.
+         */
+        $issuer->appendChild($document->createTextNode(
+            $overrides['AssertionIssuer'] ?? $overrides['Issuer'] ?? self::ISSUER,
+        ));
         $assertion->appendChild($issuer);
 
         $subject = $document->createElementNS(self::ASSERTION, 'saml:Subject');
