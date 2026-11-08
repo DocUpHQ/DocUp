@@ -23,6 +23,24 @@ on:
 permissions:
   contents: read
 
+# 🛑 Composer's dist downloads come from `api.github.com`, and unauthenticated
+# requests to it are rate-limited per runner IP. Four consecutive runs in Phase
+# 26a failed `Install dependencies` with `curl error 28 Operation timed out` and
+# `curl error 56 Connection died` on zipball URLs — in a different job each
+# time, which is what a shared quota looks like.
+#
+# Handing Composer the workflow's own token raises the limit from 60 requests an
+# hour to 1000 and removes the class. It is `secrets.GITHUB_TOKEN`: scoped to
+# this repository, expiring with the job, and already the token
+# `actions/checkout` used — so this grants nothing that was not already granted.
+#
+# 🛑 At workflow level because there are three `composer install` sites and a
+# per-step version is a list somebody forgets to extend — the same argument the
+# MFA middleware carries for being on the whole web group. The containerised
+# site needs it passed through explicitly; see that step.
+env:
+  COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.GITHUB_TOKEN }}"}}'
+
 concurrency:
   group: gate-${{ github.ref }}
   cancel-in-progress: true
@@ -429,9 +447,18 @@ jobs:
       - name: Build the image
         run: docker compose -f '${{ matrix.compose }}' build app
 
+      # 🛑 `-e COMPOSER_AUTH` because this one runs INSIDE the container, and
+      # `docker compose run` passes no host environment through on its own. The
+      # workflow-level variable would be silently absent here, which is the
+      # shape of fix that looks applied and is not — this job is where the
+      # zipball timeouts actually hit.
+      #
+      # A runtime environment variable, never a build argument: it must not
+      # reach an image layer.
       - name: Install dependencies
         run: |
-          docker compose -f '${{ matrix.compose }}' run --rm --no-deps app \
+          docker compose -f '${{ matrix.compose }}' run --rm --no-deps \
+            -e COMPOSER_AUTH app \
             composer install --no-interaction --prefer-dist --no-progress
 
       - name: Start the stack

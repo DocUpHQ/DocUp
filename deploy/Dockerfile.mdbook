@@ -20,8 +20,18 @@ ARG MDBOOK_VERSION=0.4.43
 # rather than shipping to every tenant.
 ARG MDBOOK_SHA256=3058914071a6f22dbd1b8ea734a96d8e86489743ae0bc8d6bbd9e923f191b038
 
+# 🛑 `--retry` on a release-asset download, added in Phase 26a after
+# `curl -fsSL` exited 22 (an HTTP error) fetching this tarball in CI. A release
+# asset is not API-rate-limited the way a zipball is, so this is a transient
+# upstream error rather than a quota — and a transient error on a pinned,
+# checksummed download is exactly what a retry is for.
+#
+# 🛑 The SHA-256 check below is what makes retrying safe: a truncated or
+# substituted body fails the checksum, so the retry can only ever succeed on the
+# bytes this image already names. Retrying an unverified download would be a
+# different thing entirely.
 RUN apk add --no-cache curl tar \
- && curl -fsSL -o /tmp/mdbook.tar.gz \
+ && curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors -o /tmp/mdbook.tar.gz \
       "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
  && printf '%s  /tmp/mdbook.tar.gz\n' "${MDBOOK_SHA256}" | sha256sum -c - \
  && tar -xzf /tmp/mdbook.tar.gz -C /usr/local/bin mdbook \
