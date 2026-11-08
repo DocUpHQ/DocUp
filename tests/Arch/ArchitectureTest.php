@@ -2645,4 +2645,92 @@ final class ArchitectureTest extends TestCase
             'no Inertia pages found under the configured path, so the assertion helper is untested',
         );
     }
+
+    /**
+     * 🛑 SPEC 8.9.4: no request header selects the project, "in any
+     * environment" — so `X-Forwarded-Host` is trusted nowhere.
+     *
+     * > "The project MUST be resolved **solely** from the TLS server name or
+     * > `Host` header plus the path. No request header MUST act as a project,
+     * > version or tenant selector, in any environment. This is the
+     * > GHSA-mp38-vprc-7hf5 class."
+     *
+     * The project is resolved from `$request->getHost()`, so trusting that
+     * header would make a header pick the project. This is an architecture test
+     * rather than a behavioural one because **Laravel's and Symfony's own
+     * default header sets include it**: the safe value is not the framework's
+     * default, and the way it comes back is somebody replacing an explicit list
+     * with `HEADER_X_FORWARDED_ALL` or dropping the `headers:` argument
+     * entirely. Both are one-line edits that look like tidying up.
+     *
+     * `TrustEdgeProxies` is allowlisted for the NAME only — the test below
+     * asserts it never trusts it.
+     */
+    public function test_no_code_trusts_the_forwarded_host_header(): void
+    {
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            $source = $this->code($file);
+
+            foreach (['HEADER_X_FORWARDED_HOST', 'HEADER_X_FORWARDED_ALL'] as $needle) {
+                if (str_contains($source, $needle)) {
+                    $offenders[] = $relative.' names '.$needle;
+                }
+            }
+
+            /*
+             * And a `trustProxies` call with no header set takes the
+             * framework's default, which includes the host header. The helper
+             * is not used at all today — `TrustEdgeProxies` exists because it
+             * cannot read configuration — so naming it is enough.
+             */
+            if (str_contains($source, 'trustProxies')) {
+                $offenders[] = $relative.' uses trustProxies(), whose default header set includes the host';
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'SPEC 8.9.4: trusting `X-Forwarded-Host` makes a header select the project: '
+                .implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.9.4, the other half: the one middleware that sets the trusted
+     * header set names exactly three headers, and the host is not among them.
+     *
+     * The test above asserts the dangerous name is absent everywhere. This
+     * asserts the safe names are **present** here — because "absent" is also
+     * satisfied by a file that trusts nothing at all, which would take
+     * `$request->ip()` back to the edge's address and the `ip_allowlist` gate
+     * back to comparing the wrong one.
+     */
+    public function test_the_trusted_header_set_is_exactly_the_three_safe_headers(): void
+    {
+        $source = $this->code(base_path('app/Http/Middleware/TrustEdgeProxies.php'));
+
+        foreach ([
+            'HEADER_X_FORWARDED_FOR',
+            'HEADER_X_FORWARDED_PORT',
+            'HEADER_X_FORWARDED_PROTO',
+        ] as $header) {
+            $this->assertStringContainsString(
+                $header,
+                $source,
+                'SPEC 8.12.17 reads the client address and SPEC 9.3.4 reads the scheme: '.$header,
+            );
+        }
+
+        /* Three, and no fourth. */
+        $this->assertSame(
+            3,
+            substr_count($source, 'HEADER_X_FORWARDED_'),
+            'SPEC 8.9.4: a fourth trusted forwarded header is one nobody reviewed',
+        );
+    }
 }

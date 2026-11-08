@@ -142,6 +142,36 @@ return [
 
         /*
         |-----------------------------------------------------------------------
+        | 🛑 SPEC 8.9.4 and SPEC 17's Phase 26b criterion: the trusted hop count
+        |-----------------------------------------------------------------------
+        | Which addresses in front of the application are DocUp's own, so that
+        | `$request->ip()` is the READER's address rather than the edge's.
+        |
+        | 🛑 Phase 26b found this unset, and found what that cost. With no
+        | trusted proxy, `$request->ip()` returns `REMOTE_ADDR` — the edge
+        | container — so SPEC 8.12.17's `ip_allowlist` gate was comparing the
+        | EDGE's address against the operator's allowlist. Either it matched
+        | nothing, or an operator debugging "my allowlist never works" read the
+        | address out of their logs, allowlisted it, and made the gate satisfied
+        | for every reader on the internet. SPEC 8.12.7 keeps a requirement from
+        | resting on a gate alone, so the blast radius was a narrowing that did
+        | not narrow rather than public access — silently, which is worse.
+        |
+        | Empty means trust nothing, which is SAFE and was the state before this
+        | setting existed: `X-Forwarded-For` is ignored entirely and `ip()` is
+        | the direct peer. An installation with no `ip_allowlist` binding needs
+        | nothing here.
+        |
+        | `*` trusts whatever is in front, which is correct ONLY where the
+        | application is unreachable except through that proxy — the shipped
+        | compose topology, where the app port is not published. On a host where
+        | the application port is reachable, `*` lets any client set its own
+        | address: name the proxy's CIDR instead.
+        */
+        'trusted_proxies' => env('DOCUP_TRUSTED_PROXIES', ''),
+
+        /*
+        |-----------------------------------------------------------------------
         | 🛑 SPEC 8.12.13's enforcement ladder
         |-----------------------------------------------------------------------
         | Three topologies from one grant, and the default is the one with
