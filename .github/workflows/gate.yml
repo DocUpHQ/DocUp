@@ -747,7 +747,24 @@ jobs:
           NO_COLOR: '1'
         run: |
           set -o pipefail
-          sudo -E env "PATH=$PATH" ./vendor/bin/pest \
+
+          # 🛑 The database host, said out loud on both sides of `sudo`.
+          #
+          # Phase 26b spent a long time on a failure where 60 of these tests
+          # could not resolve `db` -- the COMPOSE hostname -- while the
+          # `migrate` step in the same job, with the same job-level DB_HOST,
+          # had just succeeded. `sudo` resets the environment, so the one
+          # step that runs under it is the one step where a job-level `env:`
+          # is not a given -- and `.env`, copied from .env.example which
+          # carries the compose hostname, then wins.
+          #
+          # So the value is PASSED EXPLICITLY rather than relied upon, and
+          # echoed so that the next person reading a red log sees the host
+          # rather than inferring it.
+          echo "DB_HOST before sudo: ${DB_HOST:-(unset)}"
+          sudo -E env "PATH=$PATH" "DB_HOST=${DB_HOST}" php -r 'echo "DB_HOST after sudo: ", getenv("DB_HOST") ?: "(unset)", PHP_EOL;'
+
+          sudo -E env "PATH=$PATH" "DB_HOST=${DB_HOST}" ./vendor/bin/pest \
             tests/Feature/Builds \
             --colors=never 2>&1 | tee /tmp/sandbox.log
 

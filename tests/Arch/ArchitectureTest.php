@@ -2873,9 +2873,34 @@ final class ArchitectureTest extends TestCase
             static fn (\ReflectionMethod $method): string => $method->getName(),
             array_filter(
                 $class->getMethods(\ReflectionMethod::IS_PUBLIC),
-                static fn (\ReflectionMethod $method): bool => $method->isStatic()
-                    && $method->getReturnType() instanceof \ReflectionNamedType
-                    && $method->getReturnType()->getName() === EdgeAssertion::class,
+                static function (\ReflectionMethod $method): bool {
+                    $type = $method->getReturnType();
+
+                    if (! $method->isStatic() || ! $type instanceof \ReflectionNamedType) {
+                        return false;
+                    }
+
+                    /*
+                     * 🛑 Both spellings, because reflection renders a `self`
+                     * return type differently across the two PHP versions this
+                     * project runs on, and the first version of this test only
+                     * accepted one.
+                     *
+                     * Measured: on **8.5** (the container, which §11.2 names)
+                     * `getName()` resolves `self` to the fully-qualified class;
+                     * on **8.4** (which CI still pins — an owed item since
+                     * P21) it returns the literal `self`. So the test passed
+                     * locally and failed in CI with an empty builder list, and
+                     * the assertion it made was therefore about nothing.
+                     *
+                     * `static` is accepted too, for the day somebody writes it.
+                     */
+                    return in_array(
+                        $type->getName(),
+                        ['self', 'static', EdgeAssertion::class],
+                        true,
+                    );
+                },
             ),
         ));
 
