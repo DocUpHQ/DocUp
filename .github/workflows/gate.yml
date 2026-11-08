@@ -717,7 +717,18 @@ jobs:
       - name: Start the runner, which runs the §8.5.12 self-test
         run: |
           set -euo pipefail
-          sudo -E env "PATH=$PATH" php artisan docup:runner --once
+
+          # The environment, named explicitly. The pest step below says why.
+          sudo env "PATH=$PATH" \
+            "DB_HOST=${DB_HOST}" \
+            "DB_DATABASE=${DB_DATABASE}" \
+            "DOCUP_WORKSPACE_ROOT=${DOCUP_WORKSPACE_ROOT}" \
+            "DOCUP_RUNNER_SPOOL=${DOCUP_RUNNER_SPOOL}" \
+            "DOCUP_SANDBOX_NETWORK=${DOCUP_SANDBOX_NETWORK}" \
+            "DOCUP_BUILD_ISOLATION=${DOCUP_BUILD_ISOLATION}" \
+            "DOCUP_SANDBOX_EGRESS=${DOCUP_SANDBOX_EGRESS}" \
+            "DOCUP_CGROUP_ROOT=${DOCUP_CGROUP_ROOT}" \
+            php artisan docup:runner --once
           test -f /var/lib/docup/spool/self-test.json
           cat /var/lib/docup/spool/self-test.json
           grep -q '"passed":true' /var/lib/docup/spool/self-test.json
@@ -729,7 +740,17 @@ jobs:
           # readable by the wait below or by the failure step at the end.
           : > /tmp/runner.log
           # shellcheck disable=SC2024
-          sudo -E env "PATH=$PATH" php artisan docup:runner >> /tmp/runner.log 2>&1 &
+          # The environment, named explicitly. The pest step below says why.
+          sudo env "PATH=$PATH" \
+            "DB_HOST=${DB_HOST}" \
+            "DB_DATABASE=${DB_DATABASE}" \
+            "DOCUP_WORKSPACE_ROOT=${DOCUP_WORKSPACE_ROOT}" \
+            "DOCUP_RUNNER_SPOOL=${DOCUP_RUNNER_SPOOL}" \
+            "DOCUP_SANDBOX_NETWORK=${DOCUP_SANDBOX_NETWORK}" \
+            "DOCUP_BUILD_ISOLATION=${DOCUP_BUILD_ISOLATION}" \
+            "DOCUP_SANDBOX_EGRESS=${DOCUP_SANDBOX_EGRESS}" \
+            "DOCUP_CGROUP_ROOT=${DOCUP_CGROUP_ROOT}" \
+            php artisan docup:runner >> /tmp/runner.log 2>&1 &
           for _ in $(seq 1 20); do
             if grep -q 'runner ready' /tmp/runner.log; then exit 0; fi
             sleep 1
@@ -748,23 +769,48 @@ jobs:
         run: |
           set -o pipefail
 
-          # 🛑 The database host, said out loud on both sides of `sudo`.
+          # 🛑 This job's `env:` does not survive `sudo`, so every root
+          # step names what it needs.
           #
-          # Phase 26b spent a long time on a failure where 60 of these tests
-          # could not resolve `db` -- the COMPOSE hostname -- while the
-          # `migrate` step in the same job, with the same job-level DB_HOST,
-          # had just succeeded. `sudo` resets the environment, so the one
-          # step that runs under it is the one step where a job-level `env:`
-          # is not a given -- and `.env`, copied from .env.example which
-          # carries the compose hostname, then wins.
+          # `sudo -E` is not the answer and was the original mistake: the
+          # runner's sudoers grants NOPASSWD without SETENV, so `-E` is
+          # REFUSED with a warning and the environment is reset anyway. It
+          # reads as though it preserves the environment, which is exactly
+          # how this went unnoticed. `env VAR=value` passes arguments to a
+          # command instead of asking sudo for a policy exemption, so it
+          # works where `-E` does not.
           #
-          # So the value is PASSED EXPLICITLY rather than relied upon, and
-          # echoed so that the next person reading a red log sees the host
-          # rather than inferring it.
-          echo "DB_HOST before sudo: ${DB_HOST:-(unset)}"
-          sudo -E env "PATH=$PATH" "DB_HOST=${DB_HOST}" php -r 'echo "DB_HOST after sudo: ", getenv("DB_HOST") ?: "(unset)", PHP_EOL;'
+          # Two of these were load-bearing and both were silent:
+          #
+          #   DB_HOST            phpunit.xml supplies `db` when nothing else
+          #                      has -- its <env> elements fill a GAP rather
+          #                      than override, so stripping the variable is
+          #                      what activates the compose hostname. 60 of
+          #                      these tests failed on `getaddrinfo for db`.
+          #   DOCUP_CGROUP_ROOT  config/builds.php defaults it to /hostcg,
+          #                      the path the runner CONTAINER mounts. Here
+          #                      PHP is the host process, so the sampler
+          #                      found no hierarchy, read no counters, and a
+          #                      fork bomb reported SUCCESS (§8.5.15).
+          #
+          # The rest are passed because the next variable to be added will
+          # be load-bearing too, and a list that is complete cannot be
+          # incomplete by omission. They are echoed below so a red log
+          # shows the environment rather than inviting an inference.
+          php -r 'printf("%s: DB_HOST=%s DOCUP_CGROUP_ROOT=%s".PHP_EOL, $argv[1], getenv("DB_HOST") ?: "(unset)", getenv("DOCUP_CGROUP_ROOT") ?: "(unset)");' -- 'before sudo'
+          sudo env "PATH=$PATH" "DB_HOST=${DB_HOST}" "DOCUP_CGROUP_ROOT=${DOCUP_CGROUP_ROOT}" \
+            php -r 'printf("%s: DB_HOST=%s DOCUP_CGROUP_ROOT=%s".PHP_EOL, $argv[1], getenv("DB_HOST") ?: "(unset)", getenv("DOCUP_CGROUP_ROOT") ?: "(unset)");' -- ' after sudo'
 
-          sudo -E env "PATH=$PATH" "DB_HOST=${DB_HOST}" ./vendor/bin/pest \
+          sudo env "PATH=$PATH" \
+            "DB_HOST=${DB_HOST}" \
+            "DB_DATABASE=${DB_DATABASE}" \
+            "DOCUP_WORKSPACE_ROOT=${DOCUP_WORKSPACE_ROOT}" \
+            "DOCUP_RUNNER_SPOOL=${DOCUP_RUNNER_SPOOL}" \
+            "DOCUP_SANDBOX_NETWORK=${DOCUP_SANDBOX_NETWORK}" \
+            "DOCUP_BUILD_ISOLATION=${DOCUP_BUILD_ISOLATION}" \
+            "DOCUP_SANDBOX_EGRESS=${DOCUP_SANDBOX_EGRESS}" \
+            "DOCUP_CGROUP_ROOT=${DOCUP_CGROUP_ROOT}" \
+            ./vendor/bin/pest \
             tests/Feature/Builds \
             --colors=never 2>&1 | tee /tmp/sandbox.log
 
