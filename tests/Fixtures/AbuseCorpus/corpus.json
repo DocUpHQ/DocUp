@@ -1153,6 +1153,86 @@
       "note": "🛑 The encoding a deny list written in dotted quads does not recognise, here in its mirror image: an allowlist comparison that normalised the mapped form would admit from a family the operator never entered. The comparison is on packed bytes with an explicit family check, so a v6 address never matches a v4 range in either direction. Compare git_url-016, the same encoding against the egress deny list."
     },
     {
+      "id": "provider-014",
+      "category": "provider",
+      "defends": "8.12.4",
+      "input": "a client certificate from an impostor CA whose issuer DN is byte-identical to the pinned one, forwarded with no terminator verdict",
+      "expect": "mtls.handshake_not_vouched",
+      "note": "🛑 The nginx trap. `ssl_verify_client optional` forwards `$ssl_client_escaped_cert` EVEN WHEN VERIFICATION FAILED, and the issuer DN is a field in a document the attacker wrote — so a driver reading only the certificate accepts a self-signed forgery that matches the pin. The verdict header is therefore mandatory, not optional hardening. The fixture is the proof: the same DN from a different CA, accepted with SUCCESS and refused without it."
+    },
+    {
+      "id": "provider-015",
+      "category": "provider",
+      "defends": "8.12.4",
+      "input": "X-Forwarded-User: admin@example.com from the client, through a terminator that sets it only for an authenticated reader",
+      "expect": "unsatisfied",
+      "note": "🛑 oauth2-proxy's default, and a one-curl bypass. A terminator that sets its identity header only for an AUTHENTICATED reader passes an unauthenticated reader's own header straight through — so the header alone must authenticate nobody. The shared secret matched against the binding's sealed `assertion_secret` is what a pass-through header cannot carry. Measured against my own test first: it passed with the secret requirement removed, because the subject shape refused the value instead."
+    },
+    {
+      "id": "provider-016",
+      "category": "provider",
+      "defends": "8.12.4",
+      "input": "two X-Forwarded-User headers, the operator's and the client's",
+      "expect": "unsatisfied",
+      "note": "🛑 Caddy's `header_up +X-Foo` APPENDS, and a conditional terminator lets a client's value through beside its own. Taking the first of two is choosing between the operator and an attacker on an ordering nothing guarantees, so both are refused. The same rule covers the certificate and the verdict headers."
+    },
+    {
+      "id": "provider-017",
+      "category": "provider",
+      "defends": "8.12.4",
+      "input": "an unparseable client certificate, presented where a 401 would be a global oracle",
+      "expect": "unsatisfied",
+      "note": "🛑 §8.12.23 permits 401 only when \"a credential was presented and rejected\", and a terminator forwards headers on EVERY request — so one wrong `rejected()` turns every private 404 into a 401 and the whole installation becomes an existence oracle. An unparseable certificate is therefore `unsatisfied`, not rejected: a format typo in a terminator's configuration would otherwise be a disclosure bug for every project at once. `header_trust` never rejects at all, for the same reason one rung further."
+    },
+    {
+      "id": "provider-018",
+      "category": "provider",
+      "defends": "8.12.18",
+      "input": "an LDAP username with no entry in the directory, and the same reader's wrong password",
+      "expect": "ldap.credentials_rejected",
+      "note": "🛑 The two must be INDISTINGUISHABLE, and the corpus case is the pair rather than either one. A form that said \"no such user\" would be a username oracle over the operator's own employee directory, readable by anyone who can reach the sign-in page — which is §8.12.23's 404-versus-401 reasoning transferred intact. The search result is also not short-circuited: a reader with no entry still spends a bind against a DN that cannot bind, which narrows the timing signal without claiming to flatten it."
+    },
+    {
+      "id": "provider-019",
+      "category": "provider",
+      "defends": "8.12.18",
+      "input": "an LDAP sign-in with an empty password, against a directory that permits an anonymous bind with a DN",
+      "expect": "ldap.credentials_rejected",
+      "note": "🛑 RFC 4511 §4.2 makes a simple bind with an empty password an ANONYMOUS bind, which succeeds on Active Directory and on any slapd with `bind_anon_dn` allowed — so without the guard a reader who submits no password authenticates as nobody and DocUp reads it as success. The fixture enables `bind_anon_dn` deliberately, and the test asserts both halves: DocUp refuses it, and that directory would have accepted it. Without the second half the guard is tested against a risk that was not there."
+    },
+    {
+      "id": "provider-020",
+      "category": "provider",
+      "defends": "8.12.18",
+      "input": "two directory entries sharing one uid, matched by the configured user filter",
+      "expect": "ldap.subject_ambiguous",
+      "note": "🛑 Refused rather than chosen, which is §8.12.18's \"exactly one Assertion\" applied to a search. Two entries mean the operator's uniqueness assumption is wrong, and taking the first authenticates whichever one the directory happened to return — a coin toss between two people, deterministic enough to look correct in testing. The fixture carries the shape deliberately, in a branch of its own, because this refusal cannot be tested against a tree that enforces uniqueness."
+    },
+    {
+      "id": "provider-021",
+      "category": "provider",
+      "defends": "8.13.7",
+      "input": "a groups attribute the operator spelled memberOf, returned by the directory as memberof",
+      "expect": "no match",
+      "note": "🛑 A silent empty set, found against a real directory in Phase 26b. `ldap_get_entries()` LOWERCASES attribute names — they are case-insensitive by RFC 4512 — while the operator configures `memberOf` and the mapping is looked up by the name the driver reports. `uid` and `cn` are already lower case and worked by luck; `memberOf` did not, so every group arrived empty while the subject arrived fine. The reconciliation then removes groups nobody removed."
+    },
+    {
+      "id": "provider-022",
+      "category": "provider",
+      "defends": "8.12.3",
+      "input": "an installation-scoped binding provisioning a reader identity",
+      "expect": "reject",
+      "note": "🛑 Not an attack — a feature that could not work, and the corpus carries it because the shape recurs. `ReaderProvisioning` writes the BINDING's organisation, null at installation scope, while `reader_identities.organisation_id` was NOT NULL and the tenancy hook turned that deliberate null into `require()`. Three deliberate decisions that could not all hold, and §8.12.4 makes installation the ONLY scope `ldap`, `mtls` and `header_trust` have — so the phase's whole feature set was unreachable. The hook now distinguishes a declaration from an omission."
+    },
+    {
+      "id": "provider-023",
+      "category": "provider",
+      "defends": "8.12.18",
+      "input": "a genuine identity provider POST to the ACS, on a route exempted from CSRF by the wrong class name",
+      "expect": "419",
+      "note": "🛑 The exemption named `ValidateCsrfToken` while the `web` group runs `PreventRequestForgery`, which `ValidateCsrfToken` EXTENDS — and an exclusion matches a gathered middleware only by name or by subclass, never a parent by its child. So the ACS still ran the check and would have refused every genuine assertion in production. 🛑 No status-code test could see it: the middleware skips validation outright when `runningUnitTests()` is true, so Phase 25's ACS tests passed against a route that did not work. The proof is structural, over the gathered middleware, and asserts the credential POST keeps the check in the same breath. 🛑 Filed under `provider` rather than `saml`, deliberately: the defect is not a protocol rejection — `SamlCorpusTest` refused it for exactly that reason, since every case it owns must name an exact `SamlRejection` — but a route's middleware. It sits with this phase's other authentication findings, where the proof map keeps it honest."
+    },
+    {
       "id": "oidc-001",
       "category": "oidc",
       "defends": "8.12.18",

@@ -60,6 +60,7 @@ gate. If the two disagree, `corpus.json` and the PHP builders are right.
 | `git_url` | §8.3.4 protocol and SSRF rejection | 05 |
 | `header` | §8.9.5 inbound header stripping, §8.9.4 no trusted resolver | 04 |
 | `runner` | §8.5.13 the typed run specification and fixed argv template, §8.5.7 credential separation, §8.5.21 log caps | 06, 07 |
+| `provider` | §8.12.4 the installation-scope narrowing, §8.12.18 framework-enforced protocol validation, §8.12.19 the binding lifecycle, §8.12.23 the disclosure boundary | 23, 26b |
 
 ### Phase 05 restated the `git_url` expectations
 
@@ -138,6 +139,44 @@ building Phase 25 rather than out of a list:
 - `saml-033` to `-035` are the exchange rather than the document: a forged `RelayState`,
   the same response POSTed twice, and one exchange's assertion presented with another's
   `RelayState`.
+
+### Phase 26b added ten `provider` cases, and two of them are not attacks
+
+🛑 **Eight are.** Four come from the two authentication bypasses this phase
+closed, and both are bypasses of a *default configuration* rather than of code:
+
+- `provider-014` — nginx's `ssl_verify_client optional` forwards
+  `$ssl_client_escaped_cert` **even when verification failed**, and the issuer DN
+  is a field in a document the attacker wrote. The verdict header is mandatory
+  because of this, not as hardening.
+- `provider-015` — a terminator that sets its identity header only for an
+  *authenticated* reader passes an unauthenticated reader's own header straight
+  through. oauth2-proxy's default, and a one-curl bypass.
+- `provider-016` — `header_up +X-Foo` **appends**, so a conditional terminator
+  lets a client's value through beside the operator's. Taking the first of two is
+  choosing between them on an ordering nothing guarantees.
+- `provider-017` — the disclosure boundary in the *other* direction: an
+  unparseable certificate must be `unsatisfied`, never `rejected`, because a
+  terminator forwards headers on every request and one wrong `rejected()` turns
+  every private 404 into a 401.
+
+Three more are the directory's: `provider-018`, `provider-019` and
+`provider-020` — the username oracle, the empty-password anonymous bind, and the
+ambiguous `uid`. `provider-021` is the mixed-case attribute name that made every
+group arrive empty.
+
+🛑 **And two are not attacks at all**, which is a deliberate widening of what
+this corpus holds. `provider-022` is an installation-scoped binding that could
+not provision a reader, and `provider-023` is a CSRF exemption that named the
+wrong class and exempted nothing. Neither is something an attacker does; both are
+a control written at one end with nothing at the other honouring it — the shape
+this phase found six times. A corpus that only held attacks would have no room
+for the defect class that produced most of them.
+
+Rule 3 still holds for all ten: each names a status code or a stable identifier.
+Two vocabularies were **declared** rather than described in prose for this
+— `LdapRejection` and `MtlsRejection` — so a case naming an outcome that no
+longer exists fails CI instead of reading as plausible.
 
 ## Adding a case
 
