@@ -19,6 +19,7 @@ use App\Models\Domain;
 use App\Models\Organisation;
 use App\Models\Project;
 use App\Models\User;
+use App\Support\SecretToken;
 use App\Support\Uuid;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Support\Facades\Cache;
@@ -242,20 +243,40 @@ final class OidcExchangeTest extends TestCase
         }
     }
 
-    /** The sweep removes spent rows and leaves live ones. */
+    /**
+     * The sweep removes spent rows and leaves live ones.
+     *
+     * 🛑 Asserted as a **delta against this test's own row**, not as a total.
+     *
+     * The first version asserted `sweep()` returned 1 and the table held 1 row,
+     * which is true only on an empty database. It passed in CI, where the
+     * database is fresh, and failed the moment the Keycloak integration left
+     * rows of its own behind — `Failed asserting that 7 is identical to 1`. A
+     * test that depends on nothing else having run is a test that fails for the
+     * next person rather than for the change that broke it.
+     */
     public function test_the_sweep_leaves_a_live_exchange_alone(): void
     {
         $exchange = app(OidcExchange::class);
-        $this->open($exchange);
+        $opened = $this->open($exchange);
 
-        $this->assertSame(0, $exchange->sweep());
-        $this->assertSame(1, DB::table('oidc_authorisation_requests')->count());
+        $mine = DB::table('oidc_authorisation_requests')
+            ->where('state_hash_prefix', SecretToken::prefix($opened['state']));
 
-        DB::table('oidc_authorisation_requests')->update([
-            'expires_at' => now()->subDays(2)->format('Y-m-d H:i:s.v'),
-        ]);
+        /* A live exchange survives a sweep, whatever else the table holds. */
+        $before = $exchange->sweep();
 
-        $this->assertSame(1, $exchange->sweep());
+        $this->assertSame(1, $mine->count(), 'the sweep removed a live exchange');
+
+        $mine->update(['expires_at' => now()->subDays(2)->format('Y-m-d H:i:s.v')]);
+
+        /*
+         * One more row swept than last time, and it is this one — asserted by
+         * its absence rather than by the return value, because the count is
+         * global and the row is not.
+         */
+        $this->assertGreaterThanOrEqual($before, $exchange->sweep());
+        $this->assertSame(0, $mine->count(), 'the sweep left an expired exchange behind');
     }
 
     // ------------------------------------------ §8.12.18's mandatory PKCE

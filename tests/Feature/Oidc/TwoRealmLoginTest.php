@@ -311,9 +311,18 @@ final class TwoRealmLoginTest extends TestCase
         $this->assertSame(404, $response->getStatusCode());
         $this->assertAudited([OidcRejection::ImplicitFlowRefused]);
 
-        /* 🛑 The row is untouched, so the reader's own flow still completes. */
+        /*
+         * 🛑 The row is untouched, so the reader's own flow still completes.
+         *
+         * Scoped to **this test's binding**, not to the table. The first
+         * version read `->value('consumed_at')` off whatever row came first,
+         * which is this one only on an empty database — it passed in CI and
+         * failed against a database the Keycloak integration had seeded.
+         */
         $this->assertNull(
-            DB::table('oidc_authorisation_requests')->value('consumed_at'),
+            DB::table('oidc_authorisation_requests')
+                ->where('binding_id', $this->realms['acme']['binding'])
+                ->value('consumed_at'),
             '🛑 §8.12.18: refusing an implicit response must not spend a live exchange',
         );
     }
@@ -353,7 +362,7 @@ final class TwoRealmLoginTest extends TestCase
 
         $this->assertSame(
             '["engineers"]',
-            (string) DB::table('reader_identities')->value('reader_groups'),
+            $this->groupsFor($realm['binding']),
             'the mapped group is applied on first login',
         );
 
@@ -367,7 +376,7 @@ final class TwoRealmLoginTest extends TestCase
 
         $this->assertSame(
             '[]',
-            (string) DB::table('reader_identities')->value('reader_groups'),
+            $this->groupsFor($realm['binding']),
             '🛑 §8.13.7 / §17: a group removed at the IdP is removed, not merely not added',
         );
     }
@@ -407,7 +416,16 @@ final class TwoRealmLoginTest extends TestCase
 
         $this->assertSame(404, $response->getStatusCode());
         $this->assertAudited([OidcRejection::ProvisioningDisabled]);
-        $this->assertSame(0, DB::table('reader_identities')->count());
+
+        /*
+         * Scoped to this binding. A count over the whole table is a count of
+         * whatever else has run.
+         */
+        $this->assertSame(
+            0,
+            DB::table('reader_identities')->where('binding_id', $realm['binding'])->count(),
+            '🛑 §8.13.7: `disabled` creates no reader identity',
+        );
     }
 
     // ------------------------------------------------------------ the flow
@@ -734,6 +752,21 @@ final class TwoRealmLoginTest extends TestCase
             $response->getStatusCode(),
             '🛑 §8.12.23 makes 404 the default for an unauthorised resource',
         );
+    }
+
+    /**
+     * The reconciled groups of the one reader this binding vouched for.
+     *
+     * 🛑 Scoped to the binding, because `reader_identities` is shared and a
+     * bare `->value()` reads whichever row the database returns first. Three
+     * assertions in this file depended on that being this test's row, which is
+     * true on an empty database and nowhere else.
+     */
+    private function groupsFor(string $bindingId): string
+    {
+        return (string) DB::table('reader_identities')
+            ->where('binding_id', $bindingId)
+            ->value('reader_groups');
     }
 
     /**
