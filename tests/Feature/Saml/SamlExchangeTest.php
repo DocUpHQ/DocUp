@@ -303,8 +303,26 @@ final class SamlExchangeTest extends TestCase
      */
     public function test_a_saml_exchange_cannot_be_released_for_a_retry(): void
     {
-        $this->assertFalse(
-            method_exists(SamlExchange::class, 'recordAttempt'),
+        /*
+         * 🛑 The whole public surface, not just the absence of one name.
+         *
+         * `method_exists()` would be the obvious assertion and Larastan folds
+         * it to a constant — correctly, because the class is `final` and the
+         * analyser can see every method. So the claim is made over reflection
+         * and stated positively: these three and nothing else. Any fourth
+         * public method fails this test, which puts whoever added it in front
+         * of `MAX_ATTEMPTS`' reasoning before they add a releaser.
+         */
+        $surface = array_map(
+            static fn (\ReflectionMethod $method): string => $method->getName(),
+            (new \ReflectionClass(SamlExchange::class))->getMethods(\ReflectionMethod::IS_PUBLIC),
+        );
+
+        sort($surface);
+
+        $this->assertSame(
+            ['consume', 'open', 'sweep'],
+            $surface,
             '🛑 a SAML exchange has no retry that could succeed; see MAX_ATTEMPTS',
         );
 

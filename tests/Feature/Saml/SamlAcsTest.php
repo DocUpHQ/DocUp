@@ -22,6 +22,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Testing\TestResponse;
+use Symfony\Component\HttpFoundation\Response;
 use Tests\Support\HostileSamlResponses;
 use Tests\TestCase;
 
@@ -503,6 +504,8 @@ final class SamlAcsTest extends TestCase
     /**
      * POST a response to the real ACS route, as an identity provider's
      * auto-submitting form would.
+     *
+     * @return TestResponse<Response>
      */
     private function acs(string $xml, string $relayState): TestResponse
     {
