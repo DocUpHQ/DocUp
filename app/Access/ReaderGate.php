@@ -92,7 +92,124 @@ final readonly class ReaderGate
         $now ??= time();
         $reader ??= ReaderContext::anonymous();
 
-        $decision = EffectiveAccess::decide(new AccessRequest(
+        $decision = $this->decideFor(
+            $mount,
+            $version,
+            $language,
+            $path,
+            $surface,
+            $componentMinAccess,
+            $reader,
+            $now,
+            $searchGeneration,
+        );
+
+        DecisionLog::record(
+            decision: $decision,
+            surface: $surface,
+            organisationId: $project->organisationId,
+            projectId: $project->id,
+            versionId: $version->id,
+            mountId: $mount->id,
+            subject: $reader->subject,
+            authzEpoch: $project->authzEpoch,
+            now: $now,
+        );
+
+        return $decision;
+    }
+
+    /**
+     * 🛑 §8.12.25's simulator, answering the same question without being asked
+     * by a reader.
+     *
+     * > "A **policy simulator** MUST exist in the UI: 'as this identity, on this
+     * > URL — allow, by rule 7, satisfied by binding X'."
+     *
+     * §17's exit criterion for Phase 26a fixes how: "the same `EffectiveAccess`
+     * call site, asserted by test, **not a reimplementation**". So this is not a
+     * second decision and not a second assembly — it shares
+     * {@see self::decideFor()} with {@see self::authorise()}, byte for byte,
+     * and the private method is the whole of the sharing. An architecture test
+     * asserts that neither this method nor `authorise()` constructs an
+     * {@see AccessRequest} of its own, because a simulator that assembles its
+     * own inputs is a simulator that can disagree with the live path — and the
+     * one thing an operator needs from it is that it cannot.
+     *
+     * ## 🛑 The one difference: nothing is logged
+     *
+     * {@see self::anonymousMayRead()} already establishes the reason and the
+     * precedent. §20.3's `access_decisions` is a record of **reader requests**,
+     * read by incident reviews and by §8.12.22's containment probe. A
+     * simulation is not a request: nobody was served, nothing left the
+     * installation, and no reader did anything. Writing a row for one would put
+     * an *allow* in the ninety-day trail attributed to a reader who never asked
+     * — and because §20.3 stores only a keyed digest of the subject, that row
+     * would be indistinguishable from a real one for ever. An audit trail that
+     * cannot be trusted to mean what it says is worse than one that is missing
+     * an entry.
+     *
+     * The simulation is still recorded — as an operator action, in the audit
+     * trail, by {@see PolicySimulator} — which is where a thing an
+     * operator did belongs.
+     *
+     * @param  string  $path  normalised, relative to the version root, in the
+     *                        **mount-relative** space §12.3 writes
+     *                        `path_patterns` against — the resolver's
+     *                        `remainder`, exactly as the serving path passes it
+     * @param  int|null  $now  unix seconds; null reads the clock. An operator
+     *                         asking "will this rule still allow it next week"
+     *                         passes a future value, which is the whole reason
+     *                         `not_before` and `not_after` are decision inputs
+     *                         rather than a scheduled job.
+     */
+    public function simulate(
+        SnapshotMount $mount,
+        SnapshotVersion $version,
+        string $language,
+        string $path,
+        AccessSurface $surface = AccessSurface::Proxy,
+        ?AccessLevel $componentMinAccess = null,
+        ?ReaderContext $reader = null,
+        ?int $now = null,
+        int $searchGeneration = 0,
+    ): AccessDecision {
+        return $this->decideFor(
+            $mount,
+            $version,
+            $language,
+            $path,
+            $surface,
+            $componentMinAccess,
+            $reader ?? ReaderContext::anonymous(),
+            $now ?? time(),
+            $searchGeneration,
+        );
+    }
+
+    /**
+     * The one assembly of {@see EffectiveAccess}'s inputs on the model-shaped
+     * path, shared by the live request and the simulation.
+     *
+     * 🛑 Private, and it has to be: the moment a caller outside this class can
+     * build the request, "the same call site" stops being a structural fact and
+     * becomes a convention. The two public methods differ only in what they do
+     * with the answer.
+     */
+    private function decideFor(
+        SnapshotMount $mount,
+        SnapshotVersion $version,
+        string $language,
+        string $path,
+        AccessSurface $surface,
+        ?AccessLevel $componentMinAccess,
+        ReaderContext $reader,
+        int $now,
+        int $searchGeneration,
+    ): AccessDecision {
+        $project = $mount->project;
+
+        return EffectiveAccess::decide(new AccessRequest(
             projectId: $project->id,
             /*
              * 🛑 Unrecognised lattice values resolve to the **strongest** level,
@@ -137,20 +254,6 @@ final readonly class ReaderGate
              */
             existencePublic: $project->visibility === 'public' && $version->visibility === 'public',
         ));
-
-        DecisionLog::record(
-            decision: $decision,
-            surface: $surface,
-            organisationId: $project->organisationId,
-            projectId: $project->id,
-            versionId: $version->id,
-            mountId: $mount->id,
-            subject: $reader->subject,
-            authzEpoch: $project->authzEpoch,
-            now: $now,
-        );
-
-        return $decision;
     }
 
     /**

@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Auth\MfaEnforcement;
 use App\Auth\Tenancy;
 use App\Auth\TenancyPosture;
 use App\Concerns\HasUuidKey;
@@ -25,6 +26,9 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  * @property string $name
  * @property string $slug
  * @property string $default_timezone
+ * @property bool $mfa_required 🛑 §8.13.4, per organisation; read through
+ *                              {@see MfaEnforcement}, which applies the
+ *                              installation switch that dominates it
  */
 #[Tenancy(
     TenancyPosture::Installation,
@@ -55,6 +59,16 @@ final class Organisation extends Model
             'created_at' => 'datetime:Y-m-d H:i:s.v',
             'updated_at' => 'datetime:Y-m-d H:i:s.v',
             'deleted_at' => 'datetime:Y-m-d H:i:s.v',
+            /*
+             * 🛑 §8.13.4's organisation switch. Cast, because MySQL hands back
+             * `0`/`1` and `App\Auth\MfaEnforcement` compares strictly — a
+             * truthiness check here would be one place where `"0"` is true.
+             *
+             * Read it through {@see \App\Auth\MfaEnforcement}, never directly:
+             * the installation switch dominates, so this column alone does not
+             * say whether enforcement is on.
+             */
+            'mfa_required' => 'boolean',
         ];
     }
 

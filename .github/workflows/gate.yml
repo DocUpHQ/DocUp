@@ -23,6 +23,41 @@ on:
 permissions:
   contents: read
 
+# 🛑 Composer's dist downloads come from `api.github.com`, and unauthenticated
+# requests to it are rate-limited per runner IP. Four consecutive runs in Phase
+# 26a failed `Install dependencies` with `curl error 28 Operation timed out` and
+# `curl error 56 Connection died` on zipball URLs — in a different job each
+# time, which is what a shared quota looks like.
+#
+# Handing Composer the workflow's own token raises the limit from 60 requests an
+# hour to 1000 and removes the class. It is `secrets.GITHUB_TOKEN`: scoped to
+# this repository, expiring with the job, and already the token
+# `actions/checkout` used — so this grants nothing that was not already granted.
+#
+# 🛑 At workflow level because there are three `composer install` sites and a
+# per-step version is a list somebody forgets to extend — the same argument the
+# MFA middleware carries for being on the whole web group. The containerised
+# site needs it passed through explicitly; see that step.
+env:
+  COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.GITHUB_TOKEN }}"}}'
+
+  # 🛑 AND the parallelism, which is what actually fixes it. The token above was
+  # the first diagnosis and it was wrong: authentication raises the REQUEST
+  # quota, and the next run failed the same way with 87 dropped downloads in one
+  # job — `curl error 56 Connection died` eighty-one times and `curl error 28`
+  # six times. Many packages failing at once, not a sequence of refusals.
+  #
+  # That is a CONNECTION-level fault, not a quota one. Composer's downloader
+  # opens 12 simultaneous HTTP connections by default, and `api.github.com`
+  # drops some of them under that load from a shared runner IP — which also
+  # explains why it struck a different job each run and why the token made no
+  # difference.
+  #
+  # Six halves the concurrency. The token stays because it is correct on its own
+  # terms and costs nothing: a higher request quota is worth having whether or
+  # not it was the cause.
+  COMPOSER_MAX_PARALLEL_HTTP: '6'
+
 concurrency:
   group: gate-${{ github.ref }}
   cancel-in-progress: true
@@ -429,9 +464,18 @@ jobs:
       - name: Build the image
         run: docker compose -f '${{ matrix.compose }}' build app
 
+      # 🛑 `-e COMPOSER_AUTH` because this one runs INSIDE the container, and
+      # `docker compose run` passes no host environment through on its own. The
+      # workflow-level variable would be silently absent here, which is the
+      # shape of fix that looks applied and is not — this job is where the
+      # zipball timeouts actually hit.
+      #
+      # A runtime environment variable, never a build argument: it must not
+      # reach an image layer.
       - name: Install dependencies
         run: |
-          docker compose -f '${{ matrix.compose }}' run --rm --no-deps app \
+          docker compose -f '${{ matrix.compose }}' run --rm --no-deps \
+            -e COMPOSER_AUTH -e COMPOSER_MAX_PARALLEL_HTTP app \
             composer install --no-interaction --prefer-dist --no-progress
 
       - name: Start the stack

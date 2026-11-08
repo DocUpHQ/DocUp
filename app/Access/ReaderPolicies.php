@@ -290,6 +290,64 @@ final readonly class ReaderPolicies
      *
      * @return list<string> project slugs, sorted
      */
+    /**
+     * Every project that has a reader policy, for §8.12.22's nightly linter.
+     *
+     * 🛑 Here rather than in the command, and §17's Phase 21 exit criterion is
+     * why: "the architecture test fails when a second class reads the policy
+     * tables". The reason that invariant exists is §8.12.6's first-match-wins —
+     * "not what anybody writes by accident" — and the discipline is worth more
+     * than the three lines it costs. {@see self::projectsWithNoRules()} is the
+     * same shape, for `doctor`.
+     *
+     * Returns the four facts the linter needs and nothing else: it loads each
+     * policy through {@see self::forProject()} anyway, so handing it rows would
+     * be a second decode of the selectors.
+     *
+     * @param  string|null  $projectId  raw 16 bytes to narrow to one project
+     * @return list<array{id: string, organisation_id: string, slug: string, authz_epoch: int}>
+     */
+    public function projectsWithAPolicy(?string $projectId = null): array
+    {
+        $query = DB::table('reader_policies')
+            ->join('projects', 'projects.id', '=', 'reader_policies.project_id')
+            ->whereNull('projects.deleted_at')
+            ->select([
+                'projects.id',
+                'projects.organisation_id',
+                'projects.slug',
+                'projects.authz_epoch',
+            ])
+            ->orderBy('projects.slug');
+
+        if ($projectId !== null) {
+            $query->where('projects.id', $projectId);
+        }
+
+        $projects = [];
+
+        foreach ($query->get() as $row) {
+            $projects[] = [
+                'id' => (string) $row->id,
+                'organisation_id' => (string) $row->organisation_id,
+                'slug' => is_string($row->slug) ? $row->slug : '?',
+                'authz_epoch' => (int) $row->authz_epoch,
+            ];
+        }
+
+        return $projects;
+    }
+
+    /**
+     * Every project whose policy has no rules at all, for `doctor`.
+     *
+     * 🛑 §8.12.19's zero-rule policy denies everybody rather than falling back
+     * to public, so this is a configuration state an operator has to be told
+     * about by name — a project nobody can read looks identical to a project
+     * nobody has published.
+     *
+     * @return list<string> project slugs
+     */
     public function projectsWithNoRules(): array
     {
         $slugs = [];

@@ -98,7 +98,8 @@
             "./vendor/bin/pint --test"
         ],
         "stan": [
-            "./vendor/bin/phpstan analyse --no-progress"
+            "./vendor/bin/phpstan analyse --no-progress --memory-limit=1G",
+            "./vendor/bin/phpstan analyse -c phpstan-strict.neon --no-progress --memory-limit=1G"
         ],
         "arch": [
             "./vendor/bin/pest --filter=Arch"

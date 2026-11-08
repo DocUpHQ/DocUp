@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace App\Models;
 
 use App\Access\DecisionLog;
+use App\Auth\Providers\Federation\ReaderProvisioning;
 use App\Auth\RoleResolver;
 use App\Auth\Tenancy;
 use App\Auth\TenancyPosture;
@@ -58,6 +59,11 @@ use Illuminate\Support\Carbon;
  * @property string $binding_id
  * @property string $subject_hash a keyed digest, never a readable subject
  * @property string|null $display_label
+ * @property string|null $reader_groups 🛑 raw JSON, deliberately uncast — §8.13.7
+ *                                      reconciles it as a whole document and
+ *                                      {@see ReaderProvisioning}
+ *                                      compares the encoded form to decide
+ *                                      whether anything changed
  * @property Carbon|null $last_seen_at
  * @property Carbon|null $deprovisioned_at
  */

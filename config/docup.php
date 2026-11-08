@@ -48,6 +48,37 @@ return [
 
     /*
     |---------------------------------------------------------------------------
+    | Multi-factor authentication (SPEC 8.13.4)
+    |---------------------------------------------------------------------------
+    | 🛑 "MFA MUST be enforceable per installation and per organisation,
+    | required above `project_writer`, via TOTP."
+    |
+    | This is the **installation** half. The organisation half is a column, and
+    | `App\Auth\MfaEnforcement` says why the two scopes have two mechanisms: an
+    | installation posture belongs to whoever has a shell and a `.env`, and a
+    | tenant's belongs to an `org_admin` who has neither.
+    |
+    | 🛑 This switch **dominates**: an organisation cannot opt out of a
+    | requirement the installation imposes. The reverse ordering would make the
+    | tenant switch a vulnerability with a checkbox.
+    |
+    | Default **off**, which is §8.13.4's own word — "enforceable", not
+    | "enforced". Turning it on by default would lock every existing
+    | administrator out on upgrade, including the one who would have to turn it
+    | off. Surfacing the recommendation is `doctor`'s job (§15).
+    |
+    | 🛑 There is no passkey switch here. §8.13.4 says "with passkeys where the
+    | library proves production-ready (§18)" and §18 carries **no passkey row**
+    | — not an unverified one, none. `config/fortify.php` records the same gap
+    | beside the commented-out `Features::passkeys()`. Phase 26a proposes the
+    | amendment that adds the assumption rather than inventing a verdict for it.
+    */
+    'mfa' => [
+        'required' => env('DOCUP_MFA_REQUIRED', false),
+    ],
+
+    /*
+    |---------------------------------------------------------------------------
     | Quality gates (SPEC 9.4)
     |---------------------------------------------------------------------------
     | Three tiers. These thresholds are committed configuration protected by

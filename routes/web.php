@@ -10,6 +10,8 @@ use App\Http\Controllers\Api\ProjectVersionController as ApiProjectVersionContro
 use App\Http\Controllers\Health\LiveController;
 use App\Http\Controllers\Health\ReadyController;
 use App\Http\Controllers\Health\SelfTestController;
+use App\Http\Controllers\MfaEnrolmentController;
+use App\Http\Controllers\PolicySimulatorController;
 use App\Http\Controllers\ProjectController;
 use App\Http\Controllers\ProjectVisibilityController;
 use App\Http\Controllers\Readers\HandoffController;
@@ -101,6 +103,24 @@ Route::middleware(['auth'])
     ->name('reader.handoff');
 
 /*
+| §8.13.4's enrolment page.
+|
+| 🛑 `auth` and nothing else. It must be reachable by precisely the person the
+| MFA gate is holding — see `RequireMfaEnrolment::PERMITTED`, which allows the
+| `mfa.` family for that reason. Adding `tenant` here would be wrong twice: the
+| requirement is a property of the account rather than of an organisation, and a
+| person who has not chosen a tenant yet still has to be able to enrol.
+|
+| 🛑 No `stepup`. §8.13.5's five-minute window guards mutations; the actual
+| mutation is Fortify's `two-factor.enable`, which `config/fortify.php` already
+| puts behind `confirmPassword => true`. A second gate here would mean
+| confirming a password to reach a page that then asks for it again.
+*/
+Route::middleware(['auth'])
+    ->get('account/two-factor', MfaEnrolmentController::class)
+    ->name('mfa.enrol');
+
+/*
 | 🛑 §8.12.18's OIDC legs, on the dashboard origin and **unauthenticated**.
 |
 | The sibling route above is behind `auth` because it mints a handoff code for a
@@ -165,6 +185,27 @@ Route::middleware(['auth', 'tenant'])
         Route::patch('projects/{project}/visibility', ProjectVisibilityController::class)
             ->middleware('stepup:project.visibility.update')
             ->name('projects.visibility.update');
+
+        /*
+         * 🛑 §8.12.25's policy simulator — "MUST exist in the UI".
+         *
+         * A GET, because it is one: the simulation mints nothing and writes
+         * nothing (§8.12.25's answer is a read of the same decision a reader's
+         * request would get), so the answer is linkable and an operator can
+         * paste a surprising result to a colleague who then sees the same
+         * surprise. See the controller for why no credential travels in the
+         * query string.
+         *
+         * 🛑 **No step-up**, deliberately, and the asymmetry with the line
+         * above is the point: §8.13.5's five-minute window guards *mutations*,
+         * and a simulator an operator has to re-authenticate to run is a
+         * simulator they run once. The capability check is
+         * `project.policy.simulate`, which §12.2 withholds from
+         * `project_reader` and `project_writer` precisely so this needs no
+         * second gate.
+         */
+        Route::get('projects/{project}/policy/simulate', PolicySimulatorController::class)
+            ->name('projects.policy.simulate');
     });
 
 /*

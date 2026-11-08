@@ -401,3 +401,14 @@ kept for 90 days. Allows are aggregated to one row per session, version, hour
 and surface, because a reader opening a page with sixty assets authorises sixty
 times and sixty rows per page view is the shape that makes an access log
 unaffordable and then switched off.
+
+## Then check that you were right
+
+Everything on this page is what DocUp decides. Whether it decides what you
+*meant* is a different question, and [Proving who may read
+it](assurance.md) is how you answer it: the policy simulator asks this same
+function "as this identity, on this URL" and reports the rule that decided, and
+the nightly linter tells you when an edit changed what a rule can do.
+
+Read it before you trust a policy. First-match-wins is not what anybody writes
+by accident, and a rule that reads as a restriction can admit anybody.

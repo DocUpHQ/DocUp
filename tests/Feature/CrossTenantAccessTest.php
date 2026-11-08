@@ -9,6 +9,7 @@ namespace Tests\Feature;
 
 use App\Auth\OrganisationContext;
 use App\Auth\Role;
+use App\Auth\RoleResolver;
 use App\Models\Organisation;
 use App\Models\Project;
 use App\Models\User;
@@ -108,6 +109,88 @@ final class CrossTenantAccessTest extends TestCase
             'created_at' => now(),
             'updated_at' => now(),
         ]);
+    }
+
+    /**
+     * Grant a role at **project** scope.
+     *
+     * 🛑 A separate helper rather than a parameter, because the scope is the
+     * whole point of the two tests below: a project-scope assignment is the one
+     * `ResolveOrganisation`'s membership test could not see.
+     */
+    private function grantOnProject(User $user, Project $project, Role $role): void
+    {
+        DB::table('role_assignments')->insert([
+            'id' => Uuid::v7(),
+            'organisation_id' => $project->organisation_id,
+            'subject_type' => 'user',
+            'subject_id' => $user->id,
+            'scope_type' => 'project',
+            'scope_id' => $project->id,
+            'role' => $role->value,
+            'source' => 'manual',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
+
+    // ------------------------------------------------- the Phase 26a amendment
+
+    /**
+     * 🛑 **A project-scoped role reaches their own organisation's pages.**
+     *
+     * Regression test for a defect Phase 26a found: `ResolveOrganisation`'s
+     * membership test asked {@see RoleResolver::rolesFor()} with no
+     * project, and that call includes project-scope assignments only when it is
+     * handed one. So **every** project-scoped role — `project_admin`,
+     * `project_maintainer`, `project_writer`, `project_reader` — got a 404 from
+     * every `/o/{organisation}/` page on the installation, which is every
+     * dashboard page there is.
+     *
+     * 🛑 The symptom was indistinguishable from a correct tenancy refusal,
+     * which is exactly why it survived four phases of dashboard work: §8.2.2
+     * makes a stranger's request a 404, so "project admin sees 404" reads as
+     * the product working. It surfaced only when §8.12.25's simulator gave a
+     * `project_admin` a capability and §17 required a holder to be able to use
+     * it.
+     */
+    public function test_a_project_scoped_role_reaches_their_own_organisation(): void
+    {
+        $maintainer = User::query()->create([
+            'name' => 'Beta Maintainer',
+            'email' => 'beta-'.bin2hex(random_bytes(4)).'@example.test',
+            'password' => 'x',
+        ]);
+
+        $this->grantOnProject($maintainer, $this->betaProject, Role::ProjectMaintainer);
+
+        $this->actingAs($maintainer)
+            ->get('/o/'.$this->beta->slug.'/projects/'.$this->betaProject->slug)
+            ->assertSuccessful();
+    }
+
+    /**
+     * 🛑 And the fix admits nobody it should not: a project-scoped role in one
+     * organisation still gets a 404 from another.
+     *
+     * The containment is in the query rather than in a second check —
+     * {@see RoleResolver::rolesAnywhere()} limits the project clause
+     * to `projects.organisation_id = ?` — so widening the membership test did
+     * not widen the tenancy boundary.
+     */
+    public function test_a_project_scoped_role_still_cannot_reach_another_organisation(): void
+    {
+        $maintainer = User::query()->create([
+            'name' => 'Beta Maintainer',
+            'email' => 'beta-'.bin2hex(random_bytes(4)).'@example.test',
+            'password' => 'x',
+        ]);
+
+        $this->grantOnProject($maintainer, $this->betaProject, Role::ProjectMaintainer);
+
+        $this->actingAs($maintainer)
+            ->get('/o/'.$this->alpha->slug.'/projects')
+            ->assertNotFound();
     }
 
     // ------------------------------------------------------------ the UI route

@@ -88,6 +88,7 @@ enum Role: string
                 Capability::ProjectDelete,
                 Capability::ProjectRoleAssign,
                 Capability::ProjectVisibilityUpdate,
+                Capability::ProjectPolicySimulate,
                 Capability::ProjectVersionRollback,
                 Capability::ProjectInheritanceOverride,
                 Capability::AuditRead,
@@ -103,6 +104,7 @@ enum Role: string
                 Capability::InstallationAuditExport,
                 Capability::OrganisationView,
                 Capability::ProjectView,
+                Capability::ProjectPolicySimulate,
                 Capability::AuditRead,
                 Capability::TokenRevoke,
             ],
@@ -110,6 +112,7 @@ enum Role: string
             self::InstallationAuditor => [
                 Capability::OrganisationView,
                 Capability::ProjectView,
+                Capability::ProjectPolicySimulate,
                 Capability::AuditRead,
             ],
 
@@ -128,6 +131,7 @@ enum Role: string
                 Capability::ProjectDelete,
                 Capability::ProjectRoleAssign,
                 Capability::ProjectVisibilityUpdate,
+                Capability::ProjectPolicySimulate,
                 Capability::ProjectVersionRollback,
                 Capability::ProjectInheritanceOverride,
                 Capability::AuditRead,
@@ -144,6 +148,7 @@ enum Role: string
             self::OrgAuditor => [
                 Capability::OrganisationView,
                 Capability::ProjectView,
+                Capability::ProjectPolicySimulate,
                 Capability::AuditRead,
             ],
 
@@ -154,6 +159,7 @@ enum Role: string
                 Capability::ProjectDelete,
                 Capability::ProjectRoleAssign,
                 Capability::ProjectVisibilityUpdate,
+                Capability::ProjectPolicySimulate,
                 Capability::ProjectVersionRollback,
                 Capability::AuditRead,
                 Capability::TokenMint,
@@ -162,6 +168,7 @@ enum Role: string
 
             self::ProjectMaintainer => [
                 Capability::ProjectView,
+                Capability::ProjectPolicySimulate,
                 Capability::ProjectUpdate,
                 Capability::ProjectVersionPublish,
                 // Maintainer is where rollback begins. See the capability's own

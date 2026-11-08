@@ -79,8 +79,36 @@ final class ResolveOrganisation
          * which includes installation-scope roles: §12.1's chain means an
          * installation owner is a member of every organisation without needing
          * a row per tenant.
+         *
+         * 🛑 **AMENDED (Phase 26a).** It also includes a role held at
+         * **project** scope, and the first version of this check could not see
+         * one: {@see RoleResolver::rolesFor()} includes project-scope
+         * assignments only when it is handed a project, and this call passes
+         * null. So every project-scoped role — `project_admin`,
+         * `project_maintainer`, `project_writer`, `project_reader` — got a 404
+         * from **every** `/o/{organisation}/` page on the installation, which is
+         * every dashboard page there is.
+         *
+         * The sentence above was already right; the implementation did not
+         * match it. A `project_admin` of a project in this organisation plainly
+         * holds a role that bears on it, and §12.1's chain is additive:
+         * §8.2.9's inheritance flag removes the organisation's grants from a
+         * project, never a project's grants from their holder.
+         *
+         * 🛑 Found in Phase 26a because §8.12.25's simulator carries
+         * `project.policy.simulate`, which §12.2 gives a `project_admin` and a
+         * `project_maintainer` — and §17's exit criterion is "an operator can
+         * prove what any identity may read". A capability no holder can reach
+         * is a capability that lies, so the phase could not be finished without
+         * this. The symptom was indistinguishable from a tenancy refusal, which
+         * is why it survived four phases of dashboard work.
+         *
+         * {@see RoleResolver::rolesAnywhere()} asks the question this check
+         * means: every role, in every scope, limited to the installation plus
+         * this organisation and its own projects — so it cannot admit a
+         * stranger, and the 404 above still hides a tenant from one.
          */
-        if ($this->roles->rolesFor($user, null, $organisation->id) === []) {
+        if ($this->roles->rolesAnywhere($user, $organisation->id) === []) {
             abort(404);
         }
 

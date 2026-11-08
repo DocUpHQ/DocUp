@@ -12,4 +12,5 @@ nav:
   - Private without an IdP: providers.html
   - Connecting an IdP: oidc.html
   - Connecting SAML: saml.html
+  - Proving who may read it: assurance.html
   - Running it: operations.html

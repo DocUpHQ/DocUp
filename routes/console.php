@@ -204,3 +204,38 @@ Schedule::command('docup:readers:maintain')
     ->timezone('UTC')
     ->withoutOverlapping()
     ->onOneServer();
+
+/*
+| §8.12.22's **nightly** policy linter.
+|
+| > "a nightly policy linter that re-validates every active rule and alerts on
+| > reachability changes"
+|
+| 🛑 Nightly because the requirement says nightly, and the requirement says
+| nightly because what it catches is not a property of the rule. Write-time
+| validation already refuses a malformed requirement, a regex path pattern, an
+| unsatisfiable tree (§8.12.7) and a binding named as the wrong leaf kind
+| (§8.12.17) — and every one of those checks is still true tomorrow. What
+| changes overnight is the world the rule points at: a binding deleted, moved
+| out of §8.12.3's scope, dropped out of `active`, or re-typed. The rule is then
+| still valid, still matches, still consumes §8.12.6's first-match slot, and can
+| no longer be satisfied by anybody.
+|
+| 🛑 **03:20 UTC rather than on the hour**, for the reason `docup:purge` is
+| staggered: the audit chain takes one writer per organisation
+| ({@see \App\Audit\Audit}), and a linter that alerted at the same moment the
+| anchor ran would contend with it for the lock on every installation that has
+| both — on the one night something had changed, which is the night the alert
+| matters.
+|
+| 🛑 It runs even on an installation where nobody has written a policy: the
+| command's own first query is "every project with a reader policy", which is
+| empty and cheap. A schedule conditional on there being work is a schedule that
+| silently stops running once somebody deletes their last policy and starts a
+| new one.
+*/
+Schedule::command('docup:policy:lint')
+    ->dailyAt('03:20')
+    ->timezone('UTC')
+    ->withoutOverlapping()
+    ->onOneServer();

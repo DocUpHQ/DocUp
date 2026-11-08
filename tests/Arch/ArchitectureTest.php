@@ -2341,4 +2341,308 @@ final class ArchitectureTest extends TestCase
             '🛑 SPEC 8.12.12: one opener, one signer: '.implode('; ', $offenders),
         );
     }
+
+    /**
+     * 🛑 SPEC 17's Phase 26a exit criterion, as a structural fact rather than a
+     * behavioural one.
+     *
+     * > "the same `EffectiveAccess` call site, asserted by test, **not a
+     * > reimplementation**"
+     *
+     * `PolicySimulatorTest` asserts the simulator's answer byte-equals a live
+     * response's decision header, which is the strongest behavioural proof
+     * available — and it is still a proof about today's fixtures. A simulator
+     * that grew its own `AccessRequest` would keep passing that test for as
+     * long as the two assemblies happened to agree, and would diverge on the
+     * first conjunct somebody added to one and not the other.
+     *
+     * So the sharing is asserted by shape. `ReaderGate::authorise()` and
+     * `ReaderGate::simulate()` must both delegate: neither may construct an
+     * `AccessRequest` or call the decision function, because both live in the
+     * private method they share. The one difference between them is what they
+     * do with the answer, and SPEC 20.3 is why: a simulation is not a reader
+     * request and must leave no row.
+     */
+    public function test_the_simulator_shares_the_live_paths_assembly(): void
+    {
+        $gate = $this->code(base_path('app/Access/ReaderGate.php'));
+
+        $bodies = [];
+
+        foreach (['authorise', 'simulate', 'decideFor'] as $method) {
+            $start = strpos($gate, 'function '.$method.'(');
+
+            $this->assertNotFalse($start, 'ReaderGate::'.$method.'() is missing');
+
+            /* To the next `function ` keyword, or the end of the class. */
+            $next = strpos($gate, 'function ', $start + 9);
+            $bodies[$method] = substr($gate, $start, $next === false ? null : $next - $start);
+        }
+
+        $offenders = [];
+
+        foreach (['authorise', 'simulate'] as $method) {
+            foreach (['new AccessRequest', 'EffectiveAccess::'] as $needle) {
+                if (str_contains($bodies[$method], $needle)) {
+                    $offenders[] = 'ReaderGate::'.$method.'() contains `'.$needle.'`';
+                }
+            }
+        }
+
+        /* And the shared method is the one that does both, or there is nothing shared. */
+        foreach (['new AccessRequest', 'EffectiveAccess::decide'] as $needle) {
+            if (! str_contains($bodies['decideFor'], $needle)) {
+                $offenders[] = 'ReaderGate::decideFor() no longer contains `'.$needle.'`';
+            }
+        }
+
+        /*
+         * SPEC 20.3's asymmetry, also by shape: the live path records and the
+         * simulation does not. Asserted here as well as in the feature test
+         * because the feature test would pass against a `simulate()` that
+         * logged to a table nobody counted.
+         */
+        if (! str_contains($bodies['authorise'], 'DecisionLog::record')) {
+            $offenders[] = 'ReaderGate::authorise() no longer records to SPEC 20.3 log';
+        }
+
+        if (str_contains($bodies['simulate'], 'DecisionLog')) {
+            $offenders[] = 'ReaderGate::simulate() writes to SPEC 20.3 log';
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'SPEC 17 Phase 26a: the simulator must share the assembly of the live path, not copy it: '
+                .implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.12.25: and the simulator never builds a reader context of its
+     * own.
+     *
+     * The identity half of "as this identity" is as easy to get wrong as the
+     * decision half and much easier to get wrong *quietly*: SPEC 8.12.19's
+     * degraded short-circuit, the session floor that only a portal session can
+     * reach, the leaf union SPEC 12.3 needs for a rule naming a binding, and the
+     * per-leaf scopes Phase 23 added are all merge rules with a plausible wrong
+     * answer. `ProviderOutcome::toReaderContext()` holds them, reached through
+     * `ReaderResolver::establishAs()`, and the simulator must go through that
+     * door.
+     *
+     * A `new ReaderContext(` in the simulator would be a reader this
+     * installation cannot produce, answered about confidently.
+     */
+    public function test_the_simulator_builds_no_reader_context_of_its_own(): void
+    {
+        $simulator = $this->code(base_path('app/Access/PolicySimulator.php'));
+
+        $offenders = [];
+
+        foreach (['new ReaderContext', 'ReaderContext::member', 'ReaderContext::authenticated'] as $needle) {
+            if (str_contains($simulator, $needle)) {
+                $offenders[] = 'PolicySimulator contains `'.$needle.'`';
+            }
+        }
+
+        /* It must reach the live merge, or it is not sharing anything. */
+        if (! str_contains($simulator, 'establishAs(')) {
+            $offenders[] = 'PolicySimulator no longer goes through ReaderResolver::establishAs()';
+        }
+
+        /* And it must not decide: SPEC 4.3/7 keeps ReaderGate the sole call site. */
+        foreach (['EffectiveAccess::', 'new AccessRequest', 'new AccessDecision'] as $needle) {
+            if (str_contains($simulator, $needle)) {
+                $offenders[] = 'PolicySimulator contains `'.$needle.'`';
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'SPEC 8.12.25: the simulator renders one decision and establishes no reader of its '
+                .'own: '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.13.4's gate is on the **web group**, not a per-route alias.
+     *
+     * The same reasoning `EnforceSessionLifetime` carries in `bootstrap/app.php`,
+     * and the same failure mode: a per-route list is a list the next phase's new
+     * page is missing from, and the symptom would be an administrator using the
+     * dashboard without a second factor — which looks exactly like it working.
+     *
+     * Asserted by reading the bootstrap file because that is where the decision
+     * lives. A behavioural test would pass against an alias applied to every
+     * route that exists today.
+     */
+    public function test_the_mfa_gate_is_on_the_whole_web_group(): void
+    {
+        $bootstrap = $this->code(base_path('bootstrap/app.php'));
+
+        $append = strpos($bootstrap, 'web(append:');
+
+        $this->assertNotFalse($append, 'the web group no longer appends middleware');
+
+        $closing = strpos($bootstrap, ']);', $append);
+        $group = substr($bootstrap, $append, $closing === false ? null : $closing - $append);
+
+        $this->assertStringContainsString(
+            'RequireMfaEnrolment::class',
+            $group,
+            'SPEC 8.13.4: a per-route alias is a list somebody forgets to extend',
+        );
+
+        /*
+         * And NOT an alias as well. Two registrations would run the gate twice
+         * per request on the routes that carried both — harmless today and the
+         * kind of duplication that makes the next person remove the wrong one.
+         */
+        $aliases = strpos($bootstrap, 'alias([');
+
+        if ($aliases !== false) {
+            $aliasClosing = strpos($bootstrap, ']);', $aliases);
+
+            $this->assertStringNotContainsString(
+                'RequireMfaEnrolment::class',
+                substr($bootstrap, $aliases, $aliasClosing === false ? null : $aliasClosing - $aliases),
+            );
+        }
+    }
+
+    /**
+     * 🛑 SPEC 8.13.4: one decider for whether MFA is enforced.
+     *
+     * Two switches — `docup.mfa.required` for the installation and
+     * `organisations.mfa_required` for a tenant — and the installation one
+     * DOMINATES. That ordering is a rule, and a rule expressed in one place is
+     * a rule; expressed in two it is a coincidence. A page that read the column
+     * and showed "MFA: off" while the installation required it would be telling
+     * an operator the opposite of the truth.
+     *
+     * `MfaEnrolmentController` and the middleware are permitted to ASK
+     * `MfaEnforcement`; what they may not do is read either switch themselves.
+     */
+    public function test_only_one_class_decides_whether_mfa_is_enforced(): void
+    {
+        $permitted = [
+            'app/Auth/MfaEnforcement.php',
+            'config/docup.php',
+            'app/Models/Organisation.php',
+            'database/migrations/',
+        ];
+
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            foreach ($permitted as $allowed) {
+                if (str_starts_with($relative, $allowed)) {
+                    continue 2;
+                }
+            }
+
+            $source = $this->code($file);
+
+            /*
+             * The three shapes that READ the switch. A bare `mfa_required`
+             * would also match an audit payload key — `App\Auth\Invitations`
+             * records one on acceptance — and flagging that would be flagging a
+             * file for saying the word, which is how an architecture test earns
+             * an allowlist entry it does not need.
+             */
+            foreach (["'docup.mfa.required'", '->mfa_required', "where('mfa_required'"] as $needle) {
+                if (str_contains($source, $needle)) {
+                    $offenders[] = $relative.' reads an MFA switch directly';
+
+                    break;
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            array_values(array_unique($offenders)),
+            'SPEC 8.13.4: the installation switch dominates, and that ordering has one home: '
+                .implode('; ', array_unique($offenders)),
+        );
+    }
+
+    /**
+     * 🛑 The configured Inertia page directory exists **with the case it is
+     * configured with**.
+     *
+     * A platform-dependent trap, found in Phase 26a and worth a permanent
+     * tripwire because of how it hides. `inertiajs/inertia-laravel` defaults
+     * `pages.paths` to `resource_path('js/pages')` — lowercase — while this
+     * repository uses Laravel's own `resources/js/Pages`. On a
+     * case-insensitive filesystem (Windows, macOS as shipped) the lookup
+     * succeeds; on Linux it does not.
+     *
+     * The first test here to call `assertInertia()` therefore passed on a
+     * developer's machine and failed in CI with "Inertia page component file
+     * [X] does not exist" for a file that plainly existed — for any page, with
+     * nothing wrong with the page, the route or the controller.
+     * `config/inertia.php` corrects the path; this is what stops it drifting
+     * back.
+     *
+     * 🛑 The check is a **directory listing**, and the two cheaper versions
+     * were both tried and both useless. `is_dir()` returns true for the wrong
+     * case on any case-insensitive filesystem. `realpath()` was the next
+     * attempt and is no better here: under a Docker Desktop bind mount a Linux
+     * container inherits the host's case-insensitivity, so `realpath()` returns
+     * the spelling it was *asked* for rather than the one on disk — the planted
+     * lowercase path passed. `scandir()` reports the real entry names on every
+     * filesystem, because the names are what it is listing.
+     */
+    public function test_the_inertia_page_directory_is_configured_with_its_real_case(): void
+    {
+        $paths = config('inertia.pages.paths');
+
+        $this->assertIsArray($paths);
+        $this->assertNotSame([], $paths, 'Inertia has no page path configured at all');
+
+        foreach ($paths as $configured) {
+            $this->assertIsString($configured);
+
+            $normalised = rtrim(str_replace(DIRECTORY_SEPARATOR, '/', $configured), '/');
+            $parent = dirname($normalised);
+            $name = basename($normalised);
+
+            $this->assertDirectoryExists($parent, 'the Inertia page path has no parent directory');
+
+            $entries = scandir($parent);
+
+            $this->assertNotFalse($entries);
+
+            $this->assertContains(
+                $name,
+                $entries,
+                'the configured Inertia page directory is not on disk under that exact name, '
+                    .'which resolves on a case-insensitive filesystem and fails on Linux: '
+                    .$configured.' — the parent holds '.implode(', ', array_values(array_diff(
+                        $entries,
+                        ['.', '..'],
+                    ))),
+            );
+        }
+
+        /*
+         * And every page a controller renders is under it. Asserted by finding
+         * the components rather than by trusting the directory, because the
+         * directory existing is not the property that matters — the property is
+         * that `assertInertia()` can resolve what `Inertia::render()` names.
+         */
+        $root = rtrim(str_replace(DIRECTORY_SEPARATOR, '/', (string) $paths[0]), '/');
+        $pages = glob($root.'/*/*.vue') ?: [];
+
+        $this->assertGreaterThan(
+            0,
+            count($pages),
+            'no Inertia pages found under the configured path, so the assertion helper is untested',
+        );
+    }
 }

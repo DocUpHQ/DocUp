@@ -10,9 +10,11 @@ namespace App\Readers;
 use App\Access\AccessDecision;
 use App\Access\AccessSurface;
 use App\Access\EffectiveAccess;
+use App\Access\PolicySimulator;
 use App\Access\ReaderContext;
 use App\Auth\Providers\ProviderResolver;
 use App\Auth\Providers\ReaderPresentation;
+use App\Http\Controllers\Readers;
 use App\Readers\Grants\GrantMinter;
 use App\Readers\Grants\GrantVerifier;
 use App\Serving\SnapshotProject;
@@ -209,6 +211,81 @@ final readonly class ReaderResolver
             $sessionRejected = $session === null;
         }
 
+        return $this->establishAs(
+            $session,
+            $project,
+            new ReaderPresentation(
+                bearer: self::bearer($request),
+                shareSecret: self::cookie($request, ReaderCookies::SHARE),
+                /*
+                 * 🛑 §8.12.16's password, from the request rather than a
+                 * session.
+                 *
+                 * It is read on **every** request rather than exchanged once
+                 * for a cookie, which is a deliberate difference from the share
+                 * link. A share link's secret is in a URL and has to leave it;
+                 * a password is typed, and converting it to a long-lived cookie
+                 * would mean storing a reusable credential in the browser for a
+                 * secret the operator can only rotate by telling everybody.
+                 *
+                 * 🛑 The parameter is namespaced for the reason
+                 * {@see \App\Http\Middleware\ConvertShareLink::PARAMETER} is: a
+                 * bare `password` would collide with a generator's own form
+                 * handling, and a collision here means somebody's search box
+                 * being treated as a credential.
+                 */
+                password: self::password($request),
+                /*
+                 * 🛑 `$request->ip()`, never a header. §8.9.4 forbids a trusted
+                 * request header anywhere in the request path, so this is the
+                 * `TrustProxies`-resolved address and not `X-Forwarded-For` as
+                 * sent — the same source
+                 * {@see \App\Http\Middleware\OnlyFromLoopback} reads, and for
+                 * the same reason.
+                 */
+                remoteAddress: $request->ip(),
+            ),
+            credentialRejected: $credentialRejected || $sessionRejected,
+        );
+    }
+
+    /**
+     * 🛑 The merge of a session and every binding in scope, with **no request
+     * in sight**.
+     *
+     * Everything above this line is about what a request carried; everything
+     * below is about what those credentials mean. The split is here rather than
+     * nowhere because §8.12.25's policy simulator needs the second half and
+     * must not have the first: an operator asking "as this identity, on this
+     * URL" has no cookies to read, and a simulator that built its own
+     * {@see ReaderContext} would be a second answer to the question §17 insists
+     * has one.
+     *
+     * So {@see PolicySimulator} calls this with a
+     * {@see SessionRecord} it assembled from stored facts and a presentation of
+     * the credentials the operator chose to hypothesise. Every merge rule —
+     * §8.12.19's degraded short-circuit, the session floor, the leaf union,
+     * §12.3's per-leaf scopes — runs here and nowhere else, so the simulator
+     * cannot drift from the serving path by construction rather than by
+     * discipline.
+     *
+     * 🛑 **This method performs no writes and must not acquire any.** The
+     * drivers it drives are read-only today (no rate-limit slot, no use count,
+     * no audit row), which is what makes it safe for a simulation to run the
+     * real thing. A driver that later wants to record something must record it
+     * at its own call site in {@see Readers} and not
+     * here, or every simulation becomes a write.
+     *
+     * @param  SessionRecord|null  $session  null for a reader with no session,
+     *                                       which is the anonymous and
+     *                                       credential-only cases both
+     */
+    public function establishAs(
+        ?SessionRecord $session,
+        SnapshotProject $project,
+        ReaderPresentation $presented,
+        bool $credentialRejected,
+    ): EstablishedReader {
         /*
          * 🛑 **Phase 23: the bindings run even when a session resolved.**
          *
@@ -225,35 +302,8 @@ final readonly class ReaderResolver
          */
         $sessionContext = $session === null ? null : $this->sessions->contextFor($session);
 
-        $outcome = $this->providers->resolve($project, new ReaderPresentation(
-            bearer: self::bearer($request),
-            shareSecret: self::cookie($request, ReaderCookies::SHARE),
-            /*
-             * 🛑 §8.12.16's password, from the request rather than a session.
-             *
-             * It is read on **every** request rather than exchanged once for a
-             * cookie, which is a deliberate difference from the share link.
-             * A share link's secret is in a URL and has to leave it; a password
-             * is typed, and converting it to a long-lived cookie would mean
-             * storing a reusable credential in the browser for a secret the
-             * operator can only rotate by telling everybody.
-             *
-             * 🛑 The parameter is namespaced for the reason
-             * {@see \App\Http\Middleware\ConvertShareLink::PARAMETER} is: a
-             * bare `password` would collide with a generator's own form
-             * handling, and a collision here means somebody's search box being
-             * treated as a credential.
-             */
-            password: self::password($request),
-            /*
-             * 🛑 `$request->ip()`, never a header. §8.9.4 forbids a trusted
-             * request header anywhere in the request path, so this is the
-             * `TrustProxies`-resolved address and not `X-Forwarded-For` as
-             * sent — the same source {@see \App\Http\Middleware\OnlyFromLoopback}
-             * reads, and for the same reason.
-             */
-            remoteAddress: $request->ip(),
-            sessionSubject: $sessionContext?->subject,
+        $outcome = $this->providers->resolve($project, $presented->withSession(
+            $sessionContext?->subject,
             /*
              * 🛑 §12.3 lets a rule name a specific binding, so a
              * session-backed leaf has to say *which* one vouched for it —
@@ -263,7 +313,7 @@ final readonly class ReaderResolver
              *
              * Null for a member, which is what makes `oidc` refuse them.
              */
-            sessionBinding: $session === null ? null : $this->sessions->bindingFor($session),
+            $session === null ? null : $this->sessions->bindingFor($session),
         ));
 
         /*
@@ -276,7 +326,7 @@ final readonly class ReaderResolver
             return new EstablishedReader(
                 context: ReaderContext::anonymous(),
                 session: $session,
-                credentialRejected: $credentialRejected || $sessionRejected,
+                credentialRejected: $credentialRejected,
                 degradedBinding: $outcome->degradedBinding,
             );
         }
@@ -291,7 +341,7 @@ final readonly class ReaderResolver
              */
             context: $outcome->toReaderContext($sessionContext),
             session: $session,
-            credentialRejected: $credentialRejected || $sessionRejected,
+            credentialRejected: $credentialRejected,
         );
     }
 
