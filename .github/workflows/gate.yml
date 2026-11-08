@@ -824,6 +824,117 @@ jobs:
   # ---------------------------------------------------------------------------
   # 🛑 SPEC 17 Phase 24's exit criterion, against a REAL Keycloak.
   # ---------------------------------------------------------------------------
+  # 🛑 SPEC 9.4's mutation score, which this repository has owed since Phase 04.
+  #
+  # > "**Security-critical phases:** additionally a mutation score ≥75% on
+  # > changed domain code"
+  #
+  # The build log carried it as "needs Infection, which is not installed" for
+  # eight phases. That reason went out of date: the project is on
+  # `pestphp/pest ^5`, and Pest 5 has mutation testing built in. The threshold
+  # has been committed in `config/docup.php` the whole time, and the
+  # `thresholds` job already fails when it decreases -- so the configuration,
+  # the check and the tool were all present and only the step was missing.
+  #
+  # 🛑 Its own job, and for a reason the other integration jobs share: it needs
+  # `coverage: pcov`, which the baseline gate deliberately sets to `none`
+  # because coverage instrumentation slows every test in the suite. A failure
+  # here should also name the gate rather than the suite.
+  #
+  # 🛑 The class list is DELIBERATELY SHORT and is meant to grow. A first step
+  # that covered every namespace would either take an hour or go red on code
+  # nobody is changing, and neither teaches a phase anything. It starts with
+  # the one class Phase 26b added that is pure decision logic over untrusted
+  # input -- the CIDR matcher behind an API token's address binding, whose
+  # wrong answer is either an admitted stranger or a locked-out operator.
+  # A later phase adds its own classes beside it; the threshold is shared.
+  # ---------------------------------------------------------------------------
+  mutation:
+    name: mutation score on changed domain code
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: docup-root
+          MYSQL_DATABASE: docup_test
+          MYSQL_USER: docup
+          MYSQL_PASSWORD: docup
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pdocup-root"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+
+    env:
+      DB_HOST: 127.0.0.1
+      DB_DATABASE: docup_test
+      NO_COLOR: '1'
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pdo_mysql, intl, zip, gd, bcmath, sodium, pcntl, redis, ldap
+          # 🛑 The one job that wants it. Mutation testing cannot map a mutation
+          # to a covering test without coverage data, and Pest reports every
+          # mutation as `UNCOVERED` rather than failing when it is absent --
+          # which would be a gate that passed while measuring nothing.
+          coverage: pcov
+
+      - name: Provide an environment file before anything boots the app
+        run: cp .env.example .env
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare the application
+        run: |
+          set -euo pipefail
+          php artisan key:generate
+          php artisan migrate --force --no-interaction
+
+      # 🛑 `--min` comes from the committed threshold rather than being written
+      # here, so the `thresholds` job's "a threshold must not decrease" check
+      # governs this gate too. A number in the workflow would be a second copy
+      # that could drift below the first.
+      - name: SPEC 9.4's mutation score
+        run: |
+          set -o pipefail
+
+          min="$(
+            php -r 'require "vendor/autoload.php";
+              $app = require "bootstrap/app.php";
+              $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+              echo (int) config("docup.gates.security_critical.mutation_min_score");'
+          )"
+
+          if [ -z "$min" ] || [ "$min" -lt 1 ]; then
+            echo "::error::could not read docup.gates.security_critical.mutation_min_score"
+            exit 1
+          fi
+
+          echo "minimum mutation score: ${min}%"
+
+          ./vendor/bin/pest \
+            --mutate \
+            --covered-only \
+            --min="$min" \
+            --class='App\Auth\CidrRange' \
+            --coverage \
+            tests/Feature/InvitationAndTokenTest.php \
+            tests/Feature/Providers/ProviderCorpusTest.php \
+            --colors=never 2>&1 | tee /tmp/mutation.log
+
+      - name: The score, on failure
+        if: failure()
+        run: tail -120 /tmp/mutation.log || true
+
+  # ---------------------------------------------------------------------------
   # 🛑 SPEC 17's Phase 26b exit criterion 1, against a REAL directory.
   #
   # > "An LDAP group removal drops access on the next decision."
