@@ -8,6 +8,7 @@ nav:
   - Who may read it: access.md
   - Private without an IdP: providers.md
   - Connecting an IdP: oidc.md
+  - Branding and themes: branding.md
   - Running it: operations.md
 
 # 🛑 Flat .html URLs, not MkDocs' default directory URLs.

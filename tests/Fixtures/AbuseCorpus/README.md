@@ -29,6 +29,7 @@ time pressure (§9.4).
 | `archives/build_archives.py` | Emits the hostile archives (zip-slip, symlink, hardlink, ratio bomb, reserved filenames). Binary, so generated rather than committed. **Reference only** — see below. |
 | `../../Support/HostileArchives.php` | The same archives, in PHP. This is the one CI runs. |
 | `../../Support/ArchiveWriter.php` | Writes tar and zip headers by hand, because no library will emit a zip-slip entry or a hard link. |
+| `../../Support/BrandingHostiles.php` | The hostile SVGs, the GIF/HTML polyglot and the pixel bomb, one method per `builder` name. PHP, for the reason the archive builders are. |
 
 Run `python saml/build_saml.py` to materialise the XML fixtures into `_generated/`, which is
 git-ignored.
@@ -61,6 +62,7 @@ gate. If the two disagree, `corpus.json` and the PHP builders are right.
 | `header` | §8.9.5 inbound header stripping, §8.9.4 no trusted resolver | 04 |
 | `runner` | §8.5.13 the typed run specification and fixed argv template, §8.5.7 credential separation, §8.5.21 log caps | 06, 07 |
 | `provider` | §8.12.4 the installation-scope narrowing, §8.12.18 framework-enforced protocol validation, §8.12.19 the binding lifecycle, §8.12.23 the disclosure boundary | 23, 26b |
+| `branding` | §8.14.2 the token grammar, §8.14.3 structured chrome content, §8.14.8 no tenant code below installation, §8.14.11 the asset pipeline, §8.14.13 email slots, §8.14.16 frame-ancestors | 27 |
 
 ### Phase 05 restated the `git_url` expectations
 
@@ -177,6 +179,54 @@ Rule 3 still holds for all ten: each names a status code or a stable identifier.
 Two vocabularies were **declared** rather than described in prose for this
 — `LdapRejection` and `MtlsRejection` — so a case naming an outcome that no
 longer exists fails CI instead of reading as plausible.
+
+### Phase 27 added forty `branding` cases, and five of them are not rejections
+
+🛑 **Those five are the interesting part**, and they are why this category needed
+two declared non-rejection outcomes rather than one coarse `reject`:
+
+- `branding-019` — an announcement carrying a `<script>` and an `onerror` image
+  is **sanitised**, not refused. §8.14.3 gives the announcement "a tiny
+  inline-tag allowlist", so the emphasis survives and the script does not.
+  Refusing the whole announcement would be easier to implement and would mean
+  every tenant whose rich-text editor emitted a stray tag got an error they
+  could not act on.
+- `branding-023`, `-024`, `-027` to `-030` — an SVG logo carrying script, an
+  event handler, a `foreignObject`, an external `<use>`, a SMIL `animate`
+  writing `href`, or a `style` attribute with a remote `url()` is
+  **sanitised**. §17's own criterion is "sanitised **and renders**", so a case
+  asserting a refusal would assert the opposite of the requirement.
+- `branding-032` — a GIF whose bytes continue into an HTML document with a
+  script is **accepted**. §8.14.11 re-encodes rather than inspects, so the
+  stored bytes are a PNG DocUp wrote from pixels and the attacker's bytes are
+  simply not in it. The test asserts that of the **stored** file, which is what
+  the claim actually is; asserting only that the upload succeeded would pass for
+  a pipeline that stored the polyglot verbatim.
+- `branding-039` — an email slot carrying raw HTML is **accepted** and inert.
+  §8.14.13 is "Markdown with HTML **disabled**", and disabled means the text is
+  escaped before any construct is matched, so by the time a pattern runs every
+  `<` is already `&lt;`.
+
+🛑 **And three are refusals where the rest of the pipeline sanitises**, which is
+the one asymmetry worth understanding. `branding-025` (a DOCTYPE declaring an
+external entity), `branding-026` (entity expansion with no external entity) and
+`branding-031` (an HTML root element) are refused outright, because a DOCTYPE
+acts on the **parser** — upstream of any allowlist — and a document whose
+meaning depends on a declaration DocUp refuses to expand is better refused than
+silently reinterpreted.
+
+Rule 3 holds for all forty: each names an exact `App\Branding\TokenRejection`
+value or one of the two declared outcomes, `sanitised` and `accepted`.
+`BrandingCorpusTest` enforces four things a review cannot — every `expect` is an
+outcome that exists, every case names a `subject` the test has a driver for,
+every `builder` a case names exists, and every case produces what it claims.
+
+🛑 One case records a mistake rather than an attack. `branding-040`'s first draft
+used `scheme.default` at mount scope and was **wrong**: §8.14.1 gives that token
+*version* depth, and a version is deeper than a mount, so the write is correctly
+allowed. The case now uses `security.frame-ancestors`, which §8.14.16 makes per
+project — and the note keeps the error, because a depth check has two directions
+and it is easy to test only one.
 
 ## Adding a case
 

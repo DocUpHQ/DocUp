@@ -1,0 +1,244 @@
+/* SPDX-FileCopyrightText: 2026 The DocUp contributors */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * 🛑 §8.14.4's "one bundle": the chrome stylesheet, compiled once at release
+ * time and shared by every project on the installation.
+ *
+ * Every colour, length and family here is a `var(--docup-*)` with the
+ * installation default as its fallback. That is what makes §8.14's goal
+ * possible — "two projects look different from the same build artifact, with
+ * no rebuild" — because changing a project's appearance means serving a
+ * different forty-line `:root` block, not rebuilding this file.
+ *
+ * 🛑 Plain CSS rather than Tailwind utilities, deliberately. Chrome renders
+ * inside §8.15.5's **closed shadow root**, where a utility class from a bundle
+ * loaded in the document does not reach — so chrome's own styling has to be
+ * self-contained. `resources/css/tokens.css` is the Tailwind half of §8.14.4,
+ * for the dashboard; this is the half that styles what a reader sees.
+ *
+ * 🛑 It is also the stylesheet `npm run axe` renders the §8.14.14 reference
+ * page with, so the accessibility check is run against the real chrome styling
+ * rather than against unstyled markup.
+ */
+
+:root {
+    --docup-chrome-gap: calc(var(--docup-space-unit, 4px) * 2);
+    --docup-chrome-pad: calc(var(--docup-space-unit, 4px) * 4);
+}
+
+body {
+    margin: 0;
+    background: var(--docup-color-surface-page, #ffffff);
+    color: var(--docup-color-text-primary, #16191f);
+    font-family: var(--docup-font-body, system-ui, sans-serif);
+    font-size: var(--docup-font-size-root, 16px);
+    line-height: var(--docup-font-line-height-body, 1.6);
+}
+
+h1, h2, h3 {
+    font-family: var(--docup-font-heading, system-ui, sans-serif);
+    font-weight: var(--docup-font-weight-heading, 650);
+    line-height: 1.25;
+}
+
+a {
+    color: var(--docup-color-text-link, #0b5cd5);
+}
+
+code {
+    background: var(--docup-color-code-surface, #f3f4f6);
+    color: var(--docup-color-code-text, #16191f);
+    border-radius: var(--docup-radius-small, 4px);
+    padding: 0 0.25em;
+    font-family: var(--docup-font-mono, ui-monospace, monospace);
+}
+
+/*
+ * 🛑 A visible focus indicator on everything focusable, using the token WCAG
+ * 2.2 SC 2.4.11 and 1.4.11 make a requirement rather than a preference. The
+ * §8.14.5 contrast gate judges `color.focus.ring` against both surfaces for
+ * this reason — the ring is only an indicator if it can be seen.
+ */
+:focus-visible {
+    outline: 2px solid var(--docup-color-focus-ring, #0b5cd5);
+    outline-offset: 2px;
+}
+
+/*
+ * The skip link: off-screen until focused, then placed where a reader expects
+ * it. `clip-path` rather than `display: none`, because a hidden element is not
+ * focusable and a skip link that cannot be focused is decoration.
+ */
+.docup-skip {
+    position: absolute;
+    left: var(--docup-chrome-pad);
+    top: calc(var(--docup-space-unit, 4px) * -12);
+    z-index: 10;
+    background: var(--docup-color-surface-raised, #f6f7f9);
+    color: var(--docup-color-text-primary, #16191f);
+    border: var(--docup-border-width, 1px) solid var(--docup-color-border-strong, #767f8c);
+    border-radius: var(--docup-radius-small, 4px);
+    padding: var(--docup-chrome-gap) var(--docup-chrome-pad);
+    transition: top 120ms ease;
+}
+
+.docup-skip:focus {
+    top: var(--docup-chrome-gap);
+}
+
+.docup-header {
+    display: flex;
+    align-items: center;
+    gap: var(--docup-chrome-pad);
+    padding: var(--docup-chrome-gap) var(--docup-chrome-pad);
+    background: var(--docup-color-surface-raised, #f6f7f9);
+    border-bottom: var(--docup-border-width, 1px) solid var(--docup-color-border-subtle, #dfe3e8);
+}
+
+.docup-brand {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+    color: inherit;
+}
+
+.docup-brand img {
+    max-height: calc(var(--docup-space-unit, 4px) * 9);
+    width: auto;
+}
+
+.docup-wordmark {
+    font-family: var(--docup-font-heading, system-ui, sans-serif);
+    font-weight: var(--docup-font-weight-heading, 650);
+}
+
+.docup-nav ul,
+.docup-footer ul,
+.docup-cards ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--docup-chrome-pad);
+}
+
+.docup-footer ul,
+.docup-cards ul {
+    flex-direction: column;
+    gap: var(--docup-chrome-gap);
+}
+
+.docup-scheme {
+    margin-inline-start: auto;
+    background: transparent;
+    color: var(--docup-color-text-primary, #16191f);
+    border: var(--docup-border-width, 1px) solid var(--docup-color-border-strong, #767f8c);
+    border-radius: var(--docup-radius-small, 4px);
+    padding: var(--docup-space-unit, 4px) var(--docup-chrome-gap);
+    font: inherit;
+    cursor: pointer;
+}
+
+.docup-main {
+    max-width: var(--docup-layout-content-width, 48rem);
+    margin: 0 auto;
+    padding: var(--docup-chrome-pad);
+}
+
+.docup-banner,
+.docup-announcement {
+    padding: var(--docup-chrome-gap) var(--docup-chrome-pad);
+    border-bottom: var(--docup-border-width, 1px) solid var(--docup-color-border-subtle, #dfe3e8);
+}
+
+/*
+ * 🛑 The state colours are used as **text on the page background**, which is
+ * the pairing §8.14.5's matrix judges. A tinted panel would put them on a
+ * surface the matrix does not know about, so the gate would be measuring a
+ * combination chrome never renders — the exact drift ContrastMatrix::LIMITS
+ * warns about.
+ */
+.docup-banner--notice,
+.docup-announcement--notice {
+    color: var(--docup-color-text-secondary, #4b5563);
+}
+
+.docup-banner--warning,
+.docup-announcement--warning {
+    color: var(--docup-color-state-warning, #8a4b00);
+}
+
+.docup-banner--danger,
+.docup-announcement--danger {
+    color: var(--docup-color-state-danger, #b3261e);
+}
+
+.docup-action,
+.docup-search button {
+    display: inline-block;
+    background: var(--docup-color-brand-primary, #0b5cd5);
+    color: var(--docup-color-brand-on-primary, #ffffff);
+    border: 0;
+    border-radius: var(--docup-radius-medium, 8px);
+    padding: var(--docup-chrome-gap) var(--docup-chrome-pad);
+    font: inherit;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.docup-search {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--docup-chrome-gap);
+    align-items: end;
+}
+
+.docup-search label {
+    display: block;
+    width: 100%;
+    color: var(--docup-color-text-secondary, #4b5563);
+}
+
+.docup-search input {
+    flex: 1 1 16rem;
+    background: var(--docup-color-surface-page, #ffffff);
+    color: var(--docup-color-text-primary, #16191f);
+    border: var(--docup-border-width, 1px) solid var(--docup-color-border-strong, #767f8c);
+    border-radius: var(--docup-radius-small, 4px);
+    padding: var(--docup-chrome-gap);
+    font: inherit;
+}
+
+.docup-footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--docup-chrome-pad);
+    padding: var(--docup-chrome-pad);
+    background: var(--docup-color-surface-sunken, #eceef2);
+    border-top: var(--docup-border-width, 1px) solid var(--docup-color-border-subtle, #dfe3e8);
+}
+
+.docup-footer h2 {
+    font-size: 1rem;
+    margin: 0 0 var(--docup-chrome-gap);
+}
+
+.docup-colophon {
+    width: 100%;
+    margin: 0;
+    color: var(--docup-color-text-secondary, #4b5563);
+}
+
+/*
+ * 🛑 §8.15.8: "Chrome MUST honour `prefers-reduced-motion`". Honoured
+ * unconditionally, whatever the `motion.allow` token says — the token can turn
+ * animation off for everybody and cannot turn it back on for a reader who has
+ * asked for less.
+ */
+@media (prefers-reduced-motion: reduce) {
+    .docup-skip {
+        transition: none;
+    }
+}

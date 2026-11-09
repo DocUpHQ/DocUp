@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Audit\Audit;
+use App\Branding\ThemeAssets;
 use App\Builds\Runner\Spool;
 use App\Builds\Sandbox\EgressAllowlist;
 use App\Builds\Sandbox\SandboxPolicy;
@@ -55,6 +56,7 @@ final class DoctorCommand extends Command
         $this->checkBuildSandbox();
         $this->checkEnforcementTier();
         $this->checkContainment();
+        $this->checkAssetHost();
         $this->notePending();
 
         if ($this->option('json')) {
@@ -428,6 +430,98 @@ final class DoctorCommand extends Command
                 'SPEC 8.1.4',
             );
         }
+    }
+
+    /**
+     * 🛑 §8.14.11's "dedicated asset host", and the degradation when there
+     * is not one.
+     *
+     * > "SVG MUST be DOM-sanitised against an element and attribute
+     * > allowlist, re-serialised, and rendered **only via `<img src>`** from a
+     * > dedicated asset host carrying `default-src 'none'; sandbox`, `nosniff`
+     * > and no cookies."
+     *
+     * A **warning** rather than a failure, like the preview-apex check above
+     * and for the same reason: an installation without `DOCUP_ASSET_HOST`
+     * serves branding assets from the dashboard origin and works. What it
+     * loses is the sandboxed origin, so an uploaded SVG is rendered on an
+     * origin that holds the dashboard session instead of one that holds
+     * nothing — defence in depth behind {@see AppBrandingAssetsSvgSanitiser},
+     * not the only defence.
+     *
+     * 🛑 This check exists because `docs/operator/docs/branding.md` says it
+     * does. A documentation page promising a report nobody emits is the
+     * defect class this phase spent its time avoiding.
+     */
+    private function checkAssetHost(): void
+    {
+        if (! ThemeAssets::hasDedicatedHost()) {
+            $this->recordWarn(
+                'Branding asset host',
+                'DOCUP_ASSET_HOST is unset, so uploaded logos and favicons are served from '
+                .'the dashboard origin. They still carry the sandbox policy and '
+                .'nosniff, and they no longer sit on an origin of their own.',
+                'SPEC 8.14.11',
+            );
+
+            return;
+        }
+
+        $assets = Origins::normalise((string) config('docup.origins.assets'));
+        $app = Origins::normalise((string) config('docup.origins.app'));
+
+        /*
+         * 🛑 Sharing the DASHBOARD's registrable domain is the shape that
+         * matters, and it is a failure rather than a warning: §8.1.4's whole
+         * argument is that attacker-controlled content must not sit beside the
+         * dashboard session, and an uploaded SVG is attacker-controlled
+         * content.
+         */
+        if (Origins::shareRegistrableDomain($assets, $app)) {
+            $this->recordFail(
+                'Branding asset host',
+                sprintf(
+                    'DOCUP_ASSET_HOST (%s) shares the registrable domain "%s" with the dashboard. '
+                    .'Uploaded assets are tenant-supplied, so they need a domain the dashboard '
+                    .'session cannot reach.',
+                    $assets,
+                    Origins::registrable($assets),
+                ),
+                'SPEC 8.14.11, SPEC 8.1.4',
+            );
+
+            return;
+        }
+
+        $docs = Origins::normalise((string) config('docup.origins.docs'));
+
+        /*
+         * Sharing the DOCUMENTATION apex is the shipped default
+         * (`assets.docup-docs.localhost`) and is reported as a warning, not a
+         * failure. §8.14.11 asks for a dedicated host and this is one; what a
+         * shared registrable domain costs is that documentation JavaScript can
+         * set a cookie the browser then sends here. Nothing reads it and the
+         * responses are identical for every caller, so "no cookies" holds
+         * outbound and not inbound — which an operator deploying in anger
+         * should be told rather than left to discover.
+         */
+        if (Origins::shareRegistrableDomain($assets, $docs)) {
+            $this->recordWarn(
+                'Branding asset host',
+                sprintf(
+                    '%s shares the registrable domain "%s" with the documentation apex. '
+                    .'Documentation JavaScript can set a cookie the browser will send to the '
+                    .'asset host; nothing reads it, and a fourth registrable domain closes it.',
+                    $assets,
+                    Origins::registrable($assets),
+                ),
+                'SPEC 8.14.11',
+            );
+
+            return;
+        }
+
+        $this->recordPass('Branding asset host', $assets.' is a registrable domain of its own', 'SPEC 8.14.11');
     }
 
     private function checkUnsafeModes(): void

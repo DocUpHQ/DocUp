@@ -16,6 +16,7 @@ use App\Auth\Providers\Ldap\LdapAuthenticator;
 use App\Auth\Providers\Ldap\LdapRefused;
 use App\Auth\Providers\Ldap\LdapRejection;
 use App\Auth\Providers\ReaderThrottle;
+use App\Branding\CredentialPageBranding;
 use App\Models\Domain;
 use App\Models\Project;
 use App\Readers\HandoffRefused;
@@ -149,18 +150,23 @@ final readonly class LdapSignInController
         ]);
 
         /*
-         * 🛑 No project name, no organisation name, no logo. §8.14.12: "Pages
-         * that accept credentials MUST carry **no project or organisation
-         * branding**." The reader is told which *directory* they are signing
-         * in to, because that is the operator's installation-scope label and
-         * the one fact they need to know which password to type.
+         * 🛑 No project name, no organisation name, no logo of theirs. §8.14.12:
+         * "Pages that accept credentials MUST carry **no project or
+         * organisation branding**." The reader is told which *directory* they
+         * are signing in to, because that is the operator's installation-scope
+         * label and the one fact they need to know which password to type.
          *
-         * Phase 27 owns the enforcement of that rule across every credential
-         * page; this page is written to it now so it is not a page that has to
-         * be fixed then.
+         * 🛑 The branding is the **installation's**, from
+         * {@see CredentialPageBranding::resolve()} — which takes no arguments,
+         * so this controller has nothing tenant-scoped it could pass. Phase 26b
+         * wrote this page to the rule before the mechanism existed and recorded
+         * it as owed; this is the mechanism, and
+         * `CredentialBrandingRefusalTest` asserts the whole response body
+         * carries no tenant string whichever domain the reader arrived from.
          */
         return Inertia::render('Auth/ReaderSignIn', [
             'label' => $resolved['label'],
+            'branding' => CredentialPageBranding::resolve()->toProps(),
             'failed' => $request->session()->get('reader.ldap.failed') === true,
             /*
              * The token for a NATIVE form post. The success response is a

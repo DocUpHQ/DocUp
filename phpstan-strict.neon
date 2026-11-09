@@ -104,6 +104,25 @@ parameters:
         - app/Models
         - app/Http/Middleware
 
+        # 🛑 Phase 27. §9.4's named namespaces are "serving, authentication,
+        # artifact and configuration", and app/Branding is a **configuration**
+        # namespace by the only definition that matters here: it parses
+        # operator- and tenant-supplied values and emits them into a stylesheet
+        # every reader downloads.
+        #
+        # §8.14.2 is the reason it belongs at level 9 rather than at 8. The
+        # requirement is that "every emitted value MUST be re-serialised from
+        # the parsed representation, never echoed from storage", and what
+        # carries that is the type system: the compiler takes TokenValue
+        # objects and has no method that accepts a string. A level-8 analysis
+        # permits a mixed to flow into that seam; level 9 does not, and the
+        # seam IS the requirement.
+        #
+        # §8.14.11's pipeline has the same character one layer down: a type
+        # error in the sniff-then-transform ordering is an unvalidated upload
+        # stored under a content address that claims DocUp produced it.
+        - app/Branding
+
     excludePaths:
         analyseAndScan:
             - vendor

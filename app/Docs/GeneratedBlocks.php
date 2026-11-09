@@ -9,6 +9,7 @@ namespace App\Docs;
 
 use App\Access\DecisionTable;
 use App\Auth\Providers\Federation\ProvisioningLatency;
+use App\Branding\TokenRegistry;
 use App\Composition\ModeBehaviour;
 use App\Composition\SinglePass\Composer;
 use App\Redirects\UrlCases;
@@ -84,6 +85,18 @@ final class GeneratedBlocks
              */
             'docs/operator/docs/directories.md' => [
                 'deprovisioning-latency' => ProvisioningLatency::explain(...),
+            ],
+            /*
+             * 🛑 §17's Phase 27 deliverable is "the ~45-token registry itself,
+             * **published as a table in the operator documentation** with each
+             * token's name, type, grammar and cascade level". A hand-written
+             * table beside a registry in code is two registries, and the one
+             * in the documentation is the one that goes stale — which is what
+             * §8.7.13's matrix did before this mechanism existed. The table an
+             * operator reads is rendered from the registry the validator uses.
+             */
+            'docs/operator/docs/branding.md' => [
+                'token-table' => TokenRegistry::toMarkdown(...),
             ],
         ];
     }

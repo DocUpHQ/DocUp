@@ -77,19 +77,30 @@ final class CacheDirectives
      * site knows it is a defect rather than a pattern.
      *
      * @param  list<string>  $cacheTags  §9.3.3: mount, project, version, build, theme
+     * @param  bool  $immutable  🛑 §8.14.4's `immutable`, for a
+     *                           **content-addressed** resource only. The token
+     *                           tells a cache the bytes behind this URL will
+     *                           never change, which is a promise only a hash in
+     *                           the path can keep — and a promise that cannot
+     *                           be withdrawn, because `immutable` suppresses
+     *                           revalidation entirely. A caller passing it for
+     *                           a mutable URL would make a stale response
+     *                           permanent for the whole `max-age`.
      *
      * @internal only {@see CachePolicy} may call this
      */
-    public static function publiclyCacheable(int $maxAge, int $cdnMaxAge, array $cacheTags): self
+    public static function publiclyCacheable(int $maxAge, int $cdnMaxAge, array $cacheTags, bool $immutable = false): self
     {
+        $suffix = $immutable ? ', immutable' : '';
+
         return new self(
             public: true,
-            cacheControl: 'public, max-age='.$maxAge,
+            cacheControl: 'public, max-age='.$maxAge.$suffix,
             // A longer ceiling at the edge than in the browser, because the edge
             // can be purged and a browser cannot. §8.9.10's epoch-in-the-key
             // means a failed purge degrades to stale public HTML for this long
             // and never to wrong routing.
-            cdnCacheControl: 'public, max-age='.$cdnMaxAge,
+            cdnCacheControl: 'public, max-age='.$cdnMaxAge.$suffix,
             vary: ['Accept-Encoding'],
             cacheTags: $cacheTags,
         );

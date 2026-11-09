@@ -1,0 +1,66 @@
+/* SPDX-FileCopyrightText: 2026 The DocUp contributors */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * 🛑 §8.14.4's mapping: "Tailwind MUST compile **once at release time** with
+ * utilities mapped onto CSS custom properties."
+ *
+ * This file is that mapping and nothing else. Every entry points a Tailwind
+ * theme key at a `--docup-*` custom property, so `bg-surface-page` compiles —
+ * once, at release time, into one bundle every project on the installation
+ * shares — to `background-color: var(--docup-color-surface-page)`. A tenant's
+ * theme then changes what that utility renders by shipping forty-odd
+ * declarations in a file of its own, and no Tailwind process runs on any
+ * request or save path.
+ *
+ * 🛑 The fallbacks are deliberate and they are the installation defaults from
+ * `App\Branding\TokenRegistry`. They are what the dashboard renders with before
+ * any theme stylesheet has loaded — a flash of unstyled chrome is a visual
+ * defect, and a flash of *black-on-black* chrome is an accessibility one.
+ * `TokenRegistryTest` asserts the two agree, so a default changed in the
+ * registry and not here turns CI red rather than drifting.
+ *
+ * 🛑 This file deliberately maps only the tokens whose type
+ * `App\Branding\TokenType::emitsCss()` admits. There is no Tailwind key for a
+ * text token, an asset token or the `frame-ancestors` allowlist, because none
+ * of those is a style — and a utility that rendered a tenant's prose into a
+ * `content:` declaration would be the one place §8.14.3's "never free HTML"
+ * could be worked around.
+ */
+
+@theme {
+    --color-surface-page: var(--docup-color-surface-page, #ffffff);
+    --color-surface-raised: var(--docup-color-surface-raised, #f6f7f9);
+    --color-surface-sunken: var(--docup-color-surface-sunken, #eceef2);
+    --color-border-subtle: var(--docup-color-border-subtle, #dfe3e8);
+    --color-border-strong: var(--docup-color-border-strong, #767f8c);
+    --color-focus-ring: var(--docup-color-focus-ring, #0b5cd5);
+
+    --color-text-primary: var(--docup-color-text-primary, #16191f);
+    --color-text-secondary: var(--docup-color-text-secondary, #4b5563);
+    --color-text-inverse: var(--docup-color-text-inverse, #ffffff);
+    --color-text-link: var(--docup-color-text-link, #0b5cd5);
+
+    --color-brand-primary: var(--docup-color-brand-primary, #0b5cd5);
+    --color-brand-on-primary: var(--docup-color-brand-on-primary, #ffffff);
+    --color-brand-accent: var(--docup-color-brand-accent, #a21f6b);
+
+    --color-state-success: var(--docup-color-state-success, #0f6b35);
+    --color-state-warning: var(--docup-color-state-warning, #8a4b00);
+    --color-state-danger: var(--docup-color-state-danger, #b3261e);
+
+    --color-code-surface: var(--docup-color-code-surface, #f3f4f6);
+    --color-code-text: var(--docup-color-code-text, #16191f);
+
+    --font-body: var(--docup-font-body, system-ui, sans-serif);
+    --font-heading: var(--docup-font-heading, system-ui, sans-serif);
+    --font-mono: var(--docup-font-mono, ui-monospace, monospace);
+
+    --radius-token-sm: var(--docup-radius-small, 4px);
+    --radius-token-md: var(--docup-radius-medium, 8px);
+
+    --spacing-token: var(--docup-space-unit, 4px);
+
+    --container-content: var(--docup-layout-content-width, 48rem);
+    --container-sidebar: var(--docup-layout-sidebar-width, 18rem);
+}

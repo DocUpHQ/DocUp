@@ -129,6 +129,39 @@ return [
             ],
         ],
 
+        /*
+         * 🛑 Branding assets (§8.14.11) — a disk of its own, not a prefix
+         * inside `artifacts`.
+         *
+         * Two reasons, and the second is enforced by an architecture test.
+         * §8.9.8 keeps documentation bytes out of PHP and the artifact store
+         * exists to hand files to the edge; a branding asset is read by PHP,
+         * which serves it with §8.14.11's headers on the asset host. Mixing
+         * them would make "only App\Artifacts writes to the artifact store"
+         * either false or a rule with an exception.
+         *
+         * `throw => true`, for the reason the artifact disks give: a swallowed
+         * write failure means an upload that reports success and a logo that
+         * 404s for every reader, discovered by the tenant.
+         *
+         * Content-addressed and write-once, so the directory modes are the
+         * same 0755/0444 the artifact store uses — and for the same reason
+         * they are not a boundary: what makes a branding asset safe is that
+         * DocUp re-encoded it and serves it under `default-src 'none'; sandbox`
+         * (§8.14.11), not the file mode.
+         */
+        'theme-assets' => [
+            'driver' => 'local',
+            'root' => env('DOCUP_THEME_ASSET_ROOT', storage_path('app/private/theme-assets')),
+            'serve' => false,
+            'throw' => true,
+            'report' => false,
+            'permissions' => [
+                'file' => ['public' => 0o444, 'private' => 0o444],
+                'dir' => ['public' => 0o755, 'private' => 0o755],
+            ],
+        ],
+
         'artifacts-s3' => [
             'driver' => 's3',
             'key' => env('DOCUP_ARTIFACT_S3_KEY', env('AWS_ACCESS_KEY_ID')),

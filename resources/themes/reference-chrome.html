@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en" >
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>DocUp — documentation</title>
+        
+    <style>/* DocUp theme 11e1f6d60e5adbdc470c8eb02215ef9b1ca2b48d351ef552d2f4ce593d6938ac — generated; see SPEC 8.14.4. */
+:root {
+  color-scheme: light dark;
+  --docup-color-surface-page: #ffffff;
+  --docup-color-surface-raised: #f6f7f9;
+  --docup-color-surface-sunken: #eceef2;
+  --docup-color-border-subtle: #dfe3e8;
+  --docup-color-border-strong: #767f8c;
+  --docup-color-focus-ring: #0b5cd5;
+  --docup-color-text-primary: #16191f;
+  --docup-color-text-secondary: #4b5563;
+  --docup-color-text-inverse: #ffffff;
+  --docup-color-text-link: #0b5cd5;
+  --docup-color-brand-primary: #0b5cd5;
+  --docup-color-brand-on-primary: #ffffff;
+  --docup-color-brand-accent: #a21f6b;
+  --docup-color-state-success: #0f6b35;
+  --docup-color-state-warning: #8a4b00;
+  --docup-color-state-danger: #b3261e;
+  --docup-color-code-surface: #f3f4f6;
+  --docup-color-code-text: #16191f;
+  --docup-font-body: system-ui, sans-serif;
+  --docup-font-heading: system-ui, sans-serif;
+  --docup-font-mono: ui-monospace, monospace;
+  --docup-font-size-root: 16px;
+  --docup-font-weight-heading: 650;
+  --docup-font-line-height-body: 1.6;
+  --docup-radius-small: 4px;
+  --docup-radius-medium: 8px;
+  --docup-space-unit: 4px;
+  --docup-border-width: 1px;
+  --docup-layout-content-width: 48rem;
+  --docup-layout-sidebar-width: 18rem;
+  --docup-chrome-header-style: bordered;
+  --docup-chrome-header-sticky: 1;
+  --docup-chrome-sidebar-position: start;
+  --docup-chrome-footer-style: bordered;
+  --docup-scheme-default: system;
+  --docup-scheme-toggle: 1;
+  --docup-motion-allow: 1;
+  --docup-banner-tone: notice;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-docup-scheme="light"]) {
+    --docup-color-surface-page: #0b0e14;
+    --docup-color-surface-raised: #141a23;
+    --docup-color-surface-sunken: #05080c;
+    --docup-color-border-subtle: #242c38;
+    --docup-color-border-strong: #6b7687;
+    --docup-color-focus-ring: #79b8ff;
+    --docup-color-text-primary: #e7eaf0;
+    --docup-color-text-secondary: #a9b2c1;
+    --docup-color-text-inverse: #0b0e14;
+    --docup-color-text-link: #79b8ff;
+    --docup-color-brand-primary: #4d93ff;
+    --docup-color-brand-on-primary: #06111f;
+    --docup-color-brand-accent: #f58ac2;
+    --docup-color-state-success: #5bd98d;
+    --docup-color-state-warning: #e8a33d;
+    --docup-color-state-danger: #ff8f85;
+    --docup-color-code-surface: #10151d;
+    --docup-color-code-text: #e7eaf0;
+  }
+}
+:root[data-docup-scheme="dark"] {
+  --docup-color-surface-page: #0b0e14;
+  --docup-color-surface-raised: #141a23;
+  --docup-color-surface-sunken: #05080c;
+  --docup-color-border-subtle: #242c38;
+  --docup-color-border-strong: #6b7687;
+  --docup-color-focus-ring: #79b8ff;
+  --docup-color-text-primary: #e7eaf0;
+  --docup-color-text-secondary: #a9b2c1;
+  --docup-color-text-inverse: #0b0e14;
+  --docup-color-text-link: #79b8ff;
+  --docup-color-brand-primary: #4d93ff;
+  --docup-color-brand-on-primary: #06111f;
+  --docup-color-brand-accent: #f58ac2;
+  --docup-color-state-success: #5bd98d;
+  --docup-color-state-warning: #e8a33d;
+  --docup-color-state-danger: #ff8f85;
+  --docup-color-code-surface: #10151d;
+  --docup-color-code-text: #e7eaf0;
+}
+</style>
+    <style>/* SPDX-FileCopyrightText: 2026 The DocUp contributors */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * 🛑 §8.14.4's "one bundle": the chrome stylesheet, compiled once at release
+ * time and shared by every project on the installation.
+ *
+ * Every colour, length and family here is a `var(--docup-*)` with the
+ * installation default as its fallback. That is what makes §8.14's goal
+ * possible — "two projects look different from the same build artifact, with
+ * no rebuild" — because changing a project's appearance means serving a
+ * different forty-line `:root` block, not rebuilding this file.
+ *
+ * 🛑 Plain CSS rather than Tailwind utilities, deliberately. Chrome renders
+ * inside §8.15.5's **closed shadow root**, where a utility class from a bundle
+ * loaded in the document does not reach — so chrome's own styling has to be
+ * self-contained. `resources/css/tokens.css` is the Tailwind half of §8.14.4,
+ * for the dashboard; this is the half that styles what a reader sees.
+ *
+ * 🛑 It is also the stylesheet `npm run axe` renders the §8.14.14 reference
+ * page with, so the accessibility check is run against the real chrome styling
+ * rather than against unstyled markup.
+ */
+
+:root {
+    --docup-chrome-gap: calc(var(--docup-space-unit, 4px) * 2);
+    --docup-chrome-pad: calc(var(--docup-space-unit, 4px) * 4);
+}
+
+body {
+    margin: 0;
+    background: var(--docup-color-surface-page, #ffffff);
+    color: var(--docup-color-text-primary, #16191f);
+    font-family: var(--docup-font-body, system-ui, sans-serif);
+    font-size: var(--docup-font-size-root, 16px);
+    line-height: var(--docup-font-line-height-body, 1.6);
+}
+
+h1, h2, h3 {
+    font-family: var(--docup-font-heading, system-ui, sans-serif);
+    font-weight: var(--docup-font-weight-heading, 650);
+    line-height: 1.25;
+}
+
+a {
+    color: var(--docup-color-text-link, #0b5cd5);
+}
+
+code {
+    background: var(--docup-color-code-surface, #f3f4f6);
+    color: var(--docup-color-code-text, #16191f);
+    border-radius: var(--docup-radius-small, 4px);
+    padding: 0 0.25em;
+    font-family: var(--docup-font-mono, ui-monospace, monospace);
+}
+
+/*
+ * 🛑 A visible focus indicator on everything focusable, using the token WCAG
+ * 2.2 SC 2.4.11 and 1.4.11 make a requirement rather than a preference. The
+ * §8.14.5 contrast gate judges `color.focus.ring` against both surfaces for
+ * this reason — the ring is only an indicator if it can be seen.
+ */
+:focus-visible {
+    outline: 2px solid var(--docup-color-focus-ring, #0b5cd5);
+    outline-offset: 2px;
+}
+
+/*
+ * The skip link: off-screen until focused, then placed where a reader expects
+ * it. `clip-path` rather than `display: none`, because a hidden element is not
+ * focusable and a skip link that cannot be focused is decoration.
+ */
+.docup-skip {
+    position: absolute;
+    left: var(--docup-chrome-pad);
+    top: calc(var(--docup-space-unit, 4px) * -12);
+    z-index: 10;
+    background: var(--docup-color-surface-raised, #f6f7f9);
+    color: var(--docup-color-text-primary, #16191f);
+    border: var(--docup-border-width, 1px) solid var(--docup-color-border-strong, #767f8c);
+    border-radius: var(--docup-radius-small, 4px);
+    padding: var(--docup-chrome-gap) var(--docup-chrome-pad);
+    transition: top 120ms ease;
+}
+
+.docup-skip:focus {
+    top: var(--docup-chrome-gap);
+}
+
+.docup-header {
+    display: flex;
+    align-items: center;
+    gap: var(--docup-chrome-pad);
+    padding: var(--docup-chrome-gap) var(--docup-chrome-pad);
+    background: var(--docup-color-surface-raised, #f6f7f9);
+    border-bottom: var(--docup-border-width, 1px) solid var(--docup-color-border-subtle, #dfe3e8);
+}
+
+.docup-brand {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+    color: inherit;
+}
+
+.docup-brand img {
+    max-height: calc(var(--docup-space-unit, 4px) * 9);
+    width: auto;
+}
+
+.docup-wordmark {
+    font-family: var(--docup-font-heading, system-ui, sans-serif);
+    font-weight: var(--docup-font-weight-heading, 650);
+}
+
+.docup-nav ul,
+.docup-footer ul,
+.docup-cards ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--docup-chrome-pad);
+}
+
+.docup-footer ul,
+.docup-cards ul {
+    flex-direction: column;
+    gap: var(--docup-chrome-gap);
+}
+
+.docup-scheme {
+    margin-inline-start: auto;
+    background: transparent;
+    color: var(--docup-color-text-primary, #16191f);
+    border: var(--docup-border-width, 1px) solid var(--docup-color-border-strong, #767f8c);
+    border-radius: var(--docup-radius-small, 4px);
+    padding: var(--docup-space-unit, 4px) var(--docup-chrome-gap);
+    font: inherit;
+    cursor: pointer;
+}
+
+.docup-main {
+    max-width: var(--docup-layout-content-width, 48rem);
+    margin: 0 auto;
+    padding: var(--docup-chrome-pad);
+}
+
+.docup-banner,
+.docup-announcement {
+    padding: var(--docup-chrome-gap) var(--docup-chrome-pad);
+    border-bottom: var(--docup-border-width, 1px) solid var(--docup-color-border-subtle, #dfe3e8);
+}
+
+/*
+ * 🛑 The state colours are used as **text on the page background**, which is
+ * the pairing §8.14.5's matrix judges. A tinted panel would put them on a
+ * surface the matrix does not know about, so the gate would be measuring a
+ * combination chrome never renders — the exact drift ContrastMatrix::LIMITS
+ * warns about.
+ */
+.docup-banner--notice,
+.docup-announcement--notice {
+    color: var(--docup-color-text-secondary, #4b5563);
+}
+
+.docup-banner--warning,
+.docup-announcement--warning {
+    color: var(--docup-color-state-warning, #8a4b00);
+}
+
+.docup-banner--danger,
+.docup-announcement--danger {
+    color: var(--docup-color-state-danger, #b3261e);
+}
+
+.docup-action,
+.docup-search button {
+    display: inline-block;
+    background: var(--docup-color-brand-primary, #0b5cd5);
+    color: var(--docup-color-brand-on-primary, #ffffff);
+    border: 0;
+    border-radius: var(--docup-radius-medium, 8px);
+    padding: var(--docup-chrome-gap) var(--docup-chrome-pad);
+    font: inherit;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.docup-search {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--docup-chrome-gap);
+    align-items: end;
+}
+
+.docup-search label {
+    display: block;
+    width: 100%;
+    color: var(--docup-color-text-secondary, #4b5563);
+}
+
+.docup-search input {
+    flex: 1 1 16rem;
+    background: var(--docup-color-surface-page, #ffffff);
+    color: var(--docup-color-text-primary, #16191f);
+    border: var(--docup-border-width, 1px) solid var(--docup-color-border-strong, #767f8c);
+    border-radius: var(--docup-radius-small, 4px);
+    padding: var(--docup-chrome-gap);
+    font: inherit;
+}
+
+.docup-footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--docup-chrome-pad);
+    padding: var(--docup-chrome-pad);
+    background: var(--docup-color-surface-sunken, #eceef2);
+    border-top: var(--docup-border-width, 1px) solid var(--docup-color-border-subtle, #dfe3e8);
+}
+
+.docup-footer h2 {
+    font-size: 1rem;
+    margin: 0 0 var(--docup-chrome-gap);
+}
+
+.docup-colophon {
+    width: 100%;
+    margin: 0;
+    color: var(--docup-color-text-secondary, #4b5563);
+}
+
+/*
+ * 🛑 §8.15.8: "Chrome MUST honour `prefers-reduced-motion`". Honoured
+ * unconditionally, whatever the `motion.allow` token says — the token can turn
+ * animation off for everybody and cannot turn it back on for a reader who has
+ * asked for less.
+ */
+@media (prefers-reduced-motion: reduce) {
+    .docup-skip {
+        transition: none;
+    }
+}
+</style>
+</head>
+<body>
+    
+    <a class="docup-skip" href="#docup-content">Skip to content</a>
+
+    
+            
+        <div class="docup-announcement docup-announcement--notice" role="status">
+            Version <code>2.0</code> is out. <a href="/en/2.0/" rel="noopener nofollow">Read the notes</a>.
+        </div>
+    
+    <header class="docup-header">
+        <a class="docup-brand" href="/">
+                            <span class="docup-wordmark">DocUp</span>
+                    </a>
+
+                    <nav class="docup-nav" aria-label="Documentation sections">
+                <ul>
+                                            
+                        <li><a href="/en/latest/"  aria-current="page" >Guide</a></li>
+                                            
+                        <li><a href="/en/latest/reference.html" >Reference</a></li>
+                                            
+                        <li><a href="/en/latest/changelog.html" >Changelog</a></li>
+                                    </ul>
+            </nav>
+        
+                    
+            <button type="button" class="docup-scheme" aria-pressed="false">
+                Dark colour scheme
+            </button>
+            </header>
+
+    <main id="docup-content" class="docup-main">
+        <h1>DocUp documentation</h1>
+
+                                    <section class="docup-hero" aria-labelledby="docup-hero-heading">
+                    <h2 id="docup-hero-heading">Documentation that ships with the code</h2>
+                    <p>Every version, every branch, built from the repository it lives in.</p>                                            <a class="docup-action" href="/en/latest/">Read the guide</a>
+                                    </section>
+                                                <section class="docup-cards" aria-labelledby="docup-cards-heading">
+                    <h2 id="docup-cards-heading">Start here</h2>
+                    <ul>
+                                                    <li><a href="/en/latest/install.html">Install</a></li>
+                                                    <li><a href="/en/latest/configure.html">Configure</a></li>
+                                                    <li><a href="/en/latest/deploy.html">Deploy</a></li>
+                                            </ul>
+                </section>
+                                                
+                <form class="docup-search" role="search" action="/_/search" method="get">
+                    <label for="docup-search-input">Search the documentation</label>
+                    <input id="docup-search-input" type="search" name="q"
+                            placeholder="Search 1,200 pages" >
+                    <button type="submit">Search</button>
+                </form>
+                                                <section class="docup-versions" aria-labelledby="docup-versions-heading">
+                    <h2 id="docup-versions-heading">Versions</h2>
+                    <p>A consumer renders the version list from <code>/_/addons</code>.</p>
+                </section>
+                                                <section class="docup-prose" aria-labelledby="docup-prose-heading">
+                    <h2 id="docup-prose-heading">About this theme</h2>
+                    <p>Every colour, length and family on this page is a branding token. Two projects can look completely different from the same build artifact, because the artifact carries no theme at all.</p>
+                </section>
+                                                <p class="docup-callout"><a href="/branding.html">Read the token table</a></p>
+                    
+            </main>
+
+    <footer class="docup-footer">
+                    <nav aria-labelledby="docup-footer-0">
+                
+                <h2 id="docup-footer-0">Documentation</h2>
+                <ul>
+                                            <li><a href="/en/latest/">Getting started</a></li>
+                                            <li><a href="/">All versions</a></li>
+                                    </ul>
+            </nav>
+                    <nav aria-labelledby="docup-footer-1">
+                
+                <h2 id="docup-footer-1">Project</h2>
+                <ul>
+                                            <li><a href="https://example.com/source">Source</a></li>
+                                    </ul>
+            </nav>
+        
+        <p class="docup-colophon">DocUp</p>
+    </footer>
+</body>
+</html>
