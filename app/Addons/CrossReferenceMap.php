@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace App\Addons;
 
+use App\Http\Controllers\Serving\CrossReferenceController;
 use App\Serving\ManifestReader;
 use App\Serving\VersionUrl;
 
@@ -38,7 +39,7 @@ use App\Serving\VersionUrl;
  *
  * ## 🛑 The base and the 302 must agree
  *
- * {@see \App\Http\Controllers\Serving\CrossReferenceController} builds §8.7.16's `Location` from §7.3's parts
+ * {@see CrossReferenceController} builds §8.7.16's `Location` from §7.3's parts
  * inline. This builds the same prefix through {@see VersionUrl}, which is where
  * §4.3 puts the one statement of the grammar — and `CrossReferenceMapTest`
  * asserts that base + path is byte-identical to the controller's `Location` for

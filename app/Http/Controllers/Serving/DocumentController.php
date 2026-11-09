@@ -22,6 +22,7 @@ use App\Redirects\RedirectTarget;
 use App\Serving\ArtifactHandoff;
 use App\Serving\CachePolicy;
 use App\Serving\CanonicalLocations;
+use App\Serving\DocumentationPolicy;
 use App\Serving\FileKind;
 use App\Serving\Hreflang;
 use App\Serving\ManifestReader;
@@ -465,6 +466,7 @@ final class DocumentController
             contentType: $entry['content_type'],
             etag: $etag,
             indexable: $mount->isIndexable,
+            frameAncestors: $mount->project->frameAncestors,
         ) + [
             RejectNonCanonicalPath::RESOLVER_HEADER => $route->matchedRule,
         ];
@@ -659,10 +661,36 @@ final class DocumentController
      *
      * @return array<string, string>
      */
-    private function contentHeaders(string $path, string $contentType, string $etag, bool $indexable): array
-    {
+    private function contentHeaders(
+        string $path,
+        string $contentType,
+        string $etag,
+        bool $indexable,
+        string $frameAncestors,
+    ): array {
         $headers = [
             'Content-Type' => $contentType,
+
+            /*
+             * 🛑 §8.14.15's documentation CSP, carrying §8.14.16's per-project
+             * `frame-ancestors` — which Phase 27 stored, validated and
+             * deliberately did not emit, saying so in the token's own purpose
+             * text. Phase 28 emits it, because this is the phase that puts
+             * chrome in the DOM and §8.15.5's clickjacking argument is what
+             * `frame-ancestors` defends.
+             *
+             * 🛑 On EVERY served file, not only on HTML. An asset reachable in
+             * a frame is a reader's session reachable in a frame, and a reader
+             * cannot tell which URL an attacker chose to embed. The header is
+             * already in {@see \App\Serving\ArtifactHandoff}'s preserved and
+             * nginx-re-emitted lists — carried there since Phase 04 for a
+             * header nothing yet sent, which is why no edge configuration
+             * changes with this.
+             *
+             * See {@see DocumentationPolicy} for why the default policy is
+             * three directives and why `sandbox` is never one of them.
+             */
+            DocumentationPolicy::HEADER => DocumentationPolicy::for($frameAncestors),
 
             /*
              * 🛑 §8.9.11: "`X-Content-Type-Options: nosniff` **always**". Not

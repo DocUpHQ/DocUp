@@ -52,6 +52,7 @@ final readonly class AddonsPayload
         private CrossReferenceMap $crossReferences,
         private ManifestReader $manifests,
         private CanonicalLocations $canonical,
+        private PublishedBuild $published,
     ) {}
 
     /**
@@ -340,20 +341,17 @@ final readonly class AddonsPayload
         return $formats;
     }
 
-    /** The primary build's id as text, or null. */
+    /**
+     * The primary build's id as text, or null.
+     *
+     * 🛑 Through {@see PublishedBuild}, which is the one place that answers
+     * "which build does this version publish". See that class for why the
+     * obvious query — the newest `builds` row — is wrong, and for why a
+     * rollback makes it wrong in the direction that matters.
+     */
     private function buildIdOf(?string $manifestId): ?string
     {
-        if ($manifestId === null) {
-            return null;
-        }
-
-        foreach ($this->manifests->mounts($manifestId) as $mount) {
-            if ($mount['is_primary'] && $mount['build_id'] !== null) {
-                return $mount['build_id'];
-            }
-        }
-
-        return null;
+        return $this->published->idFor($manifestId);
     }
 
     /** The primary build row, for `chrome_mode_applied`. */

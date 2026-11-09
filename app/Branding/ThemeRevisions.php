@@ -48,13 +48,14 @@ final readonly class ThemeRevisions
     public function __construct(
         private TokenGrammar $grammar,
         private Themes $themes,
+        private ResolvedFrameAncestors $frameAncestors,
     ) {}
 
     public static function make(?string $organisationId = null, ?string $projectId = null): self
     {
         $grammar = new TokenGrammar(new ThemeAssets($organisationId, $projectId), Themes::catalogue());
 
-        return new self($grammar, new Themes($grammar));
+        return new self($grammar, new Themes($grammar), app(ResolvedFrameAncestors::class));
     }
 
     /**
@@ -273,6 +274,21 @@ final readonly class ThemeRevisions
                 ],
             );
         }
+
+        /*
+         * 🛑 §8.14.16's `frame-ancestors`, recomputed for every project this
+         * publication can affect. Phase 28 added it, and the reason it is HERE
+         * rather than on the serving path is in
+         * {@see ResolvedFrameAncestors}: §8.9.1 forbids a query on the
+         * resolution path and §9.2 has no room for a four-rung cascade per
+         * document request, so the value is written when its inputs change.
+         *
+         * After the audit record, deliberately. The publication is the fact to
+         * be audited; the reconciliation is a consequence of it, and an
+         * exception here must not be able to lose the record of a publish that
+         * did happen.
+         */
+        $this->frameAncestors->reconcile($level, $revision->scope_id === null ? null : (string) $revision->scope_id);
 
         return $revision;
     }
