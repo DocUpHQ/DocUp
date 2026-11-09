@@ -902,6 +902,21 @@ jobs:
       # here, so the `thresholds` job's "a threshold must not decrease" check
       # governs this gate too. A number in the workflow would be a second copy
       # that could drift below the first.
+      #
+      # 🛑 AND THERE IS NO `--coverage` HERE, DELIBERATELY. It belongs on a
+      # coverage run and looks like it belongs on this one, so the next person
+      # to read this will add it; the first version of this job did. Pest
+      # registers `Pest\Mutate\Plugins\Mutate` BEFORE `Pest\Plugins\Coverage`
+      # and `MinScoreOption::remove()` returns false -- so the mutation plugin
+      # reads `--min` and then LEAVES IT in the argument list, where the
+      # coverage plugin pops it as a *coverage* threshold. With `--coverage`
+      # present that plugin then goes looking for a report the mutation run
+      # never writes and the step dies on
+      # `Coverage not found in path: vendor/pestphp/pest/.temp/coverage.php`
+      # AFTER printing a passing score. Mutation testing needs the coverage
+      # DRIVER, which `coverage: pcov` above provides; it does not need the
+      # flag, and the plugin appends its own `--coverage-php` when the flag is
+      # absent.
       - name: SPEC 9.4's mutation score
         run: |
           set -o pipefail
@@ -925,7 +940,6 @@ jobs:
             --covered-only \
             --min="$min" \
             --class='App\Auth\CidrRange' \
-            --coverage \
             tests/Feature/InvitationAndTokenTest.php \
             tests/Feature/Providers/ProviderCorpusTest.php \
             --colors=never 2>&1 | tee /tmp/mutation.log

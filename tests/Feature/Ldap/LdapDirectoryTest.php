@@ -162,7 +162,23 @@ final class LdapDirectoryTest extends TestCase
             $this->restoreMembership();
         }
 
-        $this->context->forget();
+        /*
+         * 🛑 `isset`, because `requireDirectory()` skips **before** the
+         * property is assigned and PHPUnit still runs `tearDown()` after a
+         * skip. Without the guard the ordinary suite -- which has no directory
+         * and is supposed to skip -- turns ten correct skips into ten failures
+         * reading "must not be accessed before initialization", which reads
+         * like the driver is broken rather than absent. The TLS edge-handshake
+         * test guards the same way for the same reason.
+         *
+         * 🛑 It was CI that found this, not a local run, and the reason is
+         * worth keeping: this file had only ever been run WITH its dependency
+         * present. An integration test is also a test of its own skip path,
+         * and that path has to be exercised somewhere.
+         */
+        if (isset($this->context)) {
+            $this->context->forget();
+        }
 
         parent::tearDown();
     }
