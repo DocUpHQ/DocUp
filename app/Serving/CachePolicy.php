@@ -52,6 +52,18 @@ final class CachePolicy
     private const CDN_MAX_AGE = 86_400;
 
     /**
+     * 🛑 How long a reader's **own** browser may keep §8.15.1's chrome loader.
+     *
+     * An hour, and the number is a trade rather than a default. The script sits
+     * at a fixed path (§8.15.1 forbids hashing it), so this is also the longest
+     * a reader can go on running the previous release's chrome after an upgrade.
+     * Shorter would put a conditional request on a hot path for no correctness
+     * gain; much longer would let an upgrade that fixed a chrome defect take a
+     * day to reach the readers who hit it.
+     */
+    private const CHROME_LOADER_MAX_AGE = 3_600;
+
+    /**
      * Decide the cache directives for one response.
      *
      * @param  bool  $projectIsPublic  `projects.visibility === 'public'` (§8.2.10)
@@ -281,6 +293,54 @@ final class CachePolicy
             cacheTags: [],
             immutable: true,
         );
+    }
+
+    /**
+     * 🛑 §8.15.2's addons payload: `Vary: Cookie`, never a shared cache entry.
+     *
+     * §8.15.2 asks for `Vary: Cookie` by name, and §7.3's "Nothing under `/_/`
+     * is publicly cacheable" settles the rest — this path is request-scoped in
+     * exactly the way §7.3's rule exists for. The payload's flyout is filtered
+     * per reader (§8.12.9), so two readers of the same URL get different
+     * answers, and a shared entry would serve one reader's version list to
+     * another.
+     *
+     * 🛑 Here rather than in the controller even though nothing about it is
+     * public, and §9.3.2's architecture test is why: the invariant is that one
+     * place decides cacheability, and a controller writing its own directive is
+     * a second place that has to stay correct forever.
+     * {@see self::forGrantKeys()} records the same reasoning for the response
+     * that went the other way.
+     */
+    public static function forAddons(): CacheDirectives
+    {
+        return CacheDirectives::private();
+    }
+
+    /**
+     * 🛑 §8.15.1's chrome loader, at its stable non-content-hashed path.
+     *
+     * > "a deferred script at a **stable, non-content-hashed** path […] Hashing
+     * > the loader path would orphan chrome on every historical artifact at
+     * > each upgrade."
+     *
+     * So the URL is fixed and the bytes behind it change at every upgrade —
+     * which is precisely the shape `immutable` must never be applied to, and
+     * the reason this cannot reuse
+     * {@see self::forImmutableBrandingAsset()}. The script is identical for
+     * every reader and names no tenant, so a *public* entry would cross no
+     * boundary; it is **private** anyway, because §7.3's rule is stated without
+     * exception for this namespace and Phase 27 already spent the one divergence
+     * this product should take from it — on a path whose bytes are named by their
+     * own hash, which this one deliberately is not.
+     *
+     * The cost of that choice is one conditional request per reader per hour
+     * rather than zero, answered by a 304 from a strong ETag over the script's
+     * own digest. The benefit is that `/_/` keeps one rule.
+     */
+    public static function forChromeLoader(): CacheDirectives
+    {
+        return CacheDirectives::privatelyCacheable(self::CHROME_LOADER_MAX_AGE);
     }
 
     /**

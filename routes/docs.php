@@ -5,10 +5,14 @@
 
 declare(strict_types=1);
 
+use App\Addons\AddonsContract;
+use App\Artifacts\ChromeInjector;
 use App\Http\Controllers\Readers\AuthCallbackController;
 use App\Http\Controllers\Readers\AuthStartController;
 use App\Http\Controllers\Readers\AuthzController;
 use App\Http\Controllers\Readers\LogoutController;
+use App\Http\Controllers\Serving\AddonsController;
+use App\Http\Controllers\Serving\ChromeLoaderController;
 use App\Http\Controllers\Serving\CompositionController;
 use App\Http\Controllers\Serving\CrossReferenceController;
 use App\Http\Controllers\Serving\DocumentController;
@@ -104,6 +108,39 @@ $readerRoutes = static function (string $suffix, bool $labelled): void {
 
     /* §8.12.13's Tier B subrequest endpoint, speaking only 204 and 401. */
     $constrain(Route::get('/_/authz', AuthzController::class)->name('docs.authz'.$suffix));
+
+    /*
+     * 🛑 §8.15.1's chrome loader and §8.15.2's addons payload.
+     *
+     * Registered in this closure — and therefore on all three host shapes —
+     * for the reason the reader endpoints are: every HTML document ingested
+     * since Phase 04 carries
+     * `<script defer src="/_/addons/docup.js">` (SPEC 8.15.1's stable,
+     * non-content-hashed path), and that tag is project- and
+     * version-agnostic by requirement. So it resolves against whatever origin
+     * the reader arrived on, and an endpoint present on two of the three host
+     * shapes would mean chrome silently absent on the third — on a custom
+     * domain, which is the shape an operator configured by hand and the one
+     * nobody tests first.
+     *
+     * 🛑 The ORDER matters: the loader is declared before the payload. Both
+     * live under `/_/addons`, and `/_/addons/docup.js` must not be read as a
+     * payload request with a stray path segment.
+     *
+     * Both are before the catch-all for the reason every other `/_/` route
+     * is: SPEC 7.3 makes the namespace reserved and unmountable, so the
+     * resolver refuses it and a route declared after `/{docupPath?}` would
+     * never be reached.
+     */
+    $constrain(Route::get(
+        ChromeInjector::LOADER_PATH,
+        ChromeLoaderController::class,
+    )->name('docs.addons.loader'.$suffix));
+
+    $constrain(Route::get(
+        AddonsContract::PATH,
+        AddonsController::class,
+    )->name('docs.addons'.$suffix));
 };
 
 foreach ($apexes as $index => $apex) {

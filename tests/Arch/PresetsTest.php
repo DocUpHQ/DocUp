@@ -267,6 +267,21 @@ arch()->preset()->laravel()
          * leaves of the dependency graph.
          */
         'App\Branding',
+        /*
+         * Phase 28, and the argument has not changed for a fifteenth
+         * namespace. `BannerKind` is §8.15.6's three notification banners, and
+         * it carries the thing §8.15.6 actually asks for: each case's **stated
+         * trigger condition**, in the docblock beside the case, with
+         * `enabledFor()` putting the per-project toggle on the kind rather than
+         * at a call site that could forget it. `NotificationBannerTest` asserts
+         * both directions of all three against these cases.
+         *
+         * Collecting it under App\Enums would file it by the fact that it is an
+         * enum — the least interesting thing about it — and would separate the
+         * stated conditions from the only code that evaluates them, which is
+         * the whole of what §8.15.6 asked to be written down.
+         */
+        'App\Addons',
     ]);
 
 arch()->preset()->strict()

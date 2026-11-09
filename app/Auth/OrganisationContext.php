@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace App\Auth;
 
 use App\Auth\Exceptions\TenancyContextMissing;
+use App\Branding\Themes;
 
 /**
  * Which organisation the current unit of work belongs to (§8.2.1).
@@ -102,6 +103,51 @@ final class OrganisationContext
         $previousDeclared = $this->declared;
 
         $this->spanAllOrganisations();
+
+        try {
+            return $callback();
+        } finally {
+            $this->organisationId = $previousId;
+            $this->unscoped = $previousUnscoped;
+            $this->declared = $previousDeclared;
+        }
+    }
+
+    /**
+     * Run a callback scoped to one organisation, then restore what was set.
+     *
+     * 🛑 The mirror of {@see self::acrossAllOrganisations()}, and added in Phase
+     * 28 because the serving path needed it. §8.15.2's addons payload resolves a
+     * theme, and {@see Themes::forMount()} reads `DomainMount`
+     * **through the model so the global scope applies** — its own comment says
+     * "this runs on the serving path where the tenant context is the
+     * request's", which was true of the intent and not yet of the code: nothing
+     * had resolved a theme on a documentation request before.
+     *
+     * 🛑 `for()` plus `forget()` would have been wrong rather than merely
+     * untidy. `forget()` clears, it does not restore — so a request that
+     * already had a context would lose it, and the rest of that request would
+     * run undeclared. That is the failure the docblock above describes, with
+     * the sign reversed.
+     *
+     * Scoped to the tenant rather than spanning all of them, deliberately: the
+     * organisation is already known from the routing snapshot, and spanning
+     * would let a mount belonging to another tenant contribute a theme layer.
+     * The narrower posture is available here, so it is the one taken.
+     *
+     * @template TReturn
+     *
+     * @param  string  $organisationId  raw 16 bytes, as the snapshot carries it
+     * @param  \Closure(): TReturn  $callback
+     * @return TReturn
+     */
+    public function withinOrganisation(string $organisationId, \Closure $callback): mixed
+    {
+        $previousId = $this->organisationId;
+        $previousUnscoped = $this->unscoped;
+        $previousDeclared = $this->declared;
+
+        $this->for($organisationId);
 
         try {
             return $callback();
