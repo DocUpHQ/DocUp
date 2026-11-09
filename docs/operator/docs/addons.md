@@ -176,6 +176,16 @@ selector defaults to `input[type='search'], [role='search'] input` and is
 per-project. With `addons_search_takeover` off, or `chrome_mode: off`, the
 generator's own search is left completely alone.
 
+!!! note "If the takeover does not find your search box"
+
+    The default selector has two halves, and most themes are matched by the
+    second rather than the first. MkDocs Material, for instance, writes
+    `<input type="text">` inside a wrapper carrying `role="search"` — so it is
+    reached through `[role='search'] input` and not through
+    `input[type='search']`. A theme that does neither needs
+    `addons_search_selector` set to something that matches it; the selector is
+    per-project precisely because no single default reaches every generator.
+
 ## Keyboard and accessibility
 
 Chrome is operable by keyboard throughout, and the behaviour is tested rather

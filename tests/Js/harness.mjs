@@ -216,6 +216,27 @@ export async function run(options = {}) {
     }
 }
 
+/**
+ * The body of a captured beacon, as text.
+ *
+ * 🛑 Read with the jsdom window's own `FileReader` rather than `Blob.text()`:
+ * the blob is constructed inside that realm and jsdom's `Blob` does not expose
+ * `text()`. Worth a helper rather than a line in each test, because the failure
+ * — `blob.text is not a function` — reads like a Node version problem and is
+ * not one.
+ */
+export function beaconText(context, index) {
+    const { blob } = context.beacons[index]
+
+    return new Promise((resolve, reject) => {
+        const reader = new context.window.FileReader()
+
+        reader.onload = () => resolve(String(reader.result))
+        reader.onerror = () => reject(reader.error)
+        reader.readAsText(blob)
+    })
+}
+
 /** The chrome element the runtime prepended, whatever name it settled on. */
 export function hostOf(context) {
     for (const child of context.document.body.children) {

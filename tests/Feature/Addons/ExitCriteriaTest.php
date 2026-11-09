@@ -450,8 +450,9 @@ final class ExitCriteriaTest extends TestCase
             .'<script>window.__md_scope=new URL(".",location);</script>'
             ."</head>\n"
             .'<body dir="ltr" data-md-color-scheme="default">'
-            .'<form class="md-search__form"><input type="text" class="md-search__input" '
-            .'name="query" placeholder="Search" aria-label="Search"></form>'
+            .'<div class="md-search__inner" role="search">'
+            .'<form class="md-search__form" name="search"><input type="text" class="md-search__input" '
+            .'name="query" placeholder="Search" aria-label="Search"></form></div>'
             .'<main><h1 id="guide">Guide</h1><p>Body text.</p></main>'
             .'</body></html>';
     }
