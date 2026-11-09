@@ -454,7 +454,7 @@ change; removed keys and changed grammars are, and they get a new version.
 
 These are the per-project and per-component options that trade a default
 protection for something else. None of them is an environment flag — those are
-in the unsafe-modes registry under [Running it](operations.html) — but each is
+in the unsafe-modes registry under [Running it](operations.md) — but each is
 audited when it changes and surfaced in the project's settings as a weakening.
 
 | Option | What it gives up | Where |
