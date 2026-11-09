@@ -961,13 +961,30 @@ jobs:
 
           echo "minimum mutation score: ${min}%"
 
+          # 🛑 ONE `--class` WITH A COMMA-SEPARATED LIST, not two flags.
+          #
+          # Pest's `--class` does NOT accumulate: a second occurrence REPLACES
+          # the first, silently. Measured while adding Phase 27's target —
+          # `--class='App\Auth\CidrRange' --class='App\Branding\ContrastGate'`
+          # reported 70 mutations, exactly ContrastGate's own count, so the
+          # CidrRange half of this gate would have stopped being measured while
+          # the job carried on passing. The comma form reports 175.
+          #
+          # 🛑 Each phase that is security-critical under SPEC 9.4 adds its
+          # own class and its covering tests here. Phase 27's is
+          # `App\Branding\ContrastGate`: SPEC 8.14.5's refusal below 3:1 is the
+          # control the whole phase turns on, it is pure arithmetic, and a
+          # surviving mutation in it is a theme shipped below the floor with a
+          # passing report. Measured at 81.4% on its own and 82.9% with
+          # CidrRange.
           ./vendor/bin/pest \
             --mutate \
             --covered-only \
             --min="$min" \
-            --class='App\Auth\CidrRange' \
+            --class='App\Auth\CidrRange,App\Branding\ContrastGate' \
             tests/Feature/InvitationAndTokenTest.php \
             tests/Feature/Providers/ProviderCorpusTest.php \
+            tests/Unit/Branding \
             --colors=never 2>&1 | tee /tmp/mutation.log
 
       - name: The score, on failure
