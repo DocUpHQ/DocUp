@@ -66,6 +66,17 @@ final class EmailVariables
      * `{project}` on an email that has no project refuses at render rather
      * than emitting an empty space where a name should be.
      *
+     * 🛑 **Every value here is DocUp's own**, and that is a precondition
+     * rather than an observation. {@see SlotMarkdown} admits a placeholder as
+     * a whole link target precisely because of it: the tenant chooses which
+     * name to use and DocUp chooses what it holds. A caller that passed a
+     * tenant-supplied string in as `action_url` would be handing a tenant the
+     * link target of an email DocUp sends — so the values come from the
+     * sending code's own context, never from a request.
+     *
+     * The escaping is HTML escaping, because every value lands either in HTML
+     * text or in an `href` attribute, and `&` → `&amp;` is correct in both.
+     *
      * @param  array<string, string|null>  $values
      * @return array<string, string>
      */

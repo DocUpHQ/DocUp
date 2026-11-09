@@ -12,7 +12,7 @@ use App\Http\Controllers\Branding\ThemeFontController;
 use App\Http\Controllers\Branding\ThemeStylesheetController;
 use App\Http\Controllers\Edge\AcmeChallengeController;
 use App\Http\Controllers\Serving\DocumentController;
-use Illuminate\Routing\Route as RoutingRoute;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Tests\TestCase;
 
@@ -158,13 +158,9 @@ final class BrandingRoutePrecedenceTest extends TestCase
      */
     private static function controllerFor(string $method, string $url): string
     {
-        $request = \Illuminate\Http\Request::create($url, $method);
+        $request = Request::create($url, $method);
 
         foreach (Route::getRoutes()->getRoutes() as $route) {
-            if (! $route instanceof RoutingRoute) {
-                continue;
-            }
-
             if (! in_array($method, $route->methods(), true)) {
                 continue;
             }

