@@ -8,7 +8,10 @@ declare(strict_types=1);
 namespace App\Auth\Providers;
 
 use App\Access\AccessLeaf;
+use App\Auth\Providers\Drivers\HeaderTrustDriver;
 use App\Auth\Providers\Drivers\IpAllowlistDriver;
+use App\Auth\Providers\Drivers\LdapDriver;
+use App\Auth\Providers\Drivers\MtlsDriver;
 use App\Auth\Providers\Drivers\OidcDriver;
 use App\Auth\Providers\Drivers\PasswordDriver;
 use App\Auth\Providers\Drivers\PortalSessionDriver;
@@ -69,8 +72,23 @@ final class DriverRegistry
      * `AssertionReplayCache` — is `final` and takes no options, so
      * `SamlDriver` conducts no protocol and cannot weaken any of it.
      *
-     * `ldap`, `mtls` and `header_trust` are still absent: §8.12.17 puts them
-     * after the cut line and §17.3 names the phase that carries each.
+     * 🛑 `ldap` arrived in **Phase 26b**, which is the phase §17.3 names for
+     * it, under the same condition and with one addition: it is
+     * **installation-scope only** (§8.12.4), which {@see LdapDriver::allowsProjectScope()}
+     * returns false for and {@see self::permittedAt()} enforces. §8.12.18's four
+     * LDAP requirements live in `App\Auth\Providers\Ldap` behind `final`
+     * classes with no options — so `LdapDriver` conducts no protocol either.
+     *
+     * 🛑 `mtls` and `header_trust` arrived in **Phase 26b** too, the last two
+     * entries in §8.12.17's table, both installation-scope only and both
+     * authenticating a reader from a fact the TLS terminator established.
+     * §8.12.18's shape again: `App\Auth\Providers\Mtls` is `final` and
+     * optionless, and {@see EdgeAssertion} is the only
+     * channel by which such a fact reaches a driver — an assertion from an
+     * untrusted peer is not refused, it is unrepresentable.
+     *
+     * 🛑 `header_trust` is additionally **off by default**, which §8.12.17
+     * says of no other driver, and {@see self::REQUIRES_NAMING} is that.
      *
      * @var array<string, class-string<AuthComponent>>
      */
@@ -83,7 +101,49 @@ final class DriverRegistry
         'ip_allowlist' => IpAllowlistDriver::class,
         'oidc' => OidcDriver::class,
         'saml' => SamlDriver::class,
+        'ldap' => LdapDriver::class,
+        'mtls' => MtlsDriver::class,
+        'header_trust' => HeaderTrustDriver::class,
     ];
+
+    /**
+     * 🛑 §8.12.17's "off by default", which no other mechanism expresses.
+     *
+     * | Driver | Scope column |
+     * |---|---|
+     * | `ldap` | installation only |
+     * | `mtls` | installation only |
+     * | `header_trust` | installation only, **off by default** |
+     *
+     * One of eleven drivers is marked so, and {@see self::allowedByInstallation()}
+     * would not have delivered it: an **unset** `permitted_types` means "every
+     * registered type", so merely registering `header_trust` would have turned
+     * it **on** by default. The spec's instruction and the mechanism's default
+     * pointed opposite ways.
+     *
+     * So a type named here is permitted only when `permitted_types` **names
+     * it**. The permissive default does not reach it, an empty list does not
+     * reach it, and §8.22.11's `DOCUP_DANGEROUSLY_ALLOW_UNLISTED_AUTH_TYPES`
+     * does not either — which is deliberate. That flag is a *blanket*
+     * escape hatch, and a driver the specification says is off by default
+     * should require being **named**, not swept in by a blanket meant for
+     * something else. Naming it costs one entry in one environment variable;
+     * §20.4's invariant is "no security control sits behind a flag that
+     * defaults open", and this is the same instinct applied to the hatch
+     * itself.
+     *
+     * 🛑 A list here rather than a method on {@see AuthComponent}, and the
+     * trade-off is worth stating because the interface would have read better.
+     * §8.12.2 requires that "third-party drivers MUST be installable without
+     * migrations", and a new interface method breaks every driver written
+     * against the published contract — for a property only DocUp's own
+     * specification assigns, to one of DocUp's own drivers. The *mechanism* is
+     * this class's single responsibility ("the one place that answers 'may this
+     * scope configure this type'"), so the list lives where the enforcement is.
+     *
+     * @var list<string>
+     */
+    private const array REQUIRES_NAMING = ['header_trust'];
 
     /**
      * Every registered type.
@@ -190,17 +250,30 @@ final class DriverRegistry
      */
     private static function allowedByInstallation(string $type): bool
     {
+        $permitted = config('docup.auth.permitted_types');
+        $permitted = is_array($permitted) ? $permitted : [];
+        $named = in_array($type, $permitted, true);
+
+        /*
+         * 🛑 Checked **before** the unsafe flag and before the permissive
+         * default, because for these types neither applies. See
+         * {@see self::REQUIRES_NAMING}: §8.12.17 says "off by default", and
+         * both of the usual routes to "permitted" are routes nobody chose for
+         * this driver in particular.
+         */
+        if (in_array($type, self::REQUIRES_NAMING, true)) {
+            return $named;
+        }
+
         if (config('docup.unsafe.allow_unlisted_auth_types') === true) {
             return true;
         }
 
-        $permitted = config('docup.auth.permitted_types');
-
-        if (! is_array($permitted) || $permitted === []) {
+        if ($permitted === []) {
             return true;
         }
 
-        return in_array($type, $permitted, true);
+        return $named;
     }
 
     /**

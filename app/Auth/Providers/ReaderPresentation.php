@@ -66,6 +66,22 @@ final readonly class ReaderPresentation
          * member does not satisfy the IdP's rule" would be false.
          */
         public ?string $sessionBinding = null,
+        /*
+         * 🛑 §8.12.4's "facts only the TLS terminator can establish", as one
+         * named object rather than as four more fields.
+         *
+         * Added in Phase 26b for `mtls` and `header_trust`, which are the two
+         * drivers whose identity is established somewhere else and *told* to
+         * DocUp. It is one field because the class note above says a fifth
+         * takes a reviewer and a reason, and the reason is better stated once
+         * about the whole category than four times about its members —
+         * {@see EdgeAssertion} is where it is stated.
+         *
+         * Null is the ordinary case: an installation that configured none of
+         * this, and every request that did not arrive through a hop the
+         * installation declared its own.
+         */
+        public ?EdgeAssertion $edge = null,
     ) {}
 
     /** Nothing was presented, which is the ordinary case on a public page. */
@@ -102,6 +118,7 @@ final readonly class ReaderPresentation
             remoteAddress: $this->remoteAddress,
             sessionSubject: $sessionSubject,
             sessionBinding: $sessionBinding,
+            edge: $this->edge,
         );
     }
 
@@ -119,6 +136,27 @@ final readonly class ReaderPresentation
         return $this->bearer !== null
             || $this->shareSecret !== null
             || $this->password !== null
-            || $this->sessionSubject !== null;
+            || $this->sessionSubject !== null
+            /*
+             * 🛑 The certificate counts and the asserted subject does **not**,
+             * and the asymmetry is the point rather than an oversight.
+             *
+             * A client certificate is one the reader's browser *chose* to send
+             * from a store the reader controls — presented, in §8.12.23's sense,
+             * and a reader holding a certificate for this installation already
+             * knows its projects exist. An asserted subject was manufactured by
+             * the terminator from a session the reader holds somewhere else;
+             * the reader did not present it, did not choose it and usually
+             * cannot see it.
+             *
+             * The consequence of getting this backwards is quiet and large: a
+             * terminator forwards its identity header on **every** request, so
+             * counting it as presented would make every private 404 on the
+             * installation a 401 — an existence oracle for every private
+             * project. {@see \App\Auth\Providers\Drivers\HeaderTrustDriver}
+             * never returns a rejected credential for the same reason, and a
+             * test asserts it over every hostile input in the suite.
+             */
+            || $this->edge?->clientCertificate !== null;
     }
 }

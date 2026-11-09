@@ -17,6 +17,8 @@ use App\Auth\Providers\BindingRejection;
 use App\Auth\Providers\Bindings;
 use App\Auth\Providers\BindingState;
 use App\Auth\Providers\Drivers\IpAllowlistDriver;
+use App\Auth\Providers\Ldap\LdapRejection;
+use App\Auth\Providers\Mtls\MtlsRejection;
 use App\Auth\Providers\ProviderOutcome;
 use App\Auth\Providers\ProviderResolver;
 use App\Auth\Providers\ReaderCredentials;
@@ -33,6 +35,11 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Tests\Feature\HeaderTrust\HeaderTrustTest;
+use Tests\Feature\Ldap\LdapDirectoryTest;
+use Tests\Feature\Ldap\LdapSignInTest;
+use Tests\Feature\Mtls\MtlsBoundaryTest;
+use Tests\Feature\TenancyScopeTest;
 use Tests\TestCase;
 
 /**
@@ -92,6 +99,27 @@ final class ProviderCorpusTest extends TestCase
         'provider-011' => [self::class, 'test_a_project_binding_does_not_shadow_an_installation_binding_of_another_type'],
         'provider-012' => [self::class, 'test_the_read_the_docs_token_scheme_is_nothing'],
         'provider-013' => [self::class, 'test_an_ipv4_mapped_address_never_matches_an_ipv4_range'],
+
+        /*
+         * 🛑 Phase 26b's nine, and most of them are proved OUTSIDE this file.
+         *
+         * Deliberately: the proof belongs with the driver it is about, and a
+         * corpus entry pointing at a test that lives beside the code it
+         * defends is a corpus entry somebody maintaining that code will
+         * see. `test_every_provider_corpus_case_has_a_live_proof()` is what
+         * makes the pointer safe — a renamed or deleted method fails CI
+         * rather than quietly defending nothing.
+         */
+        'provider-014' => [MtlsBoundaryTest::class, 'test_an_impostor_ca_with_the_same_dn_is_refused_only_by_the_verdict'],
+        'provider-015' => [HeaderTrustTest::class, 'test_the_subject_header_alone_authenticates_nobody'],
+        'provider-016' => [HeaderTrustTest::class, 'test_a_duplicated_header_is_refused_outright'],
+        'provider-017' => [MtlsBoundaryTest::class, 'test_an_unparseable_certificate_is_not_a_rejected_credential'],
+        'provider-018' => [LdapDirectoryTest::class, 'test_an_unknown_username_is_refused_identically_to_a_wrong_password'],
+        'provider-019' => [LdapDirectoryTest::class, 'test_an_empty_password_is_refused_in_front_of_a_directory_that_would_accept_it'],
+        'provider-020' => [LdapDirectoryTest::class, 'test_an_ambiguous_username_is_refused_rather_than_chosen'],
+        'provider-021' => [LdapDirectoryTest::class, 'test_the_directory_groups_reach_the_identity'],
+        'provider-022' => [TenancyScopeTest::class, 'test_a_deliberate_null_organisation_is_left_alone'],
+        'provider-023' => [LdapSignInTest::class, 'test_the_post_keeps_csrf_and_the_saml_acs_does_not'],
     ];
 
     private OrganisationContext $context;
@@ -158,9 +186,9 @@ final class ProviderCorpusTest extends TestCase
         $cases = self::corpus();
 
         $this->assertGreaterThanOrEqual(
-            13,
+            23,
             count($cases),
-            '🛑 §9.4: Phase 23 appended thirteen cases; the corpus is append-only',
+            '🛑 §9.4: Phase 23 appended thirteen cases and Phase 26b ten more; the corpus is append-only',
         );
 
         $known = array_merge(
@@ -173,11 +201,31 @@ final class ProviderCorpusTest extends TestCase
              * available for a property no enum names — a race won exactly once,
              * work not done, a state reached, a comparison that must not match.
              */
+            /*
+             * 🛑 Phase 26b's three rejection vocabularies, DECLARED rather
+             * than added to the prose list below. Each is a real enum, so a
+             * corpus case naming an outcome that no longer exists fails
+             * here instead of reading as plausible.
+             */
+            array_map(static fn (LdapRejection $c): string => $c->value, LdapRejection::cases()),
+            array_map(static fn (MtlsRejection $c): string => $c->value, MtlsRejection::cases()),
             [
                 'exactly one 200',
                 'throttled before any argon2 verification',
                 'both resolve',
                 'no match',
+                /*
+                 * 🛑 `unsatisfied` and `reject` are the two outcomes with no
+                 * enum of their own, and that is the point of both. An
+                 * {@see \App\Auth\Providers\AttemptResult} that satisfies
+                 * nothing carries NO rejection — §8.12.23 is why: a named
+                 * reason reaching a reader is the disclosure the default
+                 * 404 exists to prevent. `reject` is a write-time refusal
+                 * whose cause is a schema or scope contradiction rather
+                 * than a protocol one.
+                 */
+                'unsatisfied',
+                'reject',
                 BindingState::Verifying->value,
             ],
         );

@@ -717,7 +717,18 @@ jobs:
       - name: Start the runner, which runs the §8.5.12 self-test
         run: |
           set -euo pipefail
-          sudo -E env "PATH=$PATH" php artisan docup:runner --once
+
+          # The environment, named explicitly. The pest step below says why.
+          sudo env "PATH=$PATH" \
+            "DB_HOST=${DB_HOST}" \
+            "DB_DATABASE=${DB_DATABASE}" \
+            "DOCUP_WORKSPACE_ROOT=${DOCUP_WORKSPACE_ROOT}" \
+            "DOCUP_RUNNER_SPOOL=${DOCUP_RUNNER_SPOOL}" \
+            "DOCUP_SANDBOX_NETWORK=${DOCUP_SANDBOX_NETWORK}" \
+            "DOCUP_BUILD_ISOLATION=${DOCUP_BUILD_ISOLATION}" \
+            "DOCUP_SANDBOX_EGRESS=${DOCUP_SANDBOX_EGRESS}" \
+            "DOCUP_CGROUP_ROOT=${DOCUP_CGROUP_ROOT}" \
+            php artisan docup:runner --once
           test -f /var/lib/docup/spool/self-test.json
           cat /var/lib/docup/spool/self-test.json
           grep -q '"passed":true' /var/lib/docup/spool/self-test.json
@@ -729,7 +740,17 @@ jobs:
           # readable by the wait below or by the failure step at the end.
           : > /tmp/runner.log
           # shellcheck disable=SC2024
-          sudo -E env "PATH=$PATH" php artisan docup:runner >> /tmp/runner.log 2>&1 &
+          # The environment, named explicitly. The pest step below says why.
+          sudo env "PATH=$PATH" \
+            "DB_HOST=${DB_HOST}" \
+            "DB_DATABASE=${DB_DATABASE}" \
+            "DOCUP_WORKSPACE_ROOT=${DOCUP_WORKSPACE_ROOT}" \
+            "DOCUP_RUNNER_SPOOL=${DOCUP_RUNNER_SPOOL}" \
+            "DOCUP_SANDBOX_NETWORK=${DOCUP_SANDBOX_NETWORK}" \
+            "DOCUP_BUILD_ISOLATION=${DOCUP_BUILD_ISOLATION}" \
+            "DOCUP_SANDBOX_EGRESS=${DOCUP_SANDBOX_EGRESS}" \
+            "DOCUP_CGROUP_ROOT=${DOCUP_CGROUP_ROOT}" \
+            php artisan docup:runner >> /tmp/runner.log 2>&1 &
           for _ in $(seq 1 20); do
             if grep -q 'runner ready' /tmp/runner.log; then exit 0; fi
             sleep 1
@@ -747,7 +768,49 @@ jobs:
           NO_COLOR: '1'
         run: |
           set -o pipefail
-          sudo -E env "PATH=$PATH" ./vendor/bin/pest \
+
+          # 🛑 This job's `env:` does not survive `sudo`, so every root
+          # step names what it needs.
+          #
+          # `sudo -E` is not the answer and was the original mistake: the
+          # runner's sudoers grants NOPASSWD without SETENV, so `-E` is
+          # REFUSED with a warning and the environment is reset anyway. It
+          # reads as though it preserves the environment, which is exactly
+          # how this went unnoticed. `env VAR=value` passes arguments to a
+          # command instead of asking sudo for a policy exemption, so it
+          # works where `-E` does not.
+          #
+          # Two of these were load-bearing and both were silent:
+          #
+          #   DB_HOST            phpunit.xml supplies `db` when nothing else
+          #                      has -- its <env> elements fill a GAP rather
+          #                      than override, so stripping the variable is
+          #                      what activates the compose hostname. 60 of
+          #                      these tests failed on `getaddrinfo for db`.
+          #   DOCUP_CGROUP_ROOT  config/builds.php defaults it to /hostcg,
+          #                      the path the runner CONTAINER mounts. Here
+          #                      PHP is the host process, so the sampler
+          #                      found no hierarchy, read no counters, and a
+          #                      fork bomb reported SUCCESS (§8.5.15).
+          #
+          # The rest are passed because the next variable to be added will
+          # be load-bearing too, and a list that is complete cannot be
+          # incomplete by omission. They are echoed below so a red log
+          # shows the environment rather than inviting an inference.
+          php -r 'printf("%s: DB_HOST=%s DOCUP_CGROUP_ROOT=%s".PHP_EOL, $argv[1], getenv("DB_HOST") ?: "(unset)", getenv("DOCUP_CGROUP_ROOT") ?: "(unset)");' -- 'before sudo'
+          sudo env "PATH=$PATH" "DB_HOST=${DB_HOST}" "DOCUP_CGROUP_ROOT=${DOCUP_CGROUP_ROOT}" \
+            php -r 'printf("%s: DB_HOST=%s DOCUP_CGROUP_ROOT=%s".PHP_EOL, $argv[1], getenv("DB_HOST") ?: "(unset)", getenv("DOCUP_CGROUP_ROOT") ?: "(unset)");' -- ' after sudo'
+
+          sudo env "PATH=$PATH" \
+            "DB_HOST=${DB_HOST}" \
+            "DB_DATABASE=${DB_DATABASE}" \
+            "DOCUP_WORKSPACE_ROOT=${DOCUP_WORKSPACE_ROOT}" \
+            "DOCUP_RUNNER_SPOOL=${DOCUP_RUNNER_SPOOL}" \
+            "DOCUP_SANDBOX_NETWORK=${DOCUP_SANDBOX_NETWORK}" \
+            "DOCUP_BUILD_ISOLATION=${DOCUP_BUILD_ISOLATION}" \
+            "DOCUP_SANDBOX_EGRESS=${DOCUP_SANDBOX_EGRESS}" \
+            "DOCUP_CGROUP_ROOT=${DOCUP_CGROUP_ROOT}" \
+            ./vendor/bin/pest \
             tests/Feature/Builds \
             --colors=never 2>&1 | tee /tmp/sandbox.log
 
@@ -760,6 +823,269 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # 🛑 SPEC 17 Phase 24's exit criterion, against a REAL Keycloak.
+  # ---------------------------------------------------------------------------
+  # 🛑 SPEC 9.4's mutation score, which this repository has owed since Phase 04.
+  #
+  # > "**Security-critical phases:** additionally a mutation score ≥75% on
+  # > changed domain code"
+  #
+  # The build log carried it as "needs Infection, which is not installed" for
+  # eight phases. That reason went out of date: the project is on
+  # `pestphp/pest ^5`, and Pest 5 has mutation testing built in. The threshold
+  # has been committed in `config/docup.php` the whole time, and the
+  # `thresholds` job already fails when it decreases -- so the configuration,
+  # the check and the tool were all present and only the step was missing.
+  #
+  # 🛑 Its own job, and for a reason the other integration jobs share: it needs
+  # `coverage: pcov`, which the baseline gate deliberately sets to `none`
+  # because coverage instrumentation slows every test in the suite. A failure
+  # here should also name the gate rather than the suite.
+  #
+  # 🛑 The class list is DELIBERATELY SHORT and is meant to grow. A first step
+  # that covered every namespace would either take an hour or go red on code
+  # nobody is changing, and neither teaches a phase anything. It starts with
+  # the one class Phase 26b added that is pure decision logic over untrusted
+  # input -- the CIDR matcher behind an API token's address binding, whose
+  # wrong answer is either an admitted stranger or a locked-out operator.
+  # A later phase adds its own classes beside it; the threshold is shared.
+  # ---------------------------------------------------------------------------
+  mutation:
+    name: mutation score on changed domain code
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: docup-root
+          MYSQL_DATABASE: docup_test
+          MYSQL_USER: docup
+          MYSQL_PASSWORD: docup
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pdocup-root"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+
+    env:
+      DB_HOST: 127.0.0.1
+      DB_DATABASE: docup_test
+      NO_COLOR: '1'
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pdo_mysql, intl, zip, gd, bcmath, sodium, pcntl, redis, ldap
+          # 🛑 The one job that wants it. Mutation testing cannot map a mutation
+          # to a covering test without coverage data, and Pest reports every
+          # mutation as `UNCOVERED` rather than failing when it is absent --
+          # which would be a gate that passed while measuring nothing.
+          coverage: pcov
+
+      - name: Provide an environment file before anything boots the app
+        run: cp .env.example .env
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare the application
+        run: |
+          set -euo pipefail
+          php artisan key:generate
+          php artisan migrate --force --no-interaction
+
+      # 🛑 `--min` comes from the committed threshold rather than being written
+      # here, so the `thresholds` job's "a threshold must not decrease" check
+      # governs this gate too. A number in the workflow would be a second copy
+      # that could drift below the first.
+      #
+      # 🛑 AND THERE IS NO `--coverage` HERE, DELIBERATELY. It belongs on a
+      # coverage run and looks like it belongs on this one, so the next person
+      # to read this will add it; the first version of this job did. Pest
+      # registers `Pest\Mutate\Plugins\Mutate` BEFORE `Pest\Plugins\Coverage`
+      # and `MinScoreOption::remove()` returns false -- so the mutation plugin
+      # reads `--min` and then LEAVES IT in the argument list, where the
+      # coverage plugin pops it as a *coverage* threshold. With `--coverage`
+      # present that plugin then goes looking for a report the mutation run
+      # never writes and the step dies on
+      # `Coverage not found in path: vendor/pestphp/pest/.temp/coverage.php`
+      # AFTER printing a passing score. Mutation testing needs the coverage
+      # DRIVER, which `coverage: pcov` above provides; it does not need the
+      # flag, and the plugin appends its own `--coverage-php` when the flag is
+      # absent.
+      - name: SPEC 9.4's mutation score
+        run: |
+          set -o pipefail
+
+          min="$(
+            php -r 'require "vendor/autoload.php";
+              $app = require "bootstrap/app.php";
+              $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+              echo (int) config("docup.gates.security_critical.mutation_min_score");'
+          )"
+
+          if [ -z "$min" ] || [ "$min" -lt 1 ]; then
+            echo "::error::could not read docup.gates.security_critical.mutation_min_score"
+            exit 1
+          fi
+
+          echo "minimum mutation score: ${min}%"
+
+          ./vendor/bin/pest \
+            --mutate \
+            --covered-only \
+            --min="$min" \
+            --class='App\Auth\CidrRange' \
+            tests/Feature/InvitationAndTokenTest.php \
+            tests/Feature/Providers/ProviderCorpusTest.php \
+            --colors=never 2>&1 | tee /tmp/mutation.log
+
+      - name: The score, on failure
+        if: failure()
+        run: tail -120 /tmp/mutation.log || true
+
+  # ---------------------------------------------------------------------------
+  # 🛑 SPEC 17's Phase 26b exit criterion 1, against a REAL directory.
+  #
+  # > "An LDAP group removal drops access on the next decision."
+  #
+  # `tests/Feature/Ldap/LdapBoundaryTest.php` proves everything that is DocUp's
+  # with no server at all — filter escaping against a hostile username, the TLS
+  # and referral options, the installation-scope narrowing, the sorting of
+  # operator faults from reader faults. What it cannot prove is that DocUp
+  # speaks the protocol a real directory speaks: that StartTLS verifies with
+  # `LDAP_OPT_X_TLS_HARD` set, that a simple bind as the reader's own DN is what
+  # checks their password, that `memberOf` arrives as a list, and that removing
+  # a member from a group changes what the next bind sees.
+  #
+  # 🛑 **And without this job the integration would SKIP.**
+  # `LdapDirectoryTest` gates on `DOCUP_LDAP_E2E`, so on a runner with no
+  # directory it skips — and Phase 06's recorded lesson is that "a skip is not a
+  # pass". Phase 07 put the build sandbox in CI for exactly that reason; this is
+  # the same move, one phase later, for a driver that shipped in Phase 23 with
+  # no sign-in path at all.
+  #
+  # Its own job rather than a step in `baseline gate`, like the OIDC, TLS and
+  # edge jobs: it needs a service the shipped compose file does not start, and a
+  # failure here should name the integration rather than the suite.
+  # ---------------------------------------------------------------------------
+  ldap:
+    name: LDAP against a real OpenLDAP
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compose an environment
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          printf 'APP_KEY=base64:%s\n' "$(openssl rand -base64 32)" >> .env
+          printf 'APP_ENV=local\n' >> .env
+          printf 'DOCUP_AUDIT_KEY=%s\n' "$(openssl rand -hex 32)" >> .env
+          printf 'DOCUP_APP_HOST=docup.localhost\n' >> .env
+          printf 'DOCUP_DOCS_APEX=docup-docs.localhost\n' >> .env
+          printf 'DOCUP_PREVIEW_APEX=docup-previews.localhost\n' >> .env
+          printf 'DOCUP_ASSET_HOST=assets.docup-docs.localhost\n' >> .env
+
+      # 🛑 BEFORE the stack comes up. The certificate is a bind mount and the
+      # entrypoint refuses to start without it — slapd reads
+      # `olcTLSCertificateFile` at start-up, so writing it later would leave the
+      # first handshake unprotected.
+      - name: Generate the directory's certificate
+        run: bash deploy/ldap-test-setup.sh
+
+      - name: Build the images
+        run: docker compose -f compose.yaml -f compose.ldap.yaml build app openldap
+
+      - name: Install dependencies
+        run: |
+          docker compose -f compose.yaml -f compose.ldap.yaml run --rm --no-deps app \
+            composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Start the stack and the directory
+        run: docker compose -f compose.yaml -f compose.ldap.yaml up -d db cache openldap app
+
+      # The same reasoning the OIDC job gives: compose.ldap.yaml points the
+      # application at `docup_test` so the suite and the running application
+      # share one database, and the image grants the `docup` user only `docup`.
+      - name: Create the shared test database
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if docker compose -f compose.yaml -f compose.ldap.yaml exec -T -e MYSQL_PWD=docup-root db \
+                 mysql -u root -e "CREATE DATABASE IF NOT EXISTS \`docup_test\`
+                                     DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+                                   GRANT ALL PRIVILEGES ON \`docup_test\`.* TO 'docup'@'%';
+                                   FLUSH PRIVILEGES;"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::could not create docup_test"
+          exit 1
+
+      - name: Migrate
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if docker compose -f compose.yaml -f compose.ldap.yaml exec -T -e DB_DATABASE=docup_test app \
+                 php artisan migrate --force --no-interaction; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::migrations never succeeded"
+          exit 1
+
+      # 🛑 Waits for the healthcheck, which is a real search over StartTLS and
+      # not a port probe — the entrypoint builds the directory BEFORE slapd
+      # starts, so an open port would go green while the tree was still absent
+      # and the first run on a cold runner would be the flaky one.
+      - name: Wait for the directory
+        run: |
+          set -euo pipefail
+          id="$(docker compose -f compose.yaml -f compose.ldap.yaml ps -q openldap)"
+          for _ in $(seq 1 40); do
+            state="$(docker inspect --format '{{.State.Health.Status}}' "$id" 2>/dev/null || echo starting)"
+            if [ "$state" = healthy ]; then
+              echo 'the directory is up'
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::the directory never became healthy"
+          docker compose -f compose.yaml -f compose.ldap.yaml logs openldap --tail 60
+          exit 1
+
+      # 🛑 Through DocUp's own connection class, with every SPEC 8.12.18 option
+      # in force. The script's `--trust` leg both installs the anchor and PROVES
+      # `LdapConnection` can verify the directory — so a trust-store problem
+      # fails here, before any reader is involved, with a reason. A curl would
+      # verify a different store.
+      - name: Trust the directory's certificate in the app container
+        run: |
+          DOCUP_COMPOSE="docker compose -f compose.yaml -f compose.ldap.yaml" \
+            bash deploy/ldap-test-setup.sh --trust
+
+      # 🛑 DOCUP_LDAP_E2E=1 turns a skip into a failure, which is the whole
+      # reason this job exists.
+      - name: SPEC 17's Phase 26b exit criterion 1, end to end
+        run: |
+          set -o pipefail
+          docker compose -f compose.yaml -f compose.ldap.yaml exec -T \
+            -e DB_DATABASE=docup_test -e DOCUP_LDAP_E2E=1 -e NO_COLOR=1 app \
+            ./vendor/bin/pest tests/Feature/Ldap --colors=never
+
+      - name: Logs, on failure
+        if: failure()
+        run: docker compose -f compose.yaml -f compose.ldap.yaml logs --tail 200
+
   # ---------------------------------------------------------------------------
   #
   # > "Two projects on one installation authenticate readers against two

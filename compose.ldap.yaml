@@ -1,0 +1,131 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# ------------------------------------------------------------------------------
+# A real OpenLDAP, for §17's Phase 26b exit criterion.
+# ------------------------------------------------------------------------------
+#
+# > "An LDAP group removal drops access on the next decision."
+#
+# 🛑 **Why a real directory and not the fixture.** `tests/Feature/Ldap` proves
+# everything that is DocUp's — filter escaping against a hostile username, the
+# TLS and referral options, the installation-scope narrowing, the refusal
+# sorting — with no server at all. What it cannot prove is that DocUp speaks the
+# protocol a real directory speaks: that StartTLS verifies with
+# `LDAP_OPT_X_TLS_HARD` set, that a simple bind as a reader's own DN is what
+# checks their password, that `memberOf` arrives as a list, and that removing a
+# member from a group changes what the next bind sees. A fixture agrees with
+# whatever DocUp believes.
+#
+# 🛑 **Built, not pulled** — `deploy/Dockerfile.openldap` says why at length:
+# the LDAP images in wide use are unmaintained or have moved catalogue, and a
+# phase's exit criterion must not depend on a registry decision.
+#
+# Usage:
+#   bash deploy/ldap-test-setup.sh                 # certificate, BEFORE the stack
+#   docker compose -f compose.yaml -f compose.ldap.yaml up -d --build
+#   bash deploy/ldap-test-setup.sh --trust         # after the app is running
+#   docker compose -f compose.yaml -f compose.ldap.yaml exec \
+#     -e DOCUP_LDAP_E2E=1 -e DB_DATABASE=docup_test app \
+#     ./vendor/bin/pest tests/Feature/Ldap
+#
+# The same shape as `compose.oidc.yaml` and `compose.tls.yaml`, and for the same
+# reason: an integration whose dependency is not in the shipped compose file is
+# an integration that cannot be run by accident.
+
+services:
+  openldap:
+    build:
+      context: ./deploy
+      dockerfile: Dockerfile.openldap
+    image: docup/openldap-fixture:1
+
+    environment:
+      LDAP_SUFFIX: dc=docup,dc=test
+      # 🛑 A fixture password, in a committed file, guarding a directory that
+      # exists inside one compose network for the length of a test run. The
+      # same value is in `deploy/openldap/seed.ldif` as an `{SSHA}` hash, and
+      # the test reads it from the environment rather than repeating it.
+      LDAP_ADMIN_PASSWORD: admin-password-for-tests-only
+
+    volumes:
+      # Written by deploy/ldap-test-setup.sh before the stack comes up.
+      - ./deploy/openldap-tls:/opt/docup/tls:ro
+
+    # 🛑 On the `app` network only. A directory has no business reaching the
+    # database, and §11.2 enforces the zones by network rather than by
+    # convention — the same placement `compose.oidc.yaml` gives Keycloak.
+    networks:
+      app:
+        aliases:
+          - openldap
+
+    # 🛑 Not published to the host, unlike Keycloak's port.
+    #
+    # The OIDC driver has to publish because its test driver plays the part of
+    # a browser and runs outside the stack. This suite is Pest inside the `app`
+    # container, which is where DocUp's own LDAP code runs — so the only
+    # address that matters is the in-network one, and publishing would put an
+    # unauthenticated directory on a developer's loopback for no test's sake.
+
+    healthcheck:
+      # 🛑 A real search over StartTLS, not a port probe.
+      #
+      # 🛑 `openldap` and not `localhost`, which is the name a healthcheck
+      # reaches for and the one name here that FAILS: the client resolves it
+      # to `::1` and compares against the certificate's IP SANs, which list
+      # `127.0.0.1` and not the v6 loopback. Measured. Using `openldap`
+      # instead is better than adding a SAN, because it is the name DocUp
+      # itself verifies — so the healthcheck and the product check the same
+      # thing.
+      #
+      # 🛑 `LDAPTLS_CACERT` because the fixture does not trust its own
+      # self-signed certificate either. `-ZZ` means "StartTLS or fail", so
+      # without the anchor the healthcheck fails with
+      # `certificate verify failed (self-signed certificate)` while slapd is
+      # perfectly healthy. Pointing it at the certificate is the same
+      # "self-signed IS its own trust anchor" step `deploy/ldap-test-setup.sh`
+      # performs for the application, and it keeps verification ON rather
+      # than reaching for `TLS_REQCERT=never` — a healthcheck that skipped
+      # verification would go green on a directory DocUp then refuses. The entrypoint builds
+      # the directory before slapd starts, so an open port would go green while
+      # the tree was still absent on a slow machine — and the first run would
+      # fail intermittently, which is the worst kind of fixture.
+      test:
+        - CMD-SHELL
+        - >-
+          LDAPTLS_CACERT=/opt/docup/tls/openldap.crt
+          ldapsearch -ZZ -x -H ldap://openldap:389
+          -D "cn=svc-docup,dc=docup,dc=test" -w "svc-password-for-tests-only"
+          -b "dc=docup,dc=test" -s base "(objectClass=*)" dn
+          >/dev/null 2>&1
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  app:
+    environment:
+      # 🛑 The flag that turns a skip into a failure, following
+      # `compose.tls.yaml`'s precedent rather than `compose.oidc.yaml`'s: this
+      # integration lives in a Pest suite, so without a flag the suite would
+      # silently skip and a green run would mean nothing. `compose.oidc.yaml`
+      # needs no equivalent because its integration is a shell script with no
+      # skip to turn into a failure.
+      DOCUP_LDAP_E2E: '1'
+
+      # Where the directory is and how to bind to it, so the test does not
+      # hard-code a hostname this file chose.
+      DOCUP_LDAP_URI: ldap://openldap:389
+      DOCUP_LDAP_BASE_DN: dc=docup,dc=test
+      DOCUP_LDAP_BIND_DN: cn=svc-docup,dc=docup,dc=test
+      DOCUP_LDAP_BIND_PASSWORD: svc-password-for-tests-only
+
+      # 🛑 The suite and the running application share ONE database here, for
+      # the reason compose.oidc.yaml gives: a sign-in goes through the real
+      # worker, so rows the test wrote must be visible to it.
+      DB_DATABASE: docup_test
+
+    depends_on:
+      openldap:
+        condition: service_healthy

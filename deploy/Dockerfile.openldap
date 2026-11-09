@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# ------------------------------------------------------------------------------
+# A real OpenLDAP, for §17's Phase 26b exit criterion.
+# ------------------------------------------------------------------------------
+#
+# > "An LDAP group removal drops access on the next decision."
+#
+# 🛑 **Built here rather than pulled.** `compose.oidc.yaml` pins Keycloak by
+# digest because Keycloak publishes an image DocUp can pin; the LDAP images in
+# wide use are either unmaintained (`osixia/openldap`, last release 2021) or
+# have moved catalogue under a vendor's licensing change. A fixture whose image
+# can disappear is a fixture that turns a phase's exit criterion into a CI
+# failure nobody caused — and `slapd` is a Debian package, so building from it
+# costs one file and pins to the same distribution the application image uses.
+#
+# 🛑 **It speaks StartTLS, because DocUp refuses a directory that does not.**
+# §8.12.18: "LDAPS or StartTLS with certificate verification", and
+# `LdapConnection::open()` sets `LDAP_OPT_X_TLS_HARD` before the handshake and
+# **refuses** rather than falling through. So a cleartext fixture could not be
+# reached at all — which is the correct behaviour and the reason this file
+# carries a certificate.
+#
+# Not a production LDAP server and not documentation of one: an in-container
+# database, a config that is rebuilt on every start, and passwords in a
+# committed LDIF that exist only in a working copy.
+
+FROM debian:13-slim
+
+# Three packages, each load-bearing:
+#
+#   slapd       the server.
+#   ldap-utils  `ldapadd` and `ldapsearch`, which the entrypoint uses to seed
+#               the groups OVER THE WIRE -- the memberof overlay only sees
+#               writes a running server makes -- and to prove it populated
+#               `memberOf`; also what the healthcheck runs.
+#   procps      `pgrep`/`pkill`, to wait for the short-lived seeding slapd to
+#               exit before the real one starts. Two slapd processes on one
+#               database is a corrupted database.
+#
+# 🛑 None of these is for the integration test to use. That test drives the
+# directory through `ext-ldap` from the APPLICATION container, which carries
+# no LDAP command-line client and must not grow one for a test's sake.
+
+RUN set -eux; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        slapd \
+        ldap-utils \
+        procps \
+    ; \
+    rm -rf /var/lib/apt/lists/*; \
+    # 🛑 The package's own database is removed, not reused. `slapd`'s postinst
+    # creates a suffix from the container's hostname, which is random per run;
+    # the entrypoint builds the directory deterministically instead, and a
+    # leftover database would make the first start of a fresh container differ
+    # from every later one.
+    rm -rf /etc/ldap/slapd.d /var/lib/ldap; \
+    mkdir -p /etc/ldap/slapd.d /var/lib/ldap; \
+    chown -R openldap:openldap /etc/ldap/slapd.d /var/lib/ldap
+
+COPY openldap/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY openldap/seed.ldif /opt/docup/seed.ldif
+COPY openldap/groups.ldif /opt/docup/groups.ldif
+
+RUN chmod 0755 /usr/local/bin/entrypoint.sh
+
+# 389 for StartTLS, which is the port DocUp's `ldap://` URI reaches. 636 is
+# deliberately not exposed: one transport under test rather than two, and
+# StartTLS is the one with the downgrade failure mode worth proving.
+EXPOSE 389
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -144,6 +144,16 @@ final class PolicySimulatorTest extends TestCase
         $this->publish('open', 'public');
 
         /*
+         * 🛑 A third version, for the one thing the other two cannot show.
+         * §12.3 elevates a reader to `restricted` when the matched allow rule
+         * `namesResourceExplicitly()`, and both rules above name their version
+         * — so on `v1` and `open` the established level is `restricted` whatever
+         * the reader's own floor was. `wide` is governed by a rule with **no**
+         * selectors, so no elevation fires and the floor is what decides.
+         */
+        $this->publish('wide', 'members');
+
+        /*
          * 🛑 Under the installation's own documentation apex, because
          * §8.9.3's `default_subdomain` candidate is built from
          * `docup.origins.docs` — a host outside it resolves to nothing, and
@@ -191,6 +201,21 @@ final class PolicySimulatorTest extends TestCase
             requirement: ['leaf' => AccessLeaf::Public->value],
             versionSlugs: ['open'],
             publicCacheMode: true,
+            actorId: $this->operator->id,
+        );
+
+        /*
+         * 🛑 No version selector and no path prefix, so
+         * `namesResourceExplicitly()` is false and §12.3's `restricted`
+         * elevation does not fire. Last in the policy, so §8.12.6's
+         * first-match leaves `v1` and `open` to the rules above and this
+         * governs everything else.
+         */
+        $policies->addRule(
+            project: $this->project,
+            label: 'any of our people, anywhere else',
+            allow: true,
+            requirement: ['leaf' => AccessLeaf::Binding->value, 'binding_id' => Uuid::toText($this->bindingId)],
             actorId: $this->operator->id,
         );
 
@@ -499,8 +524,27 @@ final class PolicySimulatorTest extends TestCase
         $this->context->forget();
 
         $this->assertNotNull($later->decision);
-        $this->assertFalse($later->decision->allowed, '🛑 §12.3: past `not_after` the rule is not applicable');
-        $this->assertSame(AccessReason::PolicyDefaultDeny, $later->decision->reason);
+
+        /*
+         * 🛑 Past `not_after` the rule is not applicable, and §8.12.6's
+         * first-match hands the decision to the **next** rule that matches —
+         * which is the catch-all added for the group tests. So the observable
+         * consequence of an expiry is not a denial but a different decider, and
+         * asserting the rule is sharper than asserting the verdict: a test that
+         * only checked `allowed` would pass against a policy where rule 1 had
+         * never applied at all.
+         */
+        $this->assertNotNull($later->decision->rule);
+        $this->assertSame(
+            'any of our people, anywhere else',
+            $later->decision->rule->label,
+            '🛑 §8.12.6: an expired rule hands first-match to the next one that matches',
+        );
+        $this->assertNotSame(
+            $now->decision->rule?->label,
+            $later->decision->rule->label,
+            'and that is a different rule from the one deciding today',
+        );
     }
 
     /** §8.12.21's surfaces are an input, so the simulator can be asked about each. */
@@ -679,6 +723,133 @@ final class PolicySimulatorTest extends TestCase
         );
     }
 
+    /**
+     * 🛑 **§12.3's `members` rung by GROUP — the half of its own definition
+     * that nothing implemented until Phase 26b.**
+     *
+     * §12.3: "`members` — a reader whose identity maps to a role assignment
+     * **or group** on this organisation." Phase 24 built the write side
+     * (§8.13.7 reconciles `reader_groups` on every login, added and removed)
+     * and Phase 26a found that **no decision path ever read the column**. So an
+     * operator could map an IdP group to a reader group, watch it land on the
+     * identity, and find their `members` rule still refusing every reader it
+     * was written for — with nothing anywhere saying why.
+     *
+     * The simulator is how that was found and this is where it is fixed, which
+     * is a fair summary of what §8.12.25 is for.
+     *
+     * 🛑 Asserted on `wide`, whose rule names no version, because §12.3's
+     * `restricted` elevation would otherwise mask the floor the group raised —
+     * which is the whole of what is being tested.
+     */
+    public function test_a_reader_with_a_mapped_group_reaches_the_members_rung(): void
+    {
+        /* The fixture maps `engineering`, so this reader carries a group. */
+        $answer = $this->simulate(SimulatedIdentity::reader($this->reader->id), '/en/wide/');
+
+        $this->assertSame(
+            ['engineering'],
+            $answer->identityGroups,
+            'the fixture reader carries a reconciled group',
+        );
+
+        $this->assertNotNull($answer->decision);
+        $this->assertSame(
+            'members',
+            $answer->decision->established->value,
+            '🛑 §12.3: a mapped group is "a group on this organisation", so the reader is a member',
+        );
+        $this->assertTrue(
+            $answer->decision->allowed,
+            'and `members` is what a `members` version requires',
+        );
+    }
+
+    /**
+     * 🛑 And a reader with **no** group stays at `authenticated` — and is
+     * therefore refused, which is what makes the previous test mean something.
+     *
+     * Without this the elevation could be unconditional, every
+     * provider-authenticated reader a member, and §12.3's second rung would
+     * have collapsed into its third with every test still green.
+     */
+    public function test_a_reader_with_no_group_stays_authenticated_and_is_refused(): void
+    {
+        $this->forgetGroups();
+
+        $answer = $this->simulate(SimulatedIdentity::reader($this->reader->id), '/en/wide/');
+
+        $this->assertSame([], $answer->identityGroups);
+
+        $this->assertNotNull($answer->decision);
+        $this->assertSame(
+            'authenticated',
+            $answer->decision->established->value,
+            '🛑 §12.3: no group, no `members` — the rungs stay distinct',
+        );
+        $this->assertFalse($answer->decision->allowed, 'a `members` version refuses an `authenticated` reader');
+    }
+
+    /**
+     * 🛑 **§17's Phase 26b exit criterion, in the form it can actually hold:
+     * removing the group drops the access.**
+     *
+     * §17 words it "an LDAP group removal drops access on the next decision".
+     * The honest bound is the next **login**, or the next request after an epoch
+     * bump — not the next decision. §12.3's decision function is pure and reads
+     * a `ReaderContext`, so the groups have to be in the context already, and
+     * putting a directory round-trip on every reader request is not something
+     * this product does. §8.12.26 states that latency honestly for SCIM —
+     * "epoch bump plus grant TTL plus the refresh-session ceiling" — and the
+     * same words apply here. **Proposed amendment** to the criterion, recorded
+     * in the build log.
+     *
+     * What this asserts is the half that is a property of the code: once the
+     * group is gone from the identity, the access is gone from the decision.
+     * And it asserts it both ways round, so it cannot pass against a decision
+     * that refuses everybody.
+     */
+    public function test_removing_the_group_drops_the_access(): void
+    {
+        $before = $this->simulate(SimulatedIdentity::reader($this->reader->id), '/en/wide/');
+
+        $this->assertNotNull($before->decision);
+        $this->assertTrue($before->decision->allowed, 'the reader reads it while the group holds');
+
+        $this->forgetGroups();
+
+        $after = $this->simulate(SimulatedIdentity::reader($this->reader->id), '/en/wide/');
+
+        $this->assertNotNull($after->decision);
+        $this->assertFalse($after->decision->allowed, '🛑 §17: the group removal drops the access');
+        $this->assertSame('authenticated', $after->decision->established->value);
+    }
+
+    /**
+     * 🛑 And a **live request** agrees, because the elevation happens in
+     * `ReaderSessions::contextFor()` — on the path the simulator and the
+     * serving path share. A test of only one would not prove the other, and
+     * §17's own criterion for the simulator is that the two agree.
+     */
+    public function test_a_live_request_agrees_about_the_group(): void
+    {
+        $live = $this->read('/en/wide/', withSession: true);
+
+        $live->assertOk();
+
+        $answer = $this->simulate(SimulatedIdentity::reader($this->reader->id), '/en/wide/');
+
+        $this->assertNotNull($answer->decision);
+        $this->assertSame(
+            $live->headers->get(ReaderGate::DECISION_HEADER),
+            $answer->decision->header(),
+        );
+
+        $this->forgetGroups();
+
+        $this->read('/en/wide/', withSession: true)->assertNotFound();
+    }
+
     // ------------------------------------------------------------- fixtures
 
     /**
@@ -696,6 +867,26 @@ final class PolicySimulatorTest extends TestCase
      * and path alone and a reader is not a tenant. Both callers of the same
      * decision, one scoped and one not.
      */
+    /**
+     * §8.13.7's reconciliation, with the group gone.
+     *
+     * Written directly rather than through a re-login, because a re-login is
+     * the *mechanism* and this suite is about the decision: what matters is
+     * that the decision follows the column, whoever changed it.
+     */
+    private function forgetGroups(): void
+    {
+        $this->context->for($this->organisation->id);
+
+        DB::table('reader_identities')
+            ->where('id', $this->reader->id)
+            ->update(['reader_groups' => '[]']);
+
+        $this->context->forget();
+
+        Cache::flush();
+    }
+
     private function simulate(SimulatedIdentity $identity, string $path): SimulationAnswer
     {
         $this->context->for($this->organisation->id);

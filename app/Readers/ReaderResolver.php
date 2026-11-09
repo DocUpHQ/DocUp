@@ -9,9 +9,11 @@ namespace App\Readers;
 
 use App\Access\AccessDecision;
 use App\Access\AccessSurface;
+use App\Access\BreakGlass;
 use App\Access\EffectiveAccess;
 use App\Access\PolicySimulator;
 use App\Access\ReaderContext;
+use App\Auth\Providers\EdgeAssertion;
 use App\Auth\Providers\ProviderResolver;
 use App\Auth\Providers\ReaderPresentation;
 use App\Http\Controllers\Readers;
@@ -61,6 +63,16 @@ final readonly class ReaderResolver
         private GrantMinter $minter,
         private ReaderSessions $sessions,
         private ProviderResolver $providers,
+        /*
+         * 🛑 §8.12.20's break-glass, read-only on this path.
+         *
+         * Injected rather than resolved from the container at the call site so
+         * that a test can substitute it, and so that the dependency is visible
+         * here: this class reads one more table than it used to, and a reader
+         * of the constructor should be able to see that without finding an
+         * `app()` call in the middle of a method.
+         */
+        private BreakGlass $breakGlass,
     ) {}
 
     /**
@@ -244,6 +256,16 @@ final readonly class ReaderResolver
                  * the same reason.
                  */
                 remoteAddress: $request->ip(),
+                /*
+                 * 🛑 §8.12.4's "facts only the TLS terminator can establish",
+                 * for `mtls` and `header_trust`. The whole of the safety is in
+                 * {@see EdgeAssertion::from()}: a request that did not arrive
+                 * through a hop this installation declared its own yields
+                 * {@see EdgeAssertion::none()}, so a forged certificate or
+                 * identity header is not refused later by a driver — it never
+                 * becomes an assertion at all.
+                 */
+                edge: EdgeAssertion::from($request),
             ),
             credentialRejected: $credentialRejected || $sessionRejected,
         );
@@ -302,6 +324,26 @@ final readonly class ReaderResolver
          */
         $sessionContext = $session === null ? null : $this->sessions->contextFor($session);
 
+        /*
+         * 🛑 §8.12.20's break-glass window, resolved here because this is
+         * where the session is known — and therefore the only place that
+         * knows which **dashboard user** is reading.
+         *
+         * 🛑 Asked only when the session carries a `userId`, which is set
+         * for a dashboard member's handoff session and null for a reader
+         * identity and for no session at all. Neither of those can hold a
+         * grant, so asking would be one index seek per request for every reader
+         * on the installation to answer a question whose answer is always null.
+         *
+         * 🛑 A read, not a write, so the promise in this method's docblock
+         * holds: §8.12.25's simulator drives this path too, and it reports an
+         * override exactly as a live request would — which is the honest
+         * answer to "as this identity, on this URL".
+         */
+        $breakGlassId = $session?->userId === null
+            ? null
+            : $this->breakGlass->activeFor($session->userId, $project->id);
+
         $outcome = $this->providers->resolve($project, $presented->withSession(
             $sessionContext?->subject,
             /*
@@ -339,7 +381,7 @@ final readonly class ReaderResolver
              * with no bindings configured, which is the case §17 requires to
              * keep working.
              */
-            context: $outcome->toReaderContext($sessionContext),
+            context: $outcome->toReaderContext($sessionContext, $breakGlassId),
             session: $session,
             credentialRejected: $credentialRejected,
         );

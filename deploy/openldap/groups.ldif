@@ -1,0 +1,53 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# ------------------------------------------------------------------------------
+# The groups, loaded OVER THE WIRE rather than with slapadd.
+# ------------------------------------------------------------------------------
+#
+# 🛑 And that is the whole reason this is a separate file.
+#
+# The memberof overlay maintains `memberOf` on a user entry as a group entry
+# is written -- it reacts to writes it SEES. `slapadd` loads a database
+# offline, with no server running and no overlay in the path, so groups
+# seeded that way leave every user with no `memberOf` at all. Measured: the
+# directory answered a search for dana with `uid` and `cn` and nothing else,
+# and the group test failed over an empty set in both directions -- which is
+# exactly the shape of defect this phase keeps finding.
+#
+# So the entrypoint starts slapd on its local socket, adds these entries
+# through it, stops it, and only then starts the real server.
+# 🛑 `groupOfNames` with `member` DNs, which is the only direction a plain
+# directory stores membership — and the entrypoint loads the `memberof`
+# overlay so the same fact also appears as `memberOf` on the USER entry,
+# which is the direction the driver reads. The note beside that overlay says
+# why it is load-bearing rather than convenient.
+#
+# So removing a member here is the group removal §17's exit criterion means,
+# and it is one `ldapmodify` with `delete: member`.
+dn: cn=docs-readers,ou=groups,dc=docup,dc=test
+objectClass: groupOfNames
+cn: docs-readers
+member: uid=dana,ou=people,dc=docup,dc=test
+#
+# 🛑 A SECOND MEMBER, and it is not padding.
+#
+# `groupOfNames` makes `member` a MUST attribute, so a group with no members
+# is a schema violation and `ldap_mod_del` of the last one is refused with
+# "Object class violation (65)". Measured: the exit criterion's removal
+# failed on it, and the symptom named the object class rather than the
+# cause.
+#
+# So dana is not the only member. The service account is used rather than
+# morgan, deliberately: morgan is the reader who must hold NO group, and
+# putting them here would make `a reader in no group holds no group` pass or
+# fail depending on which test ran first.
+#
+# This is also how a real directory looks -- a group with exactly one member
+# is the unusual case -- so the fixture is more faithful for it, not less.
+member: cn=svc-docup,dc=docup,dc=test
+
+dn: cn=docs-admins,ou=groups,dc=docup,dc=test
+objectClass: groupOfNames
+cn: docs-admins
+member: cn=svc-docup,dc=docup,dc=test

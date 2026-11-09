@@ -13,6 +13,7 @@ use App\Http\Middleware\RequireRecentAuthentication;
 use App\Http\Middleware\RequireTokenCapability;
 use App\Http\Middleware\ResolveOrganisation;
 use App\Http\Middleware\SetLocale;
+use App\Http\Middleware\TrustEdgeProxies;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -95,6 +96,16 @@ return Application::configure(basePath: dirname(__DIR__))
         // ran and every §8.13.3 expiry test returned 200. The failure mode is
         // the dangerous direction: a session control that is configured,
         // reviewed, and absent at runtime.
+        /*
+         * 🛑 PREPENDED, because everything that reads `$request->ip()` or
+         * `getHost()` must run after it — §8.12.17's `ip_allowlist` gate and
+         * §8.9.3's host resolution both do. Appending it would leave the first
+         * middleware in the group reading the edge's address.
+         */
+        $middleware->web(prepend: [
+            TrustEdgeProxies::class,
+        ]);
+
         $middleware->web(append: [
             HandleInertiaRequests::class,
             SetLocale::class,

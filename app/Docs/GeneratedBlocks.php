@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace App\Docs;
 
 use App\Access\DecisionTable;
+use App\Auth\Providers\Federation\ProvisioningLatency;
 use App\Composition\ModeBehaviour;
 use App\Composition\SinglePass\Composer;
 use App\Redirects\UrlCases;
@@ -72,6 +73,17 @@ final class GeneratedBlocks
              */
             'docs/operator/docs/access.md' => [
                 'decision-table' => DecisionTable::toMarkdown(...),
+            ],
+            /*
+             * 🛑 §8.12.15: "Revocation bounds MUST be taken from the one
+             * invalidation registry in §10.8 and MUST NOT be restated as a
+             * number anywhere else." A deprovisioning latency written into
+             * the operator documentation as "about ten minutes" stops
+             * being true the day the grant TTL changes, and prose does not
+             * fail a build. So the page asks, and prints what it is told.
+             */
+            'docs/operator/docs/directories.md' => [
+                'deprovisioning-latency' => ProvisioningLatency::explain(...),
             ],
         ];
     }

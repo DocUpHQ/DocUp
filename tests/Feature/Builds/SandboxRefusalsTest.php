@@ -7,7 +7,9 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Builds;
 
+use App\Builds\BuildConfig;
 use App\Builds\FailureCatalogue;
+use App\Builds\Runner\CgroupSampler;
 use App\Builds\Runner\DockerRunnerDriver;
 use App\Builds\Runner\RunOutcome;
 use App\Builds\Runner\Spool;
@@ -66,6 +68,8 @@ final class SandboxRefusalsTest extends TestCase
     /** §8.5.18's PID ceiling, and the evidence only the cgroup carries. */
     public function test_a_fork_bomb_exhausts_the_pid_ceiling(): void
     {
+        $this->requireCgroupHierarchy();
+
         $outcome = $this->runInSandbox(
             'bomb() { bomb & bomb & }; bomb 2>/dev/null; sleep 2; echo survived',
             egress: EgressMode::None,
@@ -335,6 +339,40 @@ final class SandboxRefusalsTest extends TestCase
             workdir: '/workspace',
             timeoutSeconds: $timeout,
             egress: $egress,
+        ));
+    }
+
+    /**
+     * 🛑 §8.5.15's counters, or an honest refusal to claim them.
+     *
+     * This test's only evidence is `pids.events:max`. The shell exits 0 --
+     * the comment in the test says so -- which means a sampler that cannot
+     * see the hierarchy reports "no limit hit", and that is byte-for-byte
+     * what "no limit was hit" looks like. The test then fails claiming the
+     * fork bomb SUCCEEDED, which sends the next reader after the sandbox
+     * instead of after the instrument.
+     *
+     * Phase 26b spent a long time there. The cause was a `sudo` in the
+     * workflow stripping `DOCUP_CGROUP_ROOT`, leaving
+     * {@see CgroupSampler} pointed at its default of
+     * `/hostcg` -- the path the runner CONTAINER mounts, which does not
+     * exist when PHP is the host process.
+     *
+     * So the prerequisite is asserted BEFORE the behaviour and the message
+     * names the configured path. An unreadable instrument and a passing
+     * control are different facts and must not look alike -- the same
+     * reason {@see self::requireSandboxNetwork()} exists.
+     */
+    private function requireCgroupHierarchy(): void
+    {
+        if (CgroupSampler::hierarchyIsVisible()) {
+            return;
+        }
+
+        $this->skipOrFailForImages(sprintf(
+            'no cgroup hierarchy at %s: set DOCUP_CGROUP_ROOT to where it is actually '
+            .'mounted (/sys/fs/cgroup for a host process, /hostcg inside the runner container)',
+            BuildConfig::string('sandbox.cgroup_root', '(unset)'),
         ));
     }
 

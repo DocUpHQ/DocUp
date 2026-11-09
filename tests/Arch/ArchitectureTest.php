@@ -10,6 +10,7 @@ namespace Tests\Arch;
 use App\Access\AccessLeaf;
 use App\Artifacts\RejectionCode;
 use App\Auth\Providers\DriverRegistry;
+use App\Auth\Providers\EdgeAssertion;
 use App\Auth\Providers\Oidc\IdTokenVerifier;
 use App\Builds\BuildEnvironment;
 use App\Builds\Toolchain\ToolchainPresets;
@@ -2643,6 +2644,272 @@ final class ArchitectureTest extends TestCase
             0,
             count($pages),
             'no Inertia pages found under the configured path, so the assertion helper is untested',
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.9.4: no request header selects the project, "in any
+     * environment" — so `X-Forwarded-Host` is trusted nowhere.
+     *
+     * > "The project MUST be resolved **solely** from the TLS server name or
+     * > `Host` header plus the path. No request header MUST act as a project,
+     * > version or tenant selector, in any environment. This is the
+     * > GHSA-mp38-vprc-7hf5 class."
+     *
+     * The project is resolved from `$request->getHost()`, so trusting that
+     * header would make a header pick the project. This is an architecture test
+     * rather than a behavioural one because **Laravel's and Symfony's own
+     * default header sets include it**: the safe value is not the framework's
+     * default, and the way it comes back is somebody replacing an explicit list
+     * with `HEADER_X_FORWARDED_ALL` or dropping the `headers:` argument
+     * entirely. Both are one-line edits that look like tidying up.
+     *
+     * `TrustEdgeProxies` is allowlisted for the NAME only — the test below
+     * asserts it never trusts it.
+     */
+    public function test_no_code_trusts_the_forwarded_host_header(): void
+    {
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            $source = $this->code($file);
+
+            foreach (['HEADER_X_FORWARDED_HOST', 'HEADER_X_FORWARDED_ALL'] as $needle) {
+                if (str_contains($source, $needle)) {
+                    $offenders[] = $relative.' names '.$needle;
+                }
+            }
+
+            /*
+             * And a `trustProxies` call with no header set takes the
+             * framework's default, which includes the host header. The helper
+             * is not used at all today — `TrustEdgeProxies` exists because it
+             * cannot read configuration — so naming it is enough.
+             */
+            if (str_contains($source, 'trustProxies')) {
+                $offenders[] = $relative.' uses trustProxies(), whose default header set includes the host';
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'SPEC 8.9.4: trusting `X-Forwarded-Host` makes a header select the project: '
+                .implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.9.4, the other half: the one middleware that sets the trusted
+     * header set names exactly three headers, and the host is not among them.
+     *
+     * The test above asserts the dangerous name is absent everywhere. This
+     * asserts the safe names are **present** here — because "absent" is also
+     * satisfied by a file that trusts nothing at all, which would take
+     * `$request->ip()` back to the edge's address and the `ip_allowlist` gate
+     * back to comparing the wrong one.
+     */
+    public function test_the_trusted_header_set_is_exactly_the_three_safe_headers(): void
+    {
+        $source = $this->code(base_path('app/Http/Middleware/TrustEdgeProxies.php'));
+
+        foreach ([
+            'HEADER_X_FORWARDED_FOR',
+            'HEADER_X_FORWARDED_PORT',
+            'HEADER_X_FORWARDED_PROTO',
+        ] as $header) {
+            $this->assertStringContainsString(
+                $header,
+                $source,
+                'SPEC 8.12.17 reads the client address and SPEC 9.3.4 reads the scheme: '.$header,
+            );
+        }
+
+        /* Three, and no fourth. */
+        $this->assertSame(
+            3,
+            substr_count($source, 'HEADER_X_FORWARDED_'),
+            'SPEC 8.9.4: a fourth trusted forwarded header is one nobody reviewed',
+        );
+    }
+
+    /**
+     * 🛑 SPEC 8.9.4 again, and now for the two drivers that read a header on
+     * purpose: no header an operator can configure as an asserted IDENTITY may
+     * be one that names a host.
+     *
+     * Phase 26b's `mtls` and `header_trust` read operator-named headers, which
+     * is the one place in the product where a header decides who a reader is.
+     * The requirement is about the PROJECT, so the two must not meet: a
+     * configuration naming `X-Forwarded-Host` as the subject header would put
+     * an attacker-chosen hostname where a reader's name belongs, and an
+     * operator debugging that is one step from trusting it for routing.
+     *
+     * Behavioural rather than a source scan, because the rule is a property of
+     * `EdgeAssertion::mayRead()` and the way it comes back is somebody widening
+     * the pattern rather than deleting the denylist.
+     */
+    public function test_no_asserted_identity_header_can_name_a_host(): void
+    {
+        $forbidden = [
+            'Host',
+            'host',
+            'X-Forwarded-Host',
+            'x-forwarded-host',
+            'X-Original-Host',
+            'X-Forwarded-Server',
+            'X-Host',
+            'Forwarded',
+            ':authority',
+            'X-Original-URL',
+            'X-Rewrite-URL',
+            /* And an address is a SPEC 8.12.17 `{gate}` input, never an identity. */
+            'X-Forwarded-For',
+            'X-Real-IP',
+            /* Nor may a credential header be re-read as a name. */
+            'Authorization',
+            'Cookie',
+        ];
+
+        foreach ($forbidden as $header) {
+            $this->assertFalse(
+                EdgeAssertion::mayRead($header),
+                'SPEC 8.9.4: `'.$header.'` would let a header name a host or carry a credential',
+            );
+        }
+
+        /*
+         * 🛑 And the other half, because "refuses everything" would satisfy the
+         * assertions above and leave both drivers unable to authenticate
+         * anybody. These are the names the terminators in the operator
+         * documentation actually use.
+         */
+        foreach ([
+            'X-Auth-Request-User',
+            'X-Remote-User',
+            'X-Client-Cert',
+            'X-Client-Verify',
+            'X-SSL-Client-Cert',
+            'X-DocUp-Assertion',
+        ] as $header) {
+            $this->assertTrue(
+                EdgeAssertion::mayRead($header),
+                '`'.$header.'` is a name an operator documentation tells them to use',
+            );
+        }
+    }
+
+    /**
+     * 🛑 **One reader of a request in the whole authentication layer**, and it
+     * is the one whose job is to refuse an untrusted one.
+     *
+     * `ReaderPresentation` says why in its own class note: "a driver handed a
+     * `Request` could branch on anything, and the first thing one would branch
+     * on is a header that an attacker sets". That was a comment until Phase
+     * 26b gave two drivers a reason to want a request — `mtls` and
+     * `header_trust` both authenticate from a header — so it is asserted now
+     * rather than hoped for.
+     *
+     * `EdgeAssertion` is the allowlisted exception because it exists to turn a
+     * request into the four facts SPEC 8.12.4 calls "facts only the TLS
+     * terminator can establish", and to yield NOTHING when the hop is not
+     * trusted.
+     */
+    public function test_only_the_edge_assertion_reads_a_request_in_the_auth_layer(): void
+    {
+        $permitted = ['app/Auth/Providers/EdgeAssertion.php'];
+        $offenders = [];
+
+        foreach ($this->sourceFiles() as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', str_replace(base_path().DIRECTORY_SEPARATOR, '', $file));
+
+            if (! str_starts_with($relative, 'app/Auth/') || in_array($relative, $permitted, true)) {
+                continue;
+            }
+
+            $source = $this->code($file);
+
+            foreach ([
+                'use Illuminate\Http\Request;',
+                'use Symfony\Component\HttpFoundation\Request;',
+            ] as $import) {
+                if (str_contains($source, $import)) {
+                    $offenders[] = $relative;
+                }
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'SPEC 8.12.23 decides by authorisation state and never by what the client sent; '
+                .'only EdgeAssertion may hold a request: '.implode('; ', $offenders),
+        );
+    }
+
+    /**
+     * 🛑 An edge assertion cannot be CONSTRUCTED without the hop that carried
+     * it, which is what makes a forged identity header unrepresentable rather
+     * than merely refused.
+     *
+     * Asserted structurally because a behavioural test would only prove that
+     * today's one call site checks the hop. A private constructor proves that
+     * no future call site can skip it — and the two public builders are
+     * `none()`, which asserts nothing, and `from()`, which starts by refusing
+     * an untrusted peer.
+     */
+    public function test_an_edge_assertion_cannot_be_built_without_its_hop(): void
+    {
+        $class = new \ReflectionClass(EdgeAssertion::class);
+
+        $this->assertTrue(
+            $class->getConstructor()?->isPrivate(),
+            'SPEC 8.12.4: a public constructor would let a caller assert an identity with no hop',
+        );
+
+        $builders = array_values(array_map(
+            static fn (\ReflectionMethod $method): string => $method->getName(),
+            array_filter(
+                $class->getMethods(\ReflectionMethod::IS_PUBLIC),
+                static function (\ReflectionMethod $method): bool {
+                    $type = $method->getReturnType();
+
+                    if (! $method->isStatic() || ! $type instanceof \ReflectionNamedType) {
+                        return false;
+                    }
+
+                    /*
+                     * 🛑 Both spellings, because reflection renders a `self`
+                     * return type differently across the two PHP versions this
+                     * project runs on, and the first version of this test only
+                     * accepted one.
+                     *
+                     * Measured: on **8.5** (the container, which §11.2 names)
+                     * `getName()` resolves `self` to the fully-qualified class;
+                     * on **8.4** (which CI still pins — an owed item since
+                     * P21) it returns the literal `self`. So the test passed
+                     * locally and failed in CI with an empty builder list, and
+                     * the assertion it made was therefore about nothing.
+                     *
+                     * `static` is accepted too, for the day somebody writes it.
+                     */
+                    return in_array(
+                        $type->getName(),
+                        ['self', 'static', EdgeAssertion::class],
+                        true,
+                    );
+                },
+            ),
+        ));
+
+        sort($builders);
+
+        $this->assertSame(
+            ['from', 'none'],
+            $builders,
+            'SPEC 8.12.4: a third way to build an assertion is a third place the hop can be forgotten',
         );
     }
 }

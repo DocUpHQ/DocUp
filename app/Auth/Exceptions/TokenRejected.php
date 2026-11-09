@@ -66,4 +66,100 @@ final class TokenRejected extends \RuntimeException
             .'has had to re-examine for a year is one nobody knows the scope of.'
         );
     }
+
+    /**
+     * 🛑 A malformed entry in the CIDR binding.
+     *
+     * Refused at mint rather than stored, because an unparseable range matches
+     * nothing and {@see ApiTokens::find()} fails closed — so the token
+     * would be bound to the empty set and every request with it would 401 with
+     * the same body as a stolen one. Safe, and undiagnosable.
+     */
+    public static function cidrInvalid(string $entry): self
+    {
+        return new self(
+            '"'.$entry.'" is not an address or a CIDR range.'."\n\n"
+            .'A token bound to an unparseable range is bound to nothing, and every request with '
+            .'it would be refused with exactly the answer a stolen token gets — so this is '
+            .'refused here, while you are still looking at the field.'
+        );
+    }
+
+    public static function cidrTooMany(int $limit): self
+    {
+        return new self(
+            'A token may be bound to at most '.$limit.' ranges. Every entry is compared on every '
+            .'request this token makes; a list longer than that is a network boundary rather than '
+            .'a credential binding, and belongs in the proxy.'
+        );
+    }
+
+    /**
+     * 🛑 Only the token's own holder may rotate it.
+     *
+     * Rotation returns a PLAINTEXT. Rotating somebody else's token would hand
+     * the rotator a working credential belonging to another user — an
+     * impersonation primitive, and one that would look in the audit chain like
+     * the owner acting.
+     */
+    public static function notYours(): self
+    {
+        return new self(
+            'Only the holder of a token may rotate it.'."\n\n"
+            .'Rotation returns a new plaintext, so rotating another user\'s token would hand you '
+            .'a credential that acts as them. Revoke it instead, which needs no secret.'
+        );
+    }
+
+    /**
+     * 🛑 An expired or revoked token cannot be rotated.
+     *
+     * Rotation exists to preserve continuity across a change of secret, and
+     * there is no continuity to preserve once the old secret has stopped
+     * working. Rotating a REVOKED token would be worse than useless: it would
+     * resurrect a credential somebody deliberately turned off.
+     */
+    public static function notRotatable(): self
+    {
+        return new self(
+            'Only a live token can be rotated.'."\n\n"
+            .'Rotation carries a token\'s capabilities onto a new secret while the old one '
+            .'finishes its life. A revoked token has no life to finish and was turned off on '
+            .'purpose; an expired one has already stopped working. Mint a new token.'
+        );
+    }
+
+    /**
+     * 🛑 A token may be rotated once, so at most two secrets are live.
+     *
+     * Without this, rotating repeatedly leaves one family with three, four or
+     * five working credentials and an operator with no idea how many are out
+     * there — which is the state rotation exists to end.
+     */
+    public static function alreadyRotated(): self
+    {
+        return new self(
+            'That token has already been rotated, and its successor is the live one.'."\n\n"
+            .'A family holds at most two working secrets: rotating again would leave three, and '
+            .'the point of rotation is to know how many are out there. Rotate the successor, or '
+            .'revoke this one now if the overlap is no longer wanted.'
+        );
+    }
+
+    /**
+     * 🛑 An overlap window may only be SHORTENED.
+     *
+     * Extending the predecessor's expiry during a rotation is the opposite of
+     * rotating: it prolongs the life of the secret being replaced, and it would
+     * let a caller reach past §8.13.6's 365-day cap by rotating in a circle.
+     */
+    public static function overlapExtended(): self
+    {
+        return new self(
+            'An overlap window can only end sooner than the old token already would.'."\n\n"
+            .'Extending it would prolong the secret you are replacing, and rotating in a circle '
+            .'would reach past the '.ApiTokens::MAXIMUM_LIFETIME_DAYS.'-day cap one window at a '
+            .'time.'
+        );
+    }
 }

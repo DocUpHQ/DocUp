@@ -167,6 +167,72 @@ final class EffectiveAccess
         // the one that refused.
         $required = self::strongestDemand($request);
 
+        /*
+         * 🛑 §8.12.20's break-glass read override.
+         *
+         * > "An installation-owner **break-glass** read override MUST exist
+         * > behind MFA, step-up re-authentication and a mandatory reason,
+         * > rate-limited to 3/hour, raising an operator alert and audited."
+         *
+         * Every one of those preconditions is {@see BreakGlass}'s; by the time
+         * the grant reaches this function it has been opened, audited and
+         * alerted, and all that is left is to honour it. So this is three lines
+         * and the position of them is the interesting part.
+         *
+         * 🛑 **After** §8.12.19's degraded binding and §8.12.21's stale
+         * search generation, which are therefore NOT overridable — and that is
+         * deliberate rather than incidental. Neither is a policy refusal: one is
+         * an outage, where the installation cannot establish who anybody is and
+         * every answer about identity would be wrong, and the other is a
+         * known-stale copy of authorisation facts, where an allow would be
+         * served from data the live rows have already contradicted. There is
+         * nothing there for an owner to override, and an override that worked
+         * through them would turn "I cannot tell" into "yes".
+         *
+         * 🛑 **After the rule match**, so the decision can report which rule
+         * *would* have decided. An operator reviewing a window wants "break-glass,
+         * over rule 7" rather than "break-glass"; and {@see AccessDecision::header()}
+         * gives them that for free.
+         *
+         * 🛑 **Before** §12.3's conjunction, which is the only placement
+         * that makes the override mean anything: the lattice is exactly what the
+         * owner is overriding.
+         *
+         * 🛑 And `rulePubliclyCacheable` is **false**, unconditionally.
+         * §9.3.2 forbids a public cache directive on private content, and an
+         * override's allow is the most private response this system produces —
+         * a single cached copy would serve, to everybody, a document one person
+         * was briefly permitted to read. The parameter is defaulted false, and
+         * it is named here anyway so that nobody has to check the default.
+         */
+        if ($request->reader->breakGlassId !== null) {
+            return new AccessDecision(
+                allowed: true,
+                reason: AccessReason::BreakGlass,
+                status: 200,
+                required: $required,
+                /*
+                 * 🛑 `Restricted`, because that is what the override confers
+                 * and reporting the reader's own level would understate it. The
+                 * decision log's "established" column answers "how much access
+                 * did this request actually have", and an override has all of
+                 * it.
+                 */
+                established: AccessLevel::Restricted,
+                rule: $rule,
+                /*
+                 * 🛑 No satisfying leaf, and there must not be one: no
+                 * credential admitted this request. Naming a leaf would record
+                 * the override as though an identity had satisfied a
+                 * requirement, which is the one thing §8.12.7's satisfiability
+                 * invariant is about.
+                 */
+                satisfiedBy: null,
+                rulePubliclyCacheable: false,
+                shadowRule: $shadow,
+            );
+        }
+
         // ---- §12.3's conjunction, in §12.3's order ----
 
         // 1. project.visibility permits (§8.2.10) — the operator kill switch.

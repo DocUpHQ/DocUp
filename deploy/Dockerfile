@@ -30,6 +30,16 @@ FROM dunglas/frankenphp:latest
 #   opcache    production throughput
 #   redis      Valkey is mandatory (SPEC 11.1)
 #   pcov       coverage measurement (SPEC 8.9.1, SPEC 9.4)
+#   ldap       SPEC 8.12.4's `ldap` driver (Phase 26b)
+#
+# 🛑 `ldap` is in the IMAGE and a composer `suggest`, which is not a
+# contradiction. SPEC 11.2's original plan was `directorytree/ldaprecord` as a
+# library with the extension suggested; that library declares `ext-ldap` in its
+# own `require`, so the suggestion was unreachable — amended in place, Phase 26b.
+# DocUp now calls `ldap_*` directly behind its own final boundary, so an
+# installation that never configures LDAP resolves and runs without the
+# extension, while the shipped container has it and the driver works out of the
+# box. The driver's probe names the extension when it is absent.
 RUN install-php-extensions \
         pdo_mysql \
         intl \
@@ -41,6 +51,7 @@ RUN install-php-extensions \
         opcache \
         redis \
         pcov \
+        ldap \
     && rm -rf /var/lib/apt/lists/*
 
 # 🛑 pcov is INSTALLED and DISABLED (SPEC 8.9.1, SPEC 9.4).
