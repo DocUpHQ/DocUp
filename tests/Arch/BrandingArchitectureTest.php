@@ -243,7 +243,7 @@ final class BrandingArchitectureTest extends TestCase
         $source = (string) file_get_contents(self::root().'/app/Branding/Chrome/ChromeContent.php');
 
         $this->assertMatchesRegularExpression(
-            "/\\['navigation', 'footer', 'announcement', 'homepage', 'head_html'\\]/",
+            "/\\['navigation', 'footer', 'announcement', 'homepage', 'not_found', 'head_html'\\]/",
             $source,
             '§8.14.3: the chrome content keys are a closed set; this test must be updated deliberately',
         );

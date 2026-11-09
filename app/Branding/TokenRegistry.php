@@ -720,7 +720,28 @@ final class TokenRegistry
                 group: 'Security',
                 default: "'self'",
                 deepest: CascadeLevel::Project,
-                purpose: "🛑 §8.14.16: per project, defaults to `'self'`, an explicit allowlist, never a wildcard.",
+                /*
+                 * 🛑 The purpose text says plainly that the value is stored
+                 * and not yet enforced, and that sentence is load-bearing.
+                 *
+                 * §8.14.16 makes this a token and §8.14.15 makes the
+                 * documentation CSP the header that carries it — and that
+                 * header belongs with the phase that puts chrome in the DOM,
+                 * because emitting it needs the resolved value in the routing
+                 * snapshot rather than a theme resolution per request (§9.2).
+                 *
+                 * A security setting an operator can change and that does
+                 * nothing is worse than one that is absent: they would believe
+                 * their documentation was protected. Phase 26b's build log
+                 * records the same rule about configuration generally — "a
+                 * config key nothing reads is a key an operator believes is
+                 * doing something" — so the registry itself tells the truth,
+                 * and the generated table an operator reads carries it.
+                 */
+                purpose: '🛑 §8.14.16: per project, an explicit allowlist, never a wildcard. '
+                    .'**Stored and validated; not yet enforced** — §8.14.15’s documentation '
+                    .'Content-Security-Policy is the header that carries it and ships with the '
+                    .'chrome runtime. Until then this value protects nothing.',
             ),
         ];
     }

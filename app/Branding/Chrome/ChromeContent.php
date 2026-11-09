@@ -55,6 +55,7 @@ final readonly class ChromeContent
      * @param  list<array{label: string, href: string}>  $navigation
      * @param  list<array{label: string, links: list<array{label: string, href: string}>}>  $footer
      * @param  list<array<string, mixed>>  $homepage  blocks, each `{type, …}`
+     * @param  array{heading: string, body: string}|null  $notFound  §8.14.7's 404 page
      * @param  list<string>  $removed  what sanitisation did not admit
      */
     private function __construct(
@@ -63,13 +64,14 @@ final readonly class ChromeContent
         public ?Announcement $announcement,
         public string $announcementTone,
         public array $homepage,
+        public ?array $notFound,
         public ?string $headHtml,
         public array $removed,
     ) {}
 
     public static function empty(): self
     {
-        return new self([], [], null, 'notice', [], null, []);
+        return new self([], [], null, 'notice', [], null, null, []);
     }
 
     /**
@@ -82,7 +84,7 @@ final readonly class ChromeContent
     public static function parse(array $authored, CascadeLevel $level): self
     {
         foreach (array_keys($authored) as $key) {
-            if (! in_array($key, ['navigation', 'footer', 'announcement', 'homepage', 'head_html'], true)) {
+            if (! in_array($key, ['navigation', 'footer', 'announcement', 'homepage', 'not_found', 'head_html'], true)) {
                 throw TokenRefused::of(
                     TokenRejection::UnknownToken,
                     'chrome.'.(string) $key,
@@ -105,9 +107,20 @@ final readonly class ChromeContent
 
         $homepage = self::homepage($authored['homepage'] ?? []);
 
+        $notFound = self::notFound($authored['not_found'] ?? null);
+
         $headHtml = self::headHtml($authored['head_html'] ?? null, $level);
 
-        return new self($navigation, $footer, $announcement, $tone, $homepage, $headHtml, array_values(array_unique($removed)));
+        return new self(
+            $navigation,
+            $footer,
+            $announcement,
+            $tone,
+            $homepage,
+            $notFound,
+            $headHtml,
+            array_values(array_unique($removed)),
+        );
     }
 
     /**
@@ -150,6 +163,10 @@ final readonly class ChromeContent
             $stored['homepage'] = $this->homepage;
         }
 
+        if ($this->notFound !== null) {
+            $stored['not_found'] = $this->notFound;
+        }
+
         if ($this->headHtml !== null) {
             $stored['head_html'] = $this->headHtml;
         }
@@ -172,7 +189,7 @@ final readonly class ChromeContent
      * A consumer who wants a script in their own head writes it themselves,
      * in their own application, where it is their decision.
      *
-     * @return array{navigation: list<array{label: string, href: string}>, footer: list<array{label: string, links: list<array{label: string, href: string}>}>, announcement: array{markup: string, tone: string}|null, homepage: list<array<string, mixed>>}
+     * @return array{navigation: list<array{label: string, href: string}>, footer: list<array{label: string, links: list<array{label: string, href: string}>}>, announcement: array{markup: string, tone: string}|null, homepage: list<array<string, mixed>>, not_found: array{heading: string, body: string}|null}
      */
     public function toPayloadFragment(): array
     {
@@ -184,6 +201,7 @@ final readonly class ChromeContent
                 'tone' => $this->announcementTone,
             ],
             'homepage' => $this->homepage,
+            'not_found' => $this->notFound,
         ];
     }
 
@@ -442,6 +460,71 @@ final readonly class ChromeContent
         }
 
         return $count;
+    }
+
+    /**
+     * 🛑 §8.14.7's 404 page, as structured content.
+     *
+     * > "Customisable surfaces MUST include logo, favicon, OG image and social
+     * > cards, colour tokens, fonts, light/dark pairing […] header, footer,
+     * > navigation links, homepage layout, **404 page** and email templates."
+     *
+     * A heading and a sentence, both plain text. §8.11.5's chain serves the
+     * build's own `404.html` where there is one and the primary mount's
+     * otherwise; this is what chrome renders when there is neither — which is
+     * also the case §8.11.5 describes as "a 404 page with no styling", served
+     * "from arbitrary URL depth".
+     *
+     * 🛑 **No link list, deliberately.** A 404 is served for a path that does
+     * not exist, at a depth nobody chose, so every link on it is a link
+     * somebody has to get right from an unknown base — and §8.11.5 already
+     * records that a 404 page "is inherently root-anchored". The navigation
+     * and footer chrome renders around it is the way back, and it is resolved
+     * for the mount rather than written into the page.
+     *
+     * 🛑 **And §9.5.3 is why the text is a token-free string rather than a
+     * message key:** "Reader-facing 404, 403, 503 and chrome strings MUST use
+     * the **documentation's** language, not the operator's." A tenant writing
+     * this slot is writing it in their documentation's language, which is the
+     * right language and is one DocUp's message files do not know.
+     *
+     * @return array{heading: string, body: string}|null
+     *
+     * @throws TokenRefused
+     */
+    private static function notFound(mixed $authored): ?array
+    {
+        if ($authored === null || $authored === [] || $authored === '') {
+            return null;
+        }
+
+        if (! is_array($authored)) {
+            throw TokenRefused::of(TokenRejection::WrongType, 'chrome.not_found', '{heading, body}');
+        }
+
+        foreach (array_keys($authored) as $key) {
+            if ($key !== 'heading' && $key !== 'body') {
+                throw TokenRefused::of(
+                    TokenRejection::UnknownToken,
+                    'chrome.not_found.'.(string) $key,
+                    'a 404 page has only heading and body',
+                );
+            }
+        }
+
+        $heading = is_string($authored['heading'] ?? null) ? $authored['heading'] : '';
+        $body = is_string($authored['body'] ?? null) ? $authored['body'] : '';
+
+        if (trim($heading) === '') {
+            throw TokenRefused::of(TokenRejection::WrongType, 'chrome.not_found.heading', 'required');
+        }
+
+        return [
+            'heading' => ShortTextValue::parse($heading, 'chrome.not_found.heading', 90)->text,
+            'body' => $body === ''
+                ? ''
+                : ShortTextValue::parse($body, 'chrome.not_found.body', 300)->text,
+        ];
     }
 
     /**

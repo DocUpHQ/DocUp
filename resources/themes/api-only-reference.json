@@ -255,7 +255,11 @@
                 "label": "Read the token table",
                 "href": "/branding.html"
             }
-        ]
+        ],
+        "not_found": {
+            "heading": "That page is not here",
+            "body": "It may have moved with a release. The navigation above still works."
+        }
     },
     "scheme": {
         "default": "system",

@@ -206,6 +206,50 @@ final class ChromeAndEmailTest extends TestCase
         }
     }
 
+    /**
+     * 🛑 §8.14.7 names a **404 page** among the customisable surfaces.
+     *
+     * A heading and a sentence, both plain text through the same rules a
+     * wordmark goes through — so markup in a 404 page is refused at the grammar
+     * like markup anywhere else in chrome.
+     */
+    public function test_the_404_page_is_structured_content(): void
+    {
+        $content = ChromeContent::parse([
+            'not_found' => ['heading' => 'That page has moved', 'body' => 'Try the guide index.'],
+        ], CascadeLevel::Project);
+
+        $this->assertIsArray($content->notFound);
+        $this->assertSame('That page has moved', $content->notFound['heading']);
+        $this->assertSame('Try the guide index.', $content->notFound['body']);
+
+        $stored = $content->toStorage();
+        $this->assertSame($stored, ChromeContent::fromStorage($stored, CascadeLevel::Project)->toStorage());
+
+        /* And it reaches §8.14.14's payload, so an api_only consumer renders it. */
+        $this->assertSame($content->notFound, $content->toPayloadFragment()['not_found']);
+    }
+
+    /** A 404 page with no heading is refused, and markup in one is too. */
+    public function test_the_404_page_needs_a_heading_and_refuses_markup(): void
+    {
+        try {
+            ChromeContent::parse(['not_found' => ['body' => 'Only a body.']], CascadeLevel::Project);
+            $this->fail('a 404 page with no heading was accepted');
+        } catch (TokenRefused $refused) {
+            $this->assertSame(TokenRejection::WrongType, $refused->rejection);
+        }
+
+        try {
+            ChromeContent::parse([
+                'not_found' => ['heading' => '<script>alert(1)</script>'],
+            ], CascadeLevel::Project);
+            $this->fail('markup was accepted in a 404 heading');
+        } catch (TokenRefused $refused) {
+            $this->assertSame(TokenRejection::MarkupRefused, $refused->rejection);
+        }
+    }
+
     /** An unknown top-level chrome key is refused. */
     public function test_an_unknown_chrome_key_is_refused(): void
     {

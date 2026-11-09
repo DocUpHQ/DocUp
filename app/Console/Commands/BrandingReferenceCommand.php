@@ -196,6 +196,17 @@ final class BrandingReferenceCommand extends Command
                 ],
                 ['type' => 'callout', 'label' => 'Read the token table', 'href' => '/branding.html'],
             ],
+            /*
+             * 🛑 §8.14.7 names a 404 page, so the reference payload carries
+             * one. The rendered page beside it does NOT show it, and the
+             * template says why: a 404 is a different page, and a reference
+             * home page that displayed its text would be showing an
+             * integrator a layout nobody renders.
+             */
+            'not_found' => [
+                'heading' => 'That page is not here',
+                'body' => 'It may have moved with a release. The navigation above still works.',
+            ],
         ], CascadeLevel::Installation);
     }
 }

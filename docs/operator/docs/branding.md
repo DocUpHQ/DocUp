@@ -211,7 +211,7 @@ designed and a dark scheme nobody checked.
 |---|---|---|---|---|
 | `security.frame-ancestors` | origin_list | `'self'`, `'none'` or `https://` origins; never a wildcard | installation → project | `'self'` |
 
-- `security.frame-ancestors` — 🛑 §8.14.16: per project, defaults to `'self'`, an explicit allowlist, never a wildcard.
+- `security.frame-ancestors` — 🛑 §8.14.16: per project, an explicit allowlist, never a wildcard. **Stored and validated; not yet enforced** — §8.14.15’s documentation Content-Security-Policy is the header that carries it and ships with the chrome runtime. Until then this value protects nothing.
 
 **45 tokens.** §8.14.1 budgets "roughly 45", and `TokenRegistryTest` asserts the count — so a forty-sixth is a decision somebody makes rather than one that happens. Every token is a row in this table, a value the contrast gate may have to reason about, and a property a migrating theme has to find a counterpart for.
 
@@ -366,6 +366,20 @@ The announcement is the one exception and it is a small one: five inline
 elements (`strong`, `em`, `code`, `a`, `br`) and one attribute (`href`). It is
 parsed with a real HTML parser and re-serialised from the allowlist, so what
 DocUp emits is what DocUp wrote.
+
+### The 404 page
+
+A heading and a sentence, both plain text. DocUp serves your build's own
+`404.html` where there is one and the primary mount's otherwise; this is what
+chrome renders when there is neither, and it is the case that would otherwise
+be an unstyled page served from a URL depth nobody chose.
+
+There is no link list on it, deliberately. A 404 is served for a path that does
+not exist, so every link on it has to be correct from an unknown base — and the
+navigation and footer chrome renders around it is already the way back.
+
+Write it in your documentation's language rather than the operator's: a
+reader-facing 404 uses the language of the documentation they were looking for.
 
 ### 🛑 There is no tenant JavaScript, at any scope, ever
 
