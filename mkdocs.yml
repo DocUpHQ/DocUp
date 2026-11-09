@@ -38,6 +38,7 @@ nav:
       - Connecting SAML: operator/docs/saml.md
       - Directories and edge identity: operator/docs/directories.md
       - Proving who may read it: operator/docs/assurance.md
+      - Branding and themes: operator/docs/branding.md
       - Running it: operator/docs/operations.md
   - Writing for DocUp:
       - Overview: author/docs/index.md

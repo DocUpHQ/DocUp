@@ -14,4 +14,5 @@ nav:
   - Connecting SAML: saml.html
   - Directories and edge identity: directories.html
   - Proving who may read it: assurance.html
+  - Branding and themes: branding.html
   - Running it: operations.html

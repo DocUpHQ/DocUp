@@ -7,6 +7,8 @@ declare(strict_types=1);
 
 namespace App\Branding;
 
+use App\Docs\GeneratedBlocks;
+
 /**
  * 🛑 §8.14.1's closed registry: forty-five typed tokens, and no others.
  *
@@ -197,6 +199,110 @@ final class TokenRegistry
     public static function forgetExtensions(): void
     {
         self::$extensions = [];
+    }
+
+    /**
+     * 🛑 §17's deliverable: "the ~45-token registry itself, **published as a
+     * table in the operator documentation** with each token's name, type,
+     * grammar and cascade level".
+     *
+     * Rendered from the registry and filled into `docs/operator/docs/branding.md`
+     * by `docup:docs:render`, whose `--check` mode CI runs. The alternative is
+     * a hand-written table beside a registry in code, which is two registries
+     * — and {@see GeneratedBlocks} records what that already cost
+     * this project once: §8.7.13's matrix was prose, and it had drifted.
+     *
+     * The columns are §17's four, plus the default — because the first question
+     * an operator asks about a token is what it is now, and the second is what
+     * it may be.
+     */
+    public static function toMarkdown(): string
+    {
+        $lines = [];
+
+        foreach (self::groups() as $group) {
+            $lines[] = '### '.$group;
+            $lines[] = '';
+            $lines[] = '| Token | Type | Grammar | Cascade level | Default (light / dark) |';
+            $lines[] = '|---|---|---|---|---|';
+
+            foreach (self::group($group) as $token) {
+                $default = $token->type === TokenType::Asset
+                    ? '_none until uploaded_'
+                    : self::defaultCell($token);
+
+                $lines[] = sprintf(
+                    '| `%s` | %s | %s | %s | %s |',
+                    $token->name,
+                    $token->type->value,
+                    self::grammarCell($token),
+                    $token->levelLabel(),
+                    $default,
+                );
+            }
+
+            $lines[] = '';
+
+            foreach (self::group($group) as $token) {
+                if ($token->purpose !== '') {
+                    $lines[] = sprintf('- `%s` — %s', $token->name, $token->purpose);
+                }
+            }
+
+            $lines[] = '';
+        }
+
+        $lines[] = sprintf(
+            '**%d tokens.** §8.14.1 budgets "roughly 45", and `TokenRegistryTest` asserts the count — '
+            .'so a forty-sixth is a decision somebody makes rather than one that happens. Every token '
+            .'is a row in this table, a value the contrast gate may have to reason about, and a '
+            .'property a migrating theme has to find a counterpart for.',
+            count(self::all()),
+        );
+
+        return implode("\n", $lines);
+    }
+
+    /** The grammar column, with the token's own bounds where it has them. */
+    private static function grammarCell(BrandingToken $token): string
+    {
+        $grammar = $token->type->grammar();
+
+        if ($token->options !== []) {
+            return '`'.implode('` / `', $token->options).'`';
+        }
+
+        if ($token->type === TokenType::Text) {
+            return $grammar.sprintf(' (≤ %d characters)', $token->maxLength);
+        }
+
+        if (in_array($token->type, [TokenType::Length, TokenType::Ratio, TokenType::Count], true)) {
+            return $grammar.sprintf(' (%s–%s)', self::number($token->minimum), self::number($token->maximum));
+        }
+
+        if ($token->type === TokenType::Asset && $token->assetKind !== null) {
+            return sprintf('a `%s` asset id', $token->assetKind);
+        }
+
+        return $grammar;
+    }
+
+    private static function defaultCell(BrandingToken $token): string
+    {
+        if ($token->default === '') {
+            return '_unset_';
+        }
+
+        return $token->isPaired()
+            ? sprintf('`%s` / `%s`', $token->default, (string) $token->dark)
+            : sprintf('`%s`', $token->default);
+    }
+
+    private static function number(float $value): string
+    {
+        $text = rtrim(rtrim(sprintf('%.4F', $value), '0'), '.');
+
+        return $text === '' ? '0' : $text;
     }
 
     /**
@@ -545,14 +651,16 @@ final class TokenRegistry
                 purpose: 'How the footer separates from the page (§8.14.7).',
                 options: ['solid', 'bordered', 'minimal'],
             ),
-            new BrandingToken(
-                name: 'chrome.density',
-                type: TokenType::Option,
-                group: 'Layout and chrome',
-                default: 'comfortable',
-                purpose: 'The spacing multiplier chrome applies to `space.unit`.',
-                options: ['comfortable', 'compact'],
-            ),
+            /*
+             * 🛑 There is no `chrome.density` token, and the omission is the
+             * one worth recording: the registry had one and it was dropped
+             * when the count came out at forty-six. `space.unit` already **is**
+             * the density control — every chrome gap is a multiple of it — so a
+             * second token that multiplied the first would have been two ways
+             * to say one thing, in a registry whose budget §8.14.1 fixes at
+             * "roughly 45". The forty-sixth token has to earn its place against
+             * that, and this one could not.
+             */
 
             // ── Scheme and behaviour ─────────────────────────────────────────
             new BrandingToken(

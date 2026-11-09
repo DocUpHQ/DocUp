@@ -1,5 +1,14 @@
 @import 'tailwindcss';
 
+/*
+ * 🛑 §8.14.4: "Tailwind MUST compile **once at release time** with utilities
+ * mapped onto CSS custom properties." `tokens.css` is that mapping, and
+ * importing it here is what puts it in the one bundle — so a `bg-brand-primary`
+ * anywhere in the dashboard resolves to `var(--docup-color-brand-primary)` and
+ * a tenant's theme changes what it renders without this file being rebuilt.
+ */
+@import './tokens.css';
+
 @source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
 @source '../../storage/framework/views/*.php';
 

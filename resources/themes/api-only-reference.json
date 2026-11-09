@@ -1,0 +1,265 @@
+{
+    "contract": 1,
+    "theme": {
+        "hash": "57944d5bb3a9e6ff664d9c961a8602506c3d96927b58ce2f4bf81a15354c36e9",
+        "stylesheet": "/_/theme/57944d5bb3a9e6ff664d9c961a8602506c3d96927b58ce2f4bf81a15354c36e9.css",
+        "tokens": {
+            "brand.name": {
+                "light": "DocUp",
+                "dark": "DocUp"
+            },
+            "color.surface.page": {
+                "light": "#ffffff",
+                "dark": "#0b0e14"
+            },
+            "color.surface.raised": {
+                "light": "#f6f7f9",
+                "dark": "#141a23"
+            },
+            "color.surface.sunken": {
+                "light": "#eceef2",
+                "dark": "#05080c"
+            },
+            "color.border.subtle": {
+                "light": "#dfe3e8",
+                "dark": "#242c38"
+            },
+            "color.border.strong": {
+                "light": "#8b93a1",
+                "dark": "#5d6878"
+            },
+            "color.focus.ring": {
+                "light": "#0b5cd5",
+                "dark": "#79b8ff"
+            },
+            "color.text.primary": {
+                "light": "#16191f",
+                "dark": "#e7eaf0"
+            },
+            "color.text.secondary": {
+                "light": "#4b5563",
+                "dark": "#a9b2c1"
+            },
+            "color.text.inverse": {
+                "light": "#ffffff",
+                "dark": "#0b0e14"
+            },
+            "color.text.link": {
+                "light": "#0b5cd5",
+                "dark": "#79b8ff"
+            },
+            "color.brand.primary": {
+                "light": "#0b5cd5",
+                "dark": "#4d93ff"
+            },
+            "color.brand.on-primary": {
+                "light": "#ffffff",
+                "dark": "#06111f"
+            },
+            "color.brand.accent": {
+                "light": "#a21f6b",
+                "dark": "#f58ac2"
+            },
+            "color.state.success": {
+                "light": "#0f6b35",
+                "dark": "#5bd98d"
+            },
+            "color.state.warning": {
+                "light": "#8a4b00",
+                "dark": "#e8a33d"
+            },
+            "color.state.danger": {
+                "light": "#b3261e",
+                "dark": "#ff8f85"
+            },
+            "color.code.surface": {
+                "light": "#f3f4f6",
+                "dark": "#10151d"
+            },
+            "color.code.text": {
+                "light": "#16191f",
+                "dark": "#e7eaf0"
+            },
+            "font.body": {
+                "light": "system-ui, sans-serif",
+                "dark": "system-ui, sans-serif"
+            },
+            "font.heading": {
+                "light": "system-ui, sans-serif",
+                "dark": "system-ui, sans-serif"
+            },
+            "font.mono": {
+                "light": "ui-monospace, monospace",
+                "dark": "ui-monospace, monospace"
+            },
+            "font.size.root": {
+                "light": "16px",
+                "dark": "16px"
+            },
+            "font.weight.heading": {
+                "light": "650",
+                "dark": "650"
+            },
+            "font.line-height.body": {
+                "light": "1.6",
+                "dark": "1.6"
+            },
+            "radius.small": {
+                "light": "4px",
+                "dark": "4px"
+            },
+            "radius.medium": {
+                "light": "8px",
+                "dark": "8px"
+            },
+            "space.unit": {
+                "light": "4px",
+                "dark": "4px"
+            },
+            "border.width": {
+                "light": "1px",
+                "dark": "1px"
+            },
+            "layout.content.width": {
+                "light": "48rem",
+                "dark": "48rem"
+            },
+            "layout.sidebar.width": {
+                "light": "18rem",
+                "dark": "18rem"
+            },
+            "chrome.header.style": {
+                "light": "bordered",
+                "dark": "bordered"
+            },
+            "chrome.header.sticky": {
+                "light": "1",
+                "dark": "1"
+            },
+            "chrome.sidebar.position": {
+                "light": "start",
+                "dark": "start"
+            },
+            "chrome.footer.style": {
+                "light": "bordered",
+                "dark": "bordered"
+            },
+            "scheme.default": {
+                "light": "system",
+                "dark": "system"
+            },
+            "scheme.toggle": {
+                "light": "1",
+                "dark": "1"
+            },
+            "motion.allow": {
+                "light": "1",
+                "dark": "1"
+            },
+            "banner.tone": {
+                "light": "notice",
+                "dark": "notice"
+            },
+            "security.frame-ancestors": {
+                "light": "'self'",
+                "dark": "'self'"
+            }
+        }
+    },
+    "assets": [],
+    "chrome": {
+        "navigation": [
+            {
+                "label": "Guide",
+                "href": "/en/latest/"
+            },
+            {
+                "label": "Reference",
+                "href": "/en/latest/reference.html"
+            },
+            {
+                "label": "Changelog",
+                "href": "/en/latest/changelog.html"
+            }
+        ],
+        "footer": [
+            {
+                "label": "Documentation",
+                "links": [
+                    {
+                        "label": "Getting started",
+                        "href": "/en/latest/"
+                    },
+                    {
+                        "label": "All versions",
+                        "href": "/"
+                    }
+                ]
+            },
+            {
+                "label": "Project",
+                "links": [
+                    {
+                        "label": "Source",
+                        "href": "https://example.com/source"
+                    }
+                ]
+            }
+        ],
+        "announcement": {
+            "markup": "Version <code>2.0</code> is out. <a href=\"/en/2.0/\" rel=\"noopener nofollow\">Read the notes</a>.",
+            "tone": "notice"
+        },
+        "homepage": [
+            {
+                "type": "hero",
+                "heading": "Documentation that ships with the code",
+                "body": "Every version, every branch, built from the repository it lives in.",
+                "primary_label": "Read the guide",
+                "primary_href": "/en/latest/"
+            },
+            {
+                "type": "cards",
+                "heading": "Start here",
+                "cards": [
+                    {
+                        "label": "Install",
+                        "href": "/en/latest/install.html"
+                    },
+                    {
+                        "label": "Configure",
+                        "href": "/en/latest/configure.html"
+                    },
+                    {
+                        "label": "Deploy",
+                        "href": "/en/latest/deploy.html"
+                    }
+                ]
+            },
+            {
+                "type": "search",
+                "placeholder": "Search 1,200 pages"
+            },
+            {
+                "type": "versions",
+                "heading": "Versions",
+                "limit": 5
+            },
+            {
+                "type": "prose",
+                "heading": "About this theme",
+                "body": "Every colour, length and family on this page is a branding token. Two projects can look completely different from the same build artifact, because the artifact carries no theme at all."
+            },
+            {
+                "type": "callout",
+                "label": "Read the token table",
+                "href": "/branding.html"
+            }
+        ]
+    },
+    "scheme": {
+        "default": "system",
+        "toggle": true
+    },
+    "banner": null
+}

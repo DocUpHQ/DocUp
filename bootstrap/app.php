@@ -70,6 +70,19 @@ return Application::configure(basePath: dirname(__DIR__))
              */
             require __DIR__.'/../routes/edge.php';
 
+            /*
+             * 🛑 §8.14.4's stylesheet and §8.14.11's asset host, before
+             * routes/docs.php and for the same reason routes/edge.php is: both
+             * files declare domains, so they are in one matching bucket and
+             * registration order is what decides between them. Required after
+             * the edge so an ACME challenge still wins, and before the
+             * documentation catch-all so `/_/theme/<hash>.css` on a custom
+             * domain is not read as a version slug — which would leave every
+             * page on every custom domain unstyled while every test that used
+             * the dashboard host passed.
+             */
+            require __DIR__.'/../routes/branding.php';
+
             require __DIR__.'/../routes/docs.php';
 
             Route::middleware('web')->group(__DIR__.'/../routes/web.php');

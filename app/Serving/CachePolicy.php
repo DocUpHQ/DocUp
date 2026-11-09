@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace App\Serving;
 
+use App\Branding\StylesheetUrl;
 use App\Readers\Grants\GrantKeys;
 
 /**
@@ -224,6 +225,61 @@ final class CachePolicy
             maxAge: $maxAge,
             cdnMaxAge: $maxAge,
             cacheTags: [],
+        );
+    }
+
+    /**
+     * 🛑 §8.14.4's content-addressed branding bytes — a theme stylesheet, a
+     * self-hosted font, an uploaded logo.
+     *
+     * > "Each theme revision MUST publish as an immutable content-addressed
+     * > stylesheet with `max-age=31536000, immutable`, so 500 projects cost one
+     * > bundle plus 500 small files and a token edit mints a new URL with
+     * > nothing to purge."
+     *
+     * Here for the reason {@see self::forPublishedContract()} and
+     * {@see self::forGrantKeys()} are here: §9.3.2's invariant is that **one**
+     * place decides public cacheability, and a controller writing
+     * `'public, max-age=31536000, immutable'` by hand would be a second place
+     * that has to stay correct forever.
+     *
+     * **Why public is right.** The URL is a SHA-256 of the bytes. There is no
+     * reader dimension — two readers of the same theme get the same file, and a
+     * reader who has never been authorised for anything cannot construct the
+     * URL without having been served a page that names it. §9.3.2's concern is
+     * "private **documentation** entering a shared cache", and a design token
+     * is not documentation: it is the tenant's choice of colour, which is on
+     * public display in every page the theme styles.
+     *
+     * 🛑 **`immutable` is safe only because of the hash**, and that is the
+     * whole argument. `immutable` tells a browser not to revalidate even on a
+     * reload, so a mutable URL carrying it would be wrong for a year with no
+     * remedy. A content-addressed URL cannot be wrong: different bytes are a
+     * different URL. §8.14.4's "nothing to purge" is the same observation.
+     *
+     * No cache tags. A tag is a purge handle and there is nothing to purge —
+     * which is the economy §8.14.4 is describing, not an omission.
+     *
+     * 🛑 **One divergence from §7.3, recorded rather than quietly taken.** §7.3
+     * says "Nothing under `/_/` is publicly cacheable" and lists `/_/theme`
+     * and `/_/assets` among its reserved names. The rule's reason — everything
+     * else under `/_/` is request-scoped, so a shared entry would serve one
+     * reader's answer to another — does not reach a path whose bytes are named
+     * by their own hash, and §8.14.4 requires the opposite in terms. §7.3
+     * already carries three carve-outs of this shape under `/.well-known/`.
+     * {@see StylesheetUrl} states the amendment; the build log
+     * records it.
+     */
+    public static function forImmutableBrandingAsset(): CacheDirectives
+    {
+        $configured = config('branding.immutable_max_age');
+        $maxAge = is_numeric($configured) ? (int) $configured : 31_536_000;
+
+        return CacheDirectives::publiclyCacheable(
+            maxAge: $maxAge,
+            cdnMaxAge: $maxAge,
+            cacheTags: [],
+            immutable: true,
         );
     }
 

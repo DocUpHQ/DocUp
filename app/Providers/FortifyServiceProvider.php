@@ -10,6 +10,7 @@ namespace App\Providers;
 use App\Actions\Fortify\ResetUserPassword;
 use App\Actions\Fortify\UpdateUserPassword;
 use App\Actions\Fortify\UpdateUserProfileInformation;
+use App\Branding\CredentialPageBranding;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -63,11 +64,32 @@ final class FortifyServiceProvider extends ServiceProvider
      * have — it is Inertia, not Blade. Without these callbacks every
      * authentication page would 500 on a missing view, and the first time
      * anyone noticed would be a locked-out operator.
+     *
+     * 🛑 **Every one of these is a page that accepts credentials, so every one
+     * carries §8.14.12's installation branding and nothing else.**
+     *
+     * > "Pages that accept credentials MUST carry **no project or organisation
+     * > branding**. All authentication MUST redirect to the dashboard host with
+     * > installation branding only, so a tenant-controlled domain can never
+     * > present a DocUp-styled login form."
+     *
+     * {@see CredentialPageBranding::resolve()} takes no arguments, which is how
+     * that holds without anybody having to remember it: there is no tenant
+     * these callbacks could pass even if one were in scope.
      */
     private function registerViews(): void
     {
+        /*
+         * Resolved inside the callback rather than here, because exactly one
+         * of the five runs per request and `registerViews()` runs at boot —
+         * resolving a theme during service registration would put a database
+         * read in front of every artisan command.
+         */
+        $branding = static fn (): array => CredentialPageBranding::resolve()->toProps();
+
         Fortify::loginView(fn () => Inertia::render('Auth/Login', [
             'installationName' => config('app.name', 'DocUp'),
+            'branding' => $branding(),
             'locale' => app()->getLocale(),
             // §9.5.2: every user-visible string comes from a message file.
             't' => __('auth.login'),
@@ -76,22 +98,26 @@ final class FortifyServiceProvider extends ServiceProvider
         // §8.13.5 step-up lands here.
         Fortify::confirmPasswordView(fn () => Inertia::render('Auth/ConfirmPassword', [
             'installationName' => config('app.name', 'DocUp'),
+            'branding' => $branding(),
             't' => __('auth.confirm'),
         ]));
 
         // §8.13.4: the TOTP challenge after a correct password.
         Fortify::twoFactorChallengeView(fn () => Inertia::render('Auth/TwoFactorChallenge', [
             'installationName' => config('app.name', 'DocUp'),
+            'branding' => $branding(),
             't' => __('auth.two_factor'),
         ]));
 
         Fortify::requestPasswordResetLinkView(fn () => Inertia::render('Auth/ForgotPassword', [
             'installationName' => config('app.name', 'DocUp'),
+            'branding' => $branding(),
             't' => __('auth.forgot'),
         ]));
 
         Fortify::resetPasswordView(fn (Request $request) => Inertia::render('Auth/ResetPassword', [
             'installationName' => config('app.name', 'DocUp'),
+            'branding' => $branding(),
             't' => __('auth.reset'),
             'token' => $request->route('token'),
             'email' => $request->string('email')->toString(),
