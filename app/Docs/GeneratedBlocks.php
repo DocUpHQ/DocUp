@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace App\Docs;
 
 use App\Access\DecisionTable;
+use App\Addons\ReadTheDocsMapping;
 use App\Auth\Providers\Federation\ProvisioningLatency;
 use App\Branding\TokenRegistry;
 use App\Composition\ModeBehaviour;
@@ -97,6 +98,22 @@ final class GeneratedBlocks
              */
             'docs/operator/docs/branding.md' => [
                 'token-table' => TokenRegistry::toMarkdown(...),
+            ],
+            /*
+             * 🛑 §8.15.9: "The ~45 branding tokens MUST be published with a
+             * documented mapping to Read the Docs' 33 addon CSS custom
+             * properties, so a migrating project's custom CSS has a stated
+             * translation."
+             *
+             * Generated, for the reason the token table above is: a
+             * hand-written mapping beside the data it describes is two sources
+             * of truth, and the one in the documentation is the one that goes
+             * stale. This one has a sharper edge than most — a migrating team
+             * reads it once, writes their overrides from it, and does not come
+             * back to check.
+             */
+            'docs/operator/docs/addons.md' => [
+                'readthedocs-mapping' => ReadTheDocsMapping::toMarkdown(...),
             ],
         ];
     }
