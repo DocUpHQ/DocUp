@@ -118,7 +118,7 @@ final class SvgSanitiser
         'stop' => ['offset', 'stop-color', 'stop-opacity'],
         'clipPath' => ['clipPathUnits'],
         'mask' => ['maskUnits', 'maskContentUnits', 'x', 'y', 'width', 'height'],
-        'text' => ['x', 'y', 'dx', 'dy', 'text-anchor', 'font-family', 'font-size', 'font-weight', 'font-style', 'letter-spacing', 'xml:space'],
+        'text' => ['x', 'y', 'dx', 'dy', 'text-anchor', 'font-family', 'font-size', 'font-weight', 'font-style', 'letter-spacing'],
         'tspan' => ['x', 'y', 'dx', 'dy', 'text-anchor', 'font-family', 'font-size', 'font-weight', 'font-style', 'letter-spacing'],
     ];
 
@@ -331,12 +331,23 @@ final class SvgSanitiser
         }
 
         /*
-         * Every namespaced attribute except `xml:space`. `xlink:href` is the
-         * external-reference vector and `xlink:` is deprecated anyway; the
-         * rest carry editor metadata (`inkscape:`, `sodipodi:`) that nothing
-         * renders.
+         * 🛑 EVERY namespaced attribute, with no exception.
+         *
+         * `xlink:href` is the external-reference vector and `xlink:` is
+         * deprecated anyway; the rest carry editor metadata (`inkscape:`,
+         * `sodipodi:`) that nothing renders.
+         *
+         * 🛑 There WAS an exception for `xml:space`, and it was dead code —
+         * measured, not assumed. A parsed `xml:space` arrives with `name` set
+         * to `space` and the prefix carried separately, so the check never
+         * matched and the attribute was dropped as namespaced like any other.
+         * An entry in a security allowlist that does nothing is worse than no
+         * entry: the next reader concludes namespaced attributes are handled
+         * selectively here, and they are not. `<text>` loses `xml:space`,
+         * which collapses a run of spaces in a logo's text and is the right
+         * trade for not reconstructing a namespace on the output element.
          */
-        if ($attribute->namespaceURI !== null && $lower !== 'xml:space') {
+        if ($attribute->namespaceURI !== null) {
             $removed[] = $name.' (namespaced)';
 
             return null;
