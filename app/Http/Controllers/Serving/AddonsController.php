@@ -163,7 +163,16 @@ final readonly class AddonsController
         );
 
         $version = $route->kind === RouteKind::Resolved ? $route->version : null;
-        $decisionHeader = 'addons.anonymous';
+
+        /*
+         * 🛑 Null until a decision is actually made, and the header is omitted
+         * rather than filled with a placeholder. `X-DocUp-Decision` carries an
+         * `AccessDecision`'s own vocabulary everywhere else it appears
+         * ({@see ReaderGate::headers()}, {@see \App\Http\Controllers\Readers\AuthzController}),
+         * and a made-up value on a path that reached no decision would be a
+         * string an operator's alerting could match and nothing could explain.
+         */
+        $decisionHeader = null;
 
         if ($version instanceof SnapshotVersion) {
             /*
@@ -238,7 +247,7 @@ final readonly class AddonsController
                 ...CachePolicy::forAddons()->headers(),
                 'X-Content-Type-Options' => 'nosniff',
                 DocumentController::NOTICE_HEADER => 'addons.payload',
-                ReaderGate::DECISION_HEADER => $decisionHeader,
+                ...($decisionHeader === null ? [] : [ReaderGate::DECISION_HEADER => $decisionHeader]),
             ],
         );
     }
