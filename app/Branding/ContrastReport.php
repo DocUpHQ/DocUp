@@ -79,7 +79,7 @@ final readonly class ContrastReport
      * honesty to be *stated* and a report an operator reads in the dashboard
      * is where they will read it.
      *
-     * @return array{verdict: string, limits: list<string>, findings: list<array<string, string|float>>}
+     * @return array{verdict: string, limits: list<string>, findings: list<array<string, string>>}
      */
     public function toArray(): array
     {

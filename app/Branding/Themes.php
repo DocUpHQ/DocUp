@@ -181,8 +181,21 @@ final readonly class Themes
             return null;
         }
 
+        $assignmentId = $mount->theme_assignment_id;
+
+        /*
+         * Narrowed rather than cast. The column is nullable and the model's
+         * property type is what the level-9 analysis app/Branding is held to
+         * reads — a cast from mixed would hide a schema change here, on the
+         * serving path, where the symptom would be a mount silently losing
+         * its theme.
+         */
+        if (! is_string($assignmentId)) {
+            return null;
+        }
+
         $assignment = ThemeAssignment::query()->whereKey(
-            Uuid::tryToBytes((string) $mount->theme_assignment_id) ?? str_repeat("\xff", 16),
+            Uuid::tryToBytes($assignmentId) ?? str_repeat("\xff", 16),
         )->first();
 
         if (! $assignment instanceof ThemeAssignment) {

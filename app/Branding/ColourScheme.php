@@ -21,7 +21,11 @@ enum ColourScheme: string
 
     case Dark = 'dark';
 
-    /** Both, in report order. @return list<self> */
+    /**
+     * Both, in report order.
+     *
+     * @return list<self>
+     */
     public static function both(): array
     {
         return [self::Light, self::Dark];

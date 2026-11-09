@@ -77,7 +77,7 @@ code {
     z-index: 10;
     background: var(--docup-color-surface-raised, #f6f7f9);
     color: var(--docup-color-text-primary, #16191f);
-    border: var(--docup-border-width, 1px) solid var(--docup-color-border-strong, #8b93a1);
+    border: var(--docup-border-width, 1px) solid var(--docup-color-border-strong, #767f8c);
     border-radius: var(--docup-radius-small, 4px);
     padding: var(--docup-chrome-gap) var(--docup-chrome-pad);
     transition: top 120ms ease;
@@ -134,7 +134,7 @@ code {
     margin-inline-start: auto;
     background: transparent;
     color: var(--docup-color-text-primary, #16191f);
-    border: var(--docup-border-width, 1px) solid var(--docup-color-border-strong, #8b93a1);
+    border: var(--docup-border-width, 1px) solid var(--docup-color-border-strong, #767f8c);
     border-radius: var(--docup-radius-small, 4px);
     padding: var(--docup-space-unit, 4px) var(--docup-chrome-gap);
     font: inherit;
@@ -205,7 +205,7 @@ code {
     flex: 1 1 16rem;
     background: var(--docup-color-surface-page, #ffffff);
     color: var(--docup-color-text-primary, #16191f);
-    border: var(--docup-border-width, 1px) solid var(--docup-color-border-strong, #8b93a1);
+    border: var(--docup-border-width, 1px) solid var(--docup-color-border-strong, #767f8c);
     border-radius: var(--docup-radius-small, 4px);
     padding: var(--docup-chrome-gap);
     font: inherit;

@@ -8,13 +8,16 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Branding;
 
 use App\Branding\StylesheetStore;
-use App\Branding\ThemeAssets;
 use App\Serving\CachePolicy;
+use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 /**
  * 🛑 §8.14.4's immutable, content-addressed per-theme stylesheet.
+ *
+ * The self-hosted font beside it is {@see ThemeFontController}, which says why
+ * it is a separate controller and why §8.14.10 keeps a font off the asset host.
  *
  * ## Why this is a controller and not a static file on the edge
  *
@@ -34,6 +37,15 @@ use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
  * cacheability decision lives and where its argument is written out — §9.3.2
  * requires one place, and this is not it.
  *
+ * ## 🛑 The hash is read by NAME from the route, never from a parameter position
+ *
+ * `routes/branding.php` scopes these to a wildcard domain, which puts
+ * `{docupBrandingHost}` **before** `{hash}` in the route's parameter list. A
+ * method signature of `(string $hash)` therefore received the host, built a
+ * path from it and raised a 500 — which is how this comment came to exist.
+ * Reading by name is order-independent, so adding a route parameter later
+ * cannot silently re-point this.
+ *
  * ## A 404 is a real answer
  *
  * {@see StylesheetStore} says why: a hash identifies a resolved cascade, and
@@ -45,12 +57,12 @@ final readonly class ThemeStylesheetController
 {
     public function __construct(private StylesheetStore $stylesheets) {}
 
-    public function __invoke(string $hash): SymfonyResponse
+    public function __invoke(Request $request): SymfonyResponse
     {
-        $css = $this->stylesheets->get($hash);
+        $css = $this->stylesheets->get(self::hashOf($request));
 
         if ($css === null) {
-            return new Response('', 404, ['Cache-Control' => 'private, no-store']);
+            return self::missing();
         }
 
         return new Response($css, 200, [
@@ -69,27 +81,24 @@ final readonly class ThemeStylesheetController
     }
 
     /**
-     * 🛑 §8.14.2's self-hosted font, under §8.14.10's `font-src 'self'`.
+     * The `hash` route parameter, or a value that matches nothing.
      *
-     * On the application's own origins rather than the asset host, which is
-     * §8.14.10's own split: `img-src 'self' data: <asset-host>` and
-     * `font-src 'self'`. An image can be sandboxed on a neutered origin; a
-     * font is handed to the operating system's font engine, so it stays on an
-     * origin DocUp controls and is never reachable with a `sandbox` directive
-     * that would make it a null origin.
+     * The route pattern already constrains it to 64 hex characters, so the
+     * fallback is unreachable through the router. It exists because the stores
+     * raise on a malformed address, and a controller that could hand them one
+     * would turn a routing change into a 500.
      */
-    public function font(string $hash): SymfonyResponse
+    private static function hashOf(Request $request): string
     {
-        $bytes = ThemeAssets::store()->get($hash, 'woff2');
+        $hash = $request->route('hash');
 
-        if ($bytes === null) {
-            return new Response('', 404, ['Cache-Control' => 'private, no-store']);
-        }
+        return is_string($hash) && preg_match('/^[0-9a-f]{64}$/', $hash) === 1
+            ? $hash
+            : str_repeat('f', 64);
+    }
 
-        return new Response($bytes, 200, [
-            'Content-Type' => 'font/woff2',
-            'X-Content-Type-Options' => 'nosniff',
-            ...CachePolicy::forImmutableBrandingAsset()->headers(),
-        ]);
+    private static function missing(): SymfonyResponse
+    {
+        return new Response('', 404, ['Cache-Control' => 'private, no-store']);
     }
 }

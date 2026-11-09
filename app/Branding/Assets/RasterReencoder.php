@@ -88,7 +88,12 @@ final class RasterReencoder
          */
         $probe = @getimagesizefromstring($bytes);
 
-        if ($probe === false || ! isset($probe[0], $probe[1], $probe[2])) {
+        /*
+         * `false` is the only failure getimagesizefromstring() reports: on
+         * success the first three offsets always exist, so an isset() guard on
+         * them is dead code that reads as caution.
+         */
+        if ($probe === false) {
             throw TokenRefused::of(
                 TokenRejection::AssetTypeNotSniffed,
                 'asset',

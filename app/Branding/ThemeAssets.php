@@ -106,7 +106,7 @@ final readonly class ThemeAssets implements AssetLookup
         $host = config('docup.origins.assets');
 
         if (! is_string($host) || $host === '') {
-            return rtrim((string) config('app.url'), '/');
+            return rtrim(self::applicationUrl(), '/');
         }
 
         return self::scheme().'://'.Origins::normalise($host);
@@ -171,6 +171,21 @@ final readonly class ThemeAssets implements AssetLookup
 
     private static function scheme(): string
     {
-        return str_starts_with((string) config('app.url'), 'http://') ? 'http' : 'https';
+        return str_starts_with(self::applicationUrl(), 'http://') ? 'http' : 'https';
+    }
+
+    /**
+     * `APP_URL`, narrowed.
+     *
+     * Narrowed in one place rather than cast at each use: `config()` returns
+     * mixed, and the level-9 analysis app/Branding is held to refuses a cast
+     * from it — which is the right refusal, because a misconfigured APP_URL
+     * reaching a URL builder as an array is a URL nobody can read.
+     */
+    private static function applicationUrl(): string
+    {
+        $url = config('app.url');
+
+        return is_string($url) ? $url : '';
     }
 }

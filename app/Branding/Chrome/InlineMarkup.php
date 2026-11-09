@@ -138,7 +138,7 @@ final class InlineMarkup
                  * `&lt;script&gt;` in the output — it round-trips as text and
                  * cannot become markup, whatever the input's encoding depth.
                  */
-                $output .= htmlspecialchars($child->textContent, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+                $output .= htmlspecialchars((string) $child->textContent, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
                 continue;
             }

@@ -8,6 +8,8 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Auth\OrganisationContext;
+use App\Branding\Assets\AssetStore;
+use App\Branding\StylesheetStore;
 use App\Http\Middleware\AuthenticateApiToken;
 use App\Listeners\StampAuthenticatedSession;
 use App\Models\ApiToken;
@@ -38,6 +40,25 @@ final class AppServiceProvider extends ServiceProvider
          * job's tenant.
          */
         $this->app->singleton(OrganisationContext::class);
+
+        /*
+         * 🛑 §8.14.11's and §8.14.4's stores, bound to the `theme-assets`
+         * disk — because the container cannot guess which one.
+         *
+         * Both take an `Illuminate\Contracts\Filesystem\Filesystem`, and
+         * without these bindings the container resolves that contract to the
+         * **default** disk. The symptom is a controller that reads from
+         * `storage/app/private` while the pipeline writes to the branding
+         * store: every upload succeeds, every logo 404s, and nothing is logged
+         * as wrong. Found by the first test that fetched an asset through the
+         * route rather than through the store.
+         *
+         * Bound by their own class names rather than by contextual binding on
+         * each controller, so a second caller cannot acquire a differently
+         * configured store.
+         */
+        $this->app->bind(AssetStore::class, static fn (): AssetStore => AssetStore::make());
+        $this->app->bind(StylesheetStore::class, static fn (): StylesheetStore => StylesheetStore::make());
     }
 
     public function boot(): void

@@ -1,8 +1,8 @@
 {
     "contract": 1,
     "theme": {
-        "hash": "57944d5bb3a9e6ff664d9c961a8602506c3d96927b58ce2f4bf81a15354c36e9",
-        "stylesheet": "/_/theme/57944d5bb3a9e6ff664d9c961a8602506c3d96927b58ce2f4bf81a15354c36e9.css",
+        "hash": "11e1f6d60e5adbdc470c8eb02215ef9b1ca2b48d351ef552d2f4ce593d6938ac",
+        "stylesheet": "/_/theme/11e1f6d60e5adbdc470c8eb02215ef9b1ca2b48d351ef552d2f4ce593d6938ac.css",
         "tokens": {
             "brand.name": {
                 "light": "DocUp",
@@ -25,8 +25,8 @@
                 "dark": "#242c38"
             },
             "color.border.strong": {
-                "light": "#8b93a1",
-                "dark": "#5d6878"
+                "light": "#767f8c",
+                "dark": "#6b7687"
             },
             "color.focus.ring": {
                 "light": "#0b5cd5",

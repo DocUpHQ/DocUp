@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 use App\Branding\ThemeAssets;
 use App\Http\Controllers\Branding\BrandingAssetController;
+use App\Http\Controllers\Branding\ThemeFontController;
 use App\Http\Controllers\Branding\ThemeStylesheetController;
 use App\Support\Origins;
 use Illuminate\Support\Facades\Route;
@@ -51,7 +52,7 @@ Route::domain('{docupBrandingHost}')
          * means a traversal never reaches PHP; the store means one that did
          * could still not name a path.
          */
-        Route::get('/_/theme/font/{hash}.woff2', [ThemeStylesheetController::class, 'font'])
+        Route::get('/_/theme/font/{hash}.woff2', ThemeFontController::class)
             ->where('hash', '[0-9a-f]{64}')
             ->name('branding.font');
 

@@ -400,10 +400,14 @@ final class SvgSanitiser
     {
         $attributes = [];
 
+        /*
+         * No `instanceof` here: a `DOMNamedNodeMap` over an element yields
+         * `DOMAttr` and nothing else, so the guard could never fail — and a
+         * guard that cannot fail is one a reader has to think about before
+         * concluding it does nothing.
+         */
         foreach ($element->attributes as $attribute) {
-            if ($attribute instanceof \DOMAttr) {
-                $attributes[] = $attribute;
-            }
+            $attributes[] = $attribute;
         }
 
         return $attributes;

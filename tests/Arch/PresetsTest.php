@@ -246,6 +246,27 @@ arch()->preset()->laravel()
          * phpstan-strict.neon also raises app/Readers to level 9.
          */
         'App\Readers',
+        /*
+         * Phase 27, for the same reason as App\Access and App\Readers.
+         *
+         * `TokenRejection` is an enum and `TokenRefused` an exception, so the
+         * preset would file them under App\Enums and App\Exceptions. Both
+         * belong where they are, and here the coupling argument is at its
+         * strongest:
+         *
+         * 🛑 `TokenRejection`'s cases are the §9.4 abuse corpus's vocabulary
+         * for this phase — `BrandingCorpusTest` asserts every case's `expect`
+         * against them, so a rename breaks the build rather than orphaning a
+         * case that still reads as plausible. A shared App\Enums copy would be
+         * thirty strings with the argument left behind in another directory.
+         *
+         * `TokenRefused` carries one, so a shared App\Exceptions would import
+         * the branding namespace into a namespace everything else depends on
+         * — exactly the coupling the App\Access entry above refuses. The
+         * value objects in App\Branding\Values throw it, and they are the
+         * leaves of the dependency graph.
+         */
+        'App\Branding',
     ]);
 
 arch()->preset()->strict()

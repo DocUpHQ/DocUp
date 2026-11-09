@@ -398,8 +398,16 @@ final class TokenRegistry
                 name: 'color.border.strong',
                 type: TokenType::Colour,
                 group: 'Surfaces',
-                default: '#8b93a1',
-                dark: '#5d6878',
+                /*
+                 * 🛑 Darker than it looks like it needs to be, with the
+                 * headroom deliberate. This is a **non-text** pair, so
+                 * §8.14.5's 3:1 is both its warning line and its refusal
+                 * floor — a default that measured 3.04:1 would be refused by
+                 * the first organisation that tinted the page background a
+                 * shade. Measured at 4.05:1 light and 4.20:1 dark.
+                 */
+                default: '#767f8c',
+                dark: '#6b7687',
                 purpose: 'Control outlines. Judged as a non-text pair at WCAG 1.4.11’s 3:1.',
             ),
             new BrandingToken(

@@ -33,7 +33,7 @@
     --color-surface-raised: var(--docup-color-surface-raised, #f6f7f9);
     --color-surface-sunken: var(--docup-color-surface-sunken, #eceef2);
     --color-border-subtle: var(--docup-color-border-subtle, #dfe3e8);
-    --color-border-strong: var(--docup-color-border-strong, #8b93a1);
+    --color-border-strong: var(--docup-color-border-strong, #767f8c);
     --color-focus-ring: var(--docup-color-focus-ring, #0b5cd5);
 
     --color-text-primary: var(--docup-color-text-primary, #16191f);

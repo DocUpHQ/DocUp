@@ -112,7 +112,8 @@ final readonly class ThemeRevisions
         }
 
         $revision = new ThemeRevision;
-        $revision->id = Uuid::v7();
+        /* `id` is `@property-read`, so it is filled through the model. */
+        $revision->forceFill(['id' => Uuid::v7()]);
         $revision->organisation_id = $organisationId;
         $revision->scope_type = $level->value;
         $revision->scope_id = $scopeId;
@@ -230,7 +231,8 @@ final readonly class ThemeRevisions
             $revision->contrast = $report->toArray();
             $revision->contrast_verdict = $report->worst()->value;
             $revision->contrast_override = $override && $report->refuses();
-            $revision->published_at = now();
+            /* Immutable, because the column is cast to one. */
+            $revision->published_at = now()->toImmutable();
             $revision->published_by = $actorId;
             $revision->save();
         });
@@ -354,7 +356,7 @@ final readonly class ThemeRevisions
             return null;
         }
 
-        $key = Uuid::tryToBytes($scopeId);
+        $key = Uuid::tryToBytes((string) $scopeId);
 
         if ($key === null) {
             return null;
@@ -378,7 +380,7 @@ final readonly class ThemeRevisions
             ->when(
                 $scopeId === null,
                 fn ($query) => $query->whereNull('scope_id'),
-                fn ($query) => $query->where('scope_id', Uuid::tryToBytes($scopeId) ?? str_repeat("\xff", 16)),
+                fn ($query) => $query->where('scope_id', Uuid::tryToBytes((string) $scopeId) ?? str_repeat("\xff", 16)),
             )
             ->max('revision_number');
 

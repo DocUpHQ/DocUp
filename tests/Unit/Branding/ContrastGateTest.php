@@ -19,6 +19,7 @@ use App\Branding\TokenGrammar;
 use App\Branding\TokenPair;
 use App\Branding\TokenRegistry;
 use App\Branding\TokenType;
+use App\Branding\Values\ColourValue;
 use App\Branding\Values\TokenValue;
 use PHPUnit\Framework\TestCase;
 
@@ -244,10 +245,19 @@ final class ContrastGateTest extends TestCase
     {
         $token = TokenRegistry::get('color.text.primary');
 
-        return ContrastGate::ratio(
-            $this->grammar->value($token, $foreground)->srgb(),
-            $this->grammar->value($token, $background)->srgb(),
-        );
+        $first = $this->grammar->value($token, $foreground);
+        $second = $this->grammar->value($token, $background);
+
+        /*
+         * Narrowed rather than asserted away: `srgb()` is ColourValue's and
+         * the grammar returns the TokenValue interface, so a colour token that
+         * stopped being a colour would fail here loudly instead of at a
+         * missing method.
+         */
+        $this->assertInstanceOf(ColourValue::class, $first);
+        $this->assertInstanceOf(ColourValue::class, $second);
+
+        return ContrastGate::ratio($first->srgb(), $second->srgb());
     }
 
     /**

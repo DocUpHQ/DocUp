@@ -87,7 +87,7 @@ designed and a dark scheme nobody checked.
 | `color.surface.raised` | colour | `#rgb` / `#rrggbb` / `#rrggbbaa` / `rgb()` / `hsl()` / `oklch()`, bounded numerics | installation → mount | `#f6f7f9` / `#141a23` |
 | `color.surface.sunken` | colour | `#rgb` / `#rrggbb` / `#rrggbbaa` / `rgb()` / `hsl()` / `oklch()`, bounded numerics | installation → mount | `#eceef2` / `#05080c` |
 | `color.border.subtle` | colour | `#rgb` / `#rrggbb` / `#rrggbbaa` / `rgb()` / `hsl()` / `oklch()`, bounded numerics | installation → mount | `#dfe3e8` / `#242c38` |
-| `color.border.strong` | colour | `#rgb` / `#rrggbb` / `#rrggbbaa` / `rgb()` / `hsl()` / `oklch()`, bounded numerics | installation → mount | `#8b93a1` / `#5d6878` |
+| `color.border.strong` | colour | `#rgb` / `#rrggbb` / `#rrggbbaa` / `rgb()` / `hsl()` / `oklch()`, bounded numerics | installation → mount | `#767f8c` / `#6b7687` |
 | `color.focus.ring` | colour | `#rgb` / `#rrggbb` / `#rrggbbaa` / `rgb()` / `hsl()` / `oklch()`, bounded numerics | installation → mount | `#0b5cd5` / `#79b8ff` |
 
 - `color.surface.page` — The page background, and the backdrop every text pair in the contrast matrix is judged against.

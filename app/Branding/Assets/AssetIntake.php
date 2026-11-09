@@ -132,7 +132,8 @@ final readonly class AssetIntake
         }
 
         $asset = new ThemeAsset;
-        $asset->id = Uuid::v7();
+        /* `id` is `@property-read`, so it is set through the model rather than assigned. */
+        $asset->forceFill(['id' => Uuid::v7()]);
         $asset->organisation_id = $organisationId;
         $asset->scope_type = $scope->value;
         $asset->scope_id = $scopeId;

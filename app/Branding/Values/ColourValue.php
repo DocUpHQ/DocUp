@@ -345,7 +345,7 @@ final readonly class ColourValue implements TokenValue
             throw TokenRefused::of(TokenRejection::UnsupportedColourForm, $path, 'no components');
         }
 
-        return array_values($parts);
+        return $parts;
     }
 
     /**

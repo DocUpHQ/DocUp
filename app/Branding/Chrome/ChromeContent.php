@@ -54,7 +54,7 @@ final readonly class ChromeContent
     /**
      * @param  list<array{label: string, href: string}>  $navigation
      * @param  list<array{label: string, links: list<array{label: string, href: string}>}>  $footer
-     * @param  array<string, mixed>  $homepage  blocks, each `{type, …}`
+     * @param  list<array<string, mixed>>  $homepage  blocks, each `{type, …}`
      * @param  list<string>  $removed  what sanitisation did not admit
      */
     private function __construct(
@@ -110,7 +110,13 @@ final readonly class ChromeContent
         return new self($navigation, $footer, $announcement, $tone, $homepage, $headHtml, array_values(array_unique($removed)));
     }
 
-    /** Rebuild from a stored row. @param array<array-key, mixed> $stored */
+    /**
+     * Rebuild from a stored row.
+     *
+     * @param  array<array-key, mixed>  $stored
+     *
+     * @throws TokenRefused when a stored fragment no longer satisfies §8.14.3
+     */
     public static function fromStorage(array $stored, CascadeLevel $level): self
     {
         /*

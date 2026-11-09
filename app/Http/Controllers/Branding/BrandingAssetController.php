@@ -10,6 +10,7 @@ namespace App\Http\Controllers\Branding;
 use App\Branding\Assets\AssetStore;
 use App\Branding\Assets\RasterReencoder;
 use App\Serving\CachePolicy;
+use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
@@ -69,15 +70,31 @@ final readonly class BrandingAssetController
 
     public function __construct(private AssetStore $store) {}
 
-    public function __invoke(string $hash, string $extension): SymfonyResponse
+    /**
+     * 🛑 Both parameters read by **name**, not by position.
+     *
+     * This route is scoped to an exact host, so it has no domain parameter and
+     * positional binding would work today. {@see ThemeStylesheetController}'s
+     * does not, and the difference is invisible at the call site — so both read
+     * by name, and a route change cannot silently hand this one a hostname to
+     * build a path from.
+     */
+    public function __invoke(Request $request): SymfonyResponse
     {
-        $type = self::TYPES[$extension] ?? null;
+        $hash = $request->route('hash');
+        $extension = $request->route('extension');
+
+        if (! is_string($hash) || preg_match('/^[0-9a-f]{64}$/', $hash) !== 1) {
+            return $this->refuse();
+        }
+
+        $type = is_string($extension) ? (self::TYPES[$extension] ?? null) : null;
 
         if ($type === null) {
             return $this->refuse();
         }
 
-        $bytes = $this->store->get($hash, $extension);
+        $bytes = $this->store->get($hash, (string) $extension);
 
         if ($bytes === null) {
             return $this->refuse();
