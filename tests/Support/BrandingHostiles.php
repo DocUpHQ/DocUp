@@ -163,7 +163,7 @@ final class BrandingHostiles
      */
     private static function pixelBomb(): string
     {
-        return self::gif(20_000, 20_000);
+        return self::pixelBombHeader(20_000, 20_000);
     }
 
     /** `branding-034`: a PHP file whose name and claimed type say PNG. */
@@ -182,13 +182,55 @@ final class BrandingHostiles
     }
 
     /**
-     * A GIF whose **header** declares `$width` × `$height`.
+     * A **real** GIF of `$width` × `$height`, encoded by GD.
      *
-     * The image data is a single one-pixel LZW block, so the file stays under
-     * a kilobyte whatever the header claims — and `getimagesizefromstring()`
-     * reports the declared size, because that is where the size lives.
+     * 🛑 Encoded rather than hand-written, and the distinction cost a CI run.
+     * A hand-written GIF whose header declares one size and whose image
+     * descriptor covers 1 × 1 is accepted by `getimagesizefromstring()` at the
+     * declared size and decoded by GD at 1 × 1 — which found a real bug in
+     * `RasterReencoder` (it scaled by the header's ratio) and **segfaulted the
+     * test process** on CI's libgd while passing here.
+     *
+     * So anything that gets decoded is a real image, and the only hand-written
+     * fixture left is {@see self::pixelBombHeader()} — which is never decoded,
+     * because that is the whole point of it.
      */
     private static function gif(int $width, int $height): string
+    {
+        /* Narrowed for the analysis: GD takes a positive size. */
+        $image = imagecreatetruecolor(max(1, $width), max(1, $height));
+
+        if ($image === false) {
+            throw new \RuntimeException('GD could not allocate a '.$width.'x'.$height.' fixture');
+        }
+
+        /* Two blocks of colour, so a downscale has something to average. */
+        $left = (int) imagecolorallocate($image, 11, 92, 213);
+        $right = (int) imagecolorallocate($image, 255, 255, 255);
+        imagefilledrectangle($image, 0, 0, max(0, intdiv($width, 2) - 1), $height - 1, $left);
+        imagefilledrectangle($image, intdiv($width, 2), 0, $width - 1, $height - 1, $right);
+
+        ob_start();
+        imagegif($image);
+        $bytes = (string) ob_get_clean();
+        imagedestroy($image);
+
+        return $bytes;
+    }
+
+    /**
+     * 🛑 A few dozen bytes of GIF header declaring `$width` × `$height`.
+     *
+     * Hand-written, because no encoder will produce a file that is tiny on
+     * disk and enormous in its header — which is exactly what a decompression
+     * bomb is. {@see self::gif()} says why nothing else is hand-written.
+     *
+     * 🛑 **This is never decoded.** §8.14.11's pixel cap is read from the
+     * header and refuses it there, which is the behaviour under test. If a
+     * change ever let it reach GD, the test would crash rather than fail —
+     * so a crash in this file is a signal, not a flake.
+     */
+    private static function pixelBombHeader(int $width, int $height): string
     {
         $gif = 'GIF89a';
         $gif .= pack('vv', $width, $height);
@@ -196,9 +238,8 @@ final class BrandingHostiles
         $gif .= "\x80\x00\x00";
         $gif .= "\x00\x00\x00";   // black
         $gif .= "\xff\xff\xff";   // white
-        /* Image descriptor: one pixel at the origin, no local table. */
+        /* An image descriptor covering one pixel, and a minimal LZW block. */
         $gif .= "\x2c".pack('vvvv', 0, 0, 1, 1)."\x00";
-        /* LZW minimum code size 2, one data block, a clear and an end code. */
         $gif .= "\x02\x02\x4c\x01\x00";
 
         return $gif."\x3b";

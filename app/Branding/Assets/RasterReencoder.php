@@ -137,7 +137,28 @@ final class RasterReencoder
         }
 
         try {
-            $target = self::fit($source, $width, $height, $maxEdge);
+            /*
+             * 🛑 The DECODED dimensions, not the header's.
+             *
+             * `$width` and `$height` above are what the header declared, and
+             * they exist for the pixel cap — which has to run before any
+             * decode, so it has nothing else to go on. They are **not** the
+             * size of the image GD produced, and for a malformed file or a GIF
+             * whose logical canvas is larger than its frame (which is legal,
+             * and what every animated GIF looks like) they differ.
+             *
+             * Measured: a GIF declaring 256 × 128 whose image descriptor
+             * covers 1 × 1 decodes to a 1 × 1 buffer. Scaling that by the
+             * header's ratio produced a 64 × 32 output from one pixel and
+             * recorded 64 × 32 on the row — so the `<img width height>` the
+             * chrome payload emits would have been a lie, and the reader would
+             * get the layout shift those attributes exist to prevent. On CI's
+             * libgd the same path segfaulted the test process.
+             */
+            $decodedWidth = imagesx($source);
+            $decodedHeight = imagesy($source);
+
+            $target = self::fit($source, $decodedWidth, $decodedHeight, $maxEdge);
 
             /*
              * 🛑 Alpha is preserved explicitly. GD's default is to composite
