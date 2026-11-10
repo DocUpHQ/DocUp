@@ -998,14 +998,31 @@ jobs:
           # surviving mutation in it is a theme shipped below the floor with a
           # passing report. Measured at 81.4% on its own and 82.9% with
           # CidrRange.
+          #
+          # 🛑 Phase 28's is `App\Artifacts\ChromeInjector`. SPEC 8.15.3's
+          # insertion point is the control that phase turns on, and a surviving
+          # mutation in it is a CORRUPTED DOCUMENT WITH A PASSING COVERAGE
+          # RECORD — which is not hypothetical: the abuse corpus found exactly
+          # that defect by hand, twice, in the search the requirement specifies.
+          #
+          # Measuring it first reported 63.25% and found three real gaps rather
+          # than confirming coverage: nothing asserted the ORDER of SPEC 8.15.1's
+          # two tags or that there are exactly two, nothing asserted the
+          # navigational-stub exemption's two bounds, and nothing asserted which
+          # characters may follow `<script` or `</head`. All three are
+          # behavioural rules that had no test.
+          # tests/Unit/Artifacts/ChromeInjectorTest.php closes them; the class
+          # now measures 82.9% on its own, and all three together 82.9%.
           ./vendor/bin/pest \
             --mutate \
             --covered-only \
             --min="$min" \
-            --class='App\Auth\CidrRange,App\Branding\ContrastGate' \
+            --class='App\Auth\CidrRange,App\Branding\ContrastGate,App\Artifacts\ChromeInjector' \
             tests/Feature/InvitationAndTokenTest.php \
             tests/Feature/Providers/ProviderCorpusTest.php \
             tests/Unit/Branding \
+            tests/Unit/Artifacts/ChromeInjectorTest.php \
+            tests/Feature/Addons/AddonsCorpusTest.php \
             --colors=never 2>&1 | tee /tmp/mutation.log
 
       - name: The score, on failure
