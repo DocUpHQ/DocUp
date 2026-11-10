@@ -15,6 +15,8 @@ use App\Branding\ThemeDelivery;
 use App\Branding\ThemeTarget;
 use App\Http\Controllers\Serving\DownloadController;
 use App\Models\Build;
+use App\Search\SearchOutcome;
+use App\Search\SearchQuery;
 use App\Serving\CanonicalLocations;
 use App\Serving\ManifestReader;
 use App\Serving\OfflineFormat;
@@ -204,17 +206,37 @@ final readonly class AddonsPayload
     /**
      * §8.15.2's "search configuration".
      *
-     * 🛑 `enabled` is **false** and will stay false until Phase 29 ships the
-     * index, and that is the honest state rather than a stub: §17 puts the
-     * `SearchEngine` seam, the index and the query path in Phase 29 and the
-     * search UX in Phase 30. The runtime renders the combobox either way —
-     * §8.15.8 makes its keyboard behaviour a 🛑 requirement of this phase — and
-     * with `enabled: false` it says so instead of querying an endpoint that
-     * does not exist.
+     * 🛑 `enabled` is **false**, and Phase 29 shipped the index without
+     * changing it. That is a decision, recorded here because the obvious
+     * reading of Phase 29's arrival is that the flag should have moved with it.
      *
-     * A flag claiming otherwise would be the failure Phase 26b recorded: "a
-     * config key nothing reads is a key an operator believes is doing
+     * §17 splits the two phases and the lists do not overlap: Phase 29 owns the
+     * `SearchEngine` seam, the index and the query path, and **Phase 30** owns
+     * "search-as-you-type wired to the addons payload, the public search API,
+     * cross-project search within a collection (§8.16.10), result highlighting,
+     * the penalty box".
+     *
+     * Two further reasons, which is why the split is right rather than merely
+     * followed:
+     *
+     * 1. Flipping this needs an **endpoint**, and §8.16.10 puts that endpoint's
+     *    penalty-box limiter in Phase 30. §9.3.5 names search among the paths
+     *    that must have one, so shipping the endpoint here would ship it
+     *    without the control the requirement attaches to it.
+     * 2. {@see SearchQuery} is complete and reached from the
+     *    artisan command, the operator UI and the tests — so nothing waits on
+     *    anything. What Phase 30 adds is a route, a controller and a limiter.
+     *
+     * The runtime renders the combobox either way — §8.15.8 makes its keyboard
+     * behaviour a 🛑 requirement of Phase 28 — and with `enabled: false` it says
+     * search is unavailable instead of querying an endpoint that does not
+     * exist. A flag claiming otherwise would be the failure Phase 26b recorded:
+     * "a config key nothing reads is a key an operator believes is doing
      * something."
+     *
+     * 🛑 The shape Phase 30 must emit is already fixed and already built:
+     * {@see SearchOutcome::toPayload()} returns
+     * `{ results: [{ title, href, … }] }`, which is what the runtime reads.
      *
      * @return array{enabled: bool, endpoint: string|null, takeover: bool, selector: string}
      */

@@ -19,6 +19,7 @@ use App\Search\SearchResult;
 use App\Search\SearchScopes;
 use App\Search\SearchTransport;
 use App\Search\SearchUrls;
+use Tests\Support\CommitsSearchDocuments;
 use Tests\TestCase;
 
 /**
@@ -457,7 +458,7 @@ final class SearchArchitectureTest extends TestCase
      * application may contain.
      *
      * Here because Phase 29's test harness needed exactly that statement to
-     * clean up after tests that commit ({@see \Tests\Support\CommitsSearchDocuments}),
+     * clean up after tests that commit ({@see CommitsSearchDocuments}),
      * and a capability a test needs is a capability worth fencing off from
      * everything else.
      */
