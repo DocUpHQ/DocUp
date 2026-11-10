@@ -66,6 +66,10 @@ use Illuminate\Support\Facades\DB;
  * @property bool $addons_search_takeover §8.15.12 takeover toggle
  * @property string|null $addons_search_selector §8.15.12 selector override
  * @property string|null $resolved_frame_ancestors 🛑 §8.14.16, resolved for the §8.9.1 snapshot
+ * @property int $search_generation §10.8's epoch; bumped by a reindex
+ * @property int $search_policy_generation 🛑 §8.12.21: the policy generation the live index was built under
+ * @property Carbon|null $search_indexed_at when the live search generation finished
+ * @property int $search_section_count §8.16.1's threshold input
  */
 #[Tenancy(TenancyPosture::OrganisationScoped)]
 #[Fillable(['slug', 'name', 'description', 'visibility'])]
@@ -146,6 +150,18 @@ final class Project extends Model
             'notify_pull_request' => 'boolean',
             'addons_search_takeover' => 'boolean',
             'consecutive_build_failures' => 'integer',
+
+            /*
+             * §8.16's generation counters and the pass's own timestamp. The
+             * two generations are compared by {@see \App\Search\SearchGenerations},
+             * which reads the row directly — these casts are for the
+             * operator surfaces, where an uncast `search_indexed_at` arrives
+             * as a MySQL datetime string and formats as one.
+             */
+            'search_generation' => 'integer',
+            'search_policy_generation' => 'integer',
+            'search_section_count' => 'integer',
+            'search_indexed_at' => 'datetime:Y-m-d H:i:s.v',
 
             /*
              * §10.8's two epochs this project owns on the authorisation side,

@@ -10,7 +10,22 @@ nav:
   - Connecting an IdP: oidc.md
   - Branding and themes: branding.md
   - Reader chrome: addons.md
+  - Search: search.md
   - Running it: operations.md
+
+# 🛑 Three pages are in `.docup.yaml`'s nav and missing from THIS one:
+# `saml.md`, `directories.md` and `assurance.md`. Carried from Phase 27, which
+# recorded them as owed.
+#
+# The consequence is narrower than it looks and worth stating so nobody fixes
+# the wrong thing: SPEC 8.7.6 makes the `.docup.yaml` nav authoritative for the
+# PUBLISHED site, so readers reach all three. What this nav drives is MkDocs'
+# own sidebar when the guide is built locally — so the pages are reachable and
+# unlisted in the local preview. Left as owed rather than fixed in passing,
+# because each belongs in a section this nav does not have and guessing where
+# an identity-federation page goes is how a manual grows a "Miscellaneous".
+#
+# Phase 29 added `search.md` to BOTH, because the phase wrote it.
 
 # 🛑 Flat .html URLs, not MkDocs' default directory URLs.
 #

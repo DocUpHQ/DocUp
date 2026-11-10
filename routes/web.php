@@ -14,6 +14,7 @@ use App\Http\Controllers\Health\SelfTestController;
 use App\Http\Controllers\MfaEnrolmentController;
 use App\Http\Controllers\PolicySimulatorController;
 use App\Http\Controllers\ProjectController;
+use App\Http\Controllers\Projects\SearchSettingsController;
 use App\Http\Controllers\ProjectVisibilityController;
 use App\Http\Controllers\Readers\HandoffController;
 use App\Http\Controllers\Readers\LdapSignInController;
@@ -260,6 +261,24 @@ Route::middleware(['auth', 'tenant'])
          */
         Route::get('projects/{project}/policy/simulate', PolicySimulatorController::class)
             ->name('projects.policy.simulate');
+
+        /*
+         * 🛑 §8.16.2's "**in the product UI**, not only the documentation".
+         *
+         * The requirement names four limits and 🛑 insists the illustration use
+         * a **two**-character term, because ADR 0004 found "Why can't I find
+         * `go`?" to be the real first support question. A limit stated only in
+         * the operator documentation is a limit the person fielding that
+         * question has not read.
+         *
+         * A GET and nothing else: everything on the page is a read, and §8.16's
+         * write path is `docup:search-index`. The capability is the policy
+         * simulator's, for the reason the controller gives — this is
+         * maintainer-facing configuration, which §12.2 withholds from
+         * `project_reader`.
+         */
+        Route::get('projects/{project}/search', SearchSettingsController::class)
+            ->name('projects.search');
 
         /*
          * 🛑 §8.12.20's break-glass read override.

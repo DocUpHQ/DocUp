@@ -40,6 +40,7 @@ nav:
       - Proving who may read it: operator/docs/assurance.md
       - Branding and themes: operator/docs/branding.md
       - Reader chrome: operator/docs/addons.md
+      - Search: operator/docs/search.md
       - Running it: operator/docs/operations.md
   - Writing for DocUp:
       - Overview: author/docs/index.md

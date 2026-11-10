@@ -129,7 +129,7 @@ enum Epoch: string
             self::Authz => 'P21',
             self::Identity => 'P22',
             self::Permission => 'P02',
-            self::SearchGeneration => 'P16',
+            self::SearchGeneration => 'P29',
             self::PolicyGeneration => 'P21',
         };
     }
@@ -159,7 +159,15 @@ enum Epoch: string
             // it looks rather than absent: §10.8 gives it role-assignment
             // changes, and `Invalidation::bumpIdentity()` records why those are
             // deliberately NOT folded in here.
-            self::Routing, self::Serving, self::Authz, self::Identity, self::PolicyGeneration => true,
+            // 🛑 Phase 29 makes `search_generation` live: `Invalidation::
+            // advanceSearchGeneration()` is the one writer, called by
+            // `App\Search\Indexer` at the end of a pass, and §8.16.7's "no
+            // window in which both generations answer" is that single UPDATE.
+            // Its owning phase was listed as P16 until this phase found it:
+            // §17 puts search in Phase 29 and Phase 16 only reserved the
+            // column, so the registry was naming a phase that never owned it.
+            self::Routing, self::Serving, self::Authz, self::Identity,
+            self::PolicyGeneration, self::SearchGeneration => true,
             default => false,
         };
     }

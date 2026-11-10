@@ -141,6 +141,30 @@ parameters:
         # app/Branding one layer out.
         - app/Addons
 
+        # 🛑 Phase 29. §9.4's named namespaces are "serving, authentication,
+        # artifact and configuration", and app/Search is a **serving** namespace
+        # by the same definition app/Addons is: it answers an authorised request
+        # on the documentation origin, and §8.16.6 requires that answer to be
+        # filtered "server-side only".
+        #
+        # The specific reason level 8 is not enough is the shape of the filter.
+        # `App\Search\AuthorisedScope` is the only thing standing between a
+        # reader and every section in the installation, and both drivers return
+        # whatever that object names — so a `mixed` reaching
+        # `AuthorisedScope::documentKeys()` is a private project's documentation
+        # handed to an anonymous searcher behind a correct-looking 200. That is
+        # §9.3.2's failure shape applied to a result set, which is the same
+        # argument Phase 28 made for the flyout's list of version slugs.
+        #
+        # §8.12.21's gate has the same character one layer down: the comparison
+        # in `SearchGenerations::lagsPolicy()` is two integers, and a type error
+        # that made a stale index look current serves documents the new policy
+        # refuses. §10.8 gives that epoch "fail closed" precisely because the
+        # other direction is a disclosure.
+        #
+        # Raising a gate, not lowering one.
+        - app/Search
+
     excludePaths:
         analyseAndScan:
             - vendor

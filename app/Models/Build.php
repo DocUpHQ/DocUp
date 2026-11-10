@@ -104,6 +104,7 @@ final class Build extends Model
             'chrome_injected' => 'integer',
             'chrome_coverage' => 'array',
             'nav_json' => 'array',
+            'search_config' => 'array',
             'cross_references' => 'array',
             'queued_at' => 'datetime:Y-m-d H:i:s.v',
             'started_at' => 'datetime:Y-m-d H:i:s.v',

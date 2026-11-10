@@ -49,6 +49,7 @@ use App\Models\ComponentMount;
 use App\Models\ComponentSource;
 use App\Models\ProjectVersion;
 use App\Models\Repository;
+use App\Search\SearchRanking;
 use App\Support\Uuid;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
@@ -1481,6 +1482,7 @@ final class BuildPipeline
                 : ''));
 
         $this->recordDeclaredNavigation($build, $config);
+        $this->recordSearchConfiguration($build, $config);
 
         return $toolchain;
     }
@@ -1513,6 +1515,40 @@ final class BuildPipeline
         $build->forceFill(['nav_json' => $nav])->save();
 
         $this->narrate('navigation: '.count($nav).' top-level entries declared in `nav:` (§8.7.6)');
+    }
+
+    /**
+     * 🛑 §8.16.3's `search.ranking` and `search.ignore`, recorded for the
+     * indexer.
+     *
+     * §8.4.2 lists `search.{ranking,ignore}` among the keys a
+     * `.readthedocs.yaml` carries verbatim, and §8.16.3 makes them the source
+     * of the "−10…+10 per-page rank" and the exclusion list. Phase 29's indexer
+     * runs long after this build — on a schedule, or when another project
+     * mounts the same component — so it cannot ask the repository: §8.21.6's
+     * direct uploads have none, and a branch that has moved on would silently
+     * change a published build's ranking without a rebuild.
+     *
+     * So it is recorded here, beside the navigation, for the same reason and in
+     * the same shape.
+     *
+     * 🛑 Stored **raw**. {@see SearchRanking} is the one place
+     * that interprets it and it treats the value as hostile — the patterns came
+     * out of a repository. Normalising half of it here would put the trust
+     * boundary in two places, which is exactly what
+     * {@see self::recordDeclaredNavigation()} refuses to do with `nav:`.
+     */
+    private function recordSearchConfiguration(Build $build, DocupConfig $config): void
+    {
+        $search = $config->search();
+
+        if ($search === []) {
+            return;
+        }
+
+        $build->forceFill(['search_config' => $search])->save();
+
+        $this->narrate('search: `search:` configuration recorded for the index (§8.16.3)');
     }
 
     /**

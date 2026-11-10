@@ -295,6 +295,29 @@ return [
     'search' => [
         'driver' => env('DOCUP_SEARCH_DRIVER', 'mysql_fulltext'),
         'meilisearch_recommended_above_sections' => 200_000,
+
+        /*
+         * SPEC 8.16.1's optional engine. Absent by default, which is the whole
+         * point of the default driver: a fresh installation needs no service.
+         *
+         * 🛑 The key is read from the environment and NEVER committed. SPEC
+         * 8.12.21 forbids a search-engine token reaching a browser at all —
+         * "Meilisearch tenant tokens are plain HS256 — readable by the browser
+         * and unrevocable before expiry" — and DocUp mints none: SPEC 8.16.6
+         * requires search to be proxied server-side, so the only key in the
+         * system is this admin key and it stays in the application process.
+         *
+         * `url` is INSTALLATION configuration, in the same class as `DB_HOST`,
+         * which is why it is not subject to SPEC 8.3.9's address policy —
+         * `App\Egress\MeilisearchTransport` says so at length and takes a path
+         * rather than a URL so that nothing can point it elsewhere.
+         */
+        'meilisearch' => [
+            'url' => env('DOCUP_MEILISEARCH_URL'),
+            'key' => env('DOCUP_MEILISEARCH_KEY'),
+            'index' => env('DOCUP_MEILISEARCH_INDEX', 'docup_search'),
+            'timeout_seconds' => (int) env('DOCUP_MEILISEARCH_TIMEOUT', 5),
+        ],
     ],
 
     /*

@@ -14,6 +14,9 @@ use App\Builds\Sandbox\EgressAllowlist;
 use App\Builds\Sandbox\SandboxPolicy;
 use App\Readers\Containment;
 use App\Readers\EpochFeed;
+use App\Search\SearchDriver;
+use App\Search\SearchEngine;
+use App\Search\SearchRetention;
 use App\Support\Origins;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -57,6 +60,7 @@ final class DoctorCommand extends Command
         $this->checkEnforcementTier();
         $this->checkContainment();
         $this->checkAssetHost();
+        $this->checkSearch();
         $this->notePending();
 
         if ($this->option('json')) {
@@ -570,18 +574,6 @@ final class DoctorCommand extends Command
                 }
             }
 
-            // ADR 0004: the default search driver's three-character minimum
-            // token is a documented limit operators ask about, so surface it.
-            $minToken = DB::scalar('SELECT @@innodb_ft_min_token_size');
-            $this->recordPass(
-                'Search driver',
-                sprintf(
-                    '%s, FULLTEXT minimum token %s characters (terms shorter than this are not findable)',
-                    (string) config('docup.search.driver'),
-                    (string) $minToken,
-                ),
-                'SPEC 8.16.2',
-            );
         } catch (\Throwable $e) {
             $this->recordFail('Database', $e->getMessage(), 'SPEC 11.1');
         }
@@ -779,6 +771,141 @@ final class DoctorCommand extends Command
         }
     }
 
+    /**
+     * §8.16's engine: its limits, its reachability, and §8.16.1's threshold.
+     *
+     * 🛑 Four findings, and the first is a **pass** that exists to be read
+     * rather than to be green. §8.16.2 requires the default engine's limits to
+     * be stated in the product UI, and ADR 0004 gives the reason: "Why can't I
+     * find `go`?" is the real first support question. An operator running
+     * `doctor` on a report of broken search needs the answer in front of them,
+     * not a link to it.
+     *
+     * The numbers come from {@see SearchEngine::limits()}, which reads the
+     * running server — `innodb_ft_min_token_size` is a server variable, and a
+     * `doctor` printing the specification's 3 while the server said 4 would be
+     * confidently wrong about the one number being asked about.
+     */
+    private function checkSearch(): void
+    {
+        /** @var SearchEngine $engine */
+        $engine = app(SearchEngine::class);
+        $limits = $engine->limits();
+
+        $this->recordPass(
+            'Search engine',
+            sprintf(
+                '%s; shortest indexed word %d character%s, %d stopwords, no stemming%s. '
+                .'A two-character term such as `go` is not in the index at all.',
+                $engine->driver()->label(),
+                $limits->minTokenSize,
+                $limits->minTokenSize === 1 ? '' : 's',
+                $limits->stopwordCount,
+                $limits->typoTolerance ? ', typo tolerance on' : ', no typo tolerance',
+            ),
+            'SPEC 8.16.2',
+        );
+
+        /*
+         * 🛑 Reachability, as a FAILURE for the optional engine only.
+         *
+         * §8.16.1 makes the default engine serviceless precisely so that the
+         * optional one's outage is survivable — and the default engine is the
+         * database this command is already talking to, so it cannot be
+         * unreachable without everything else having failed first. An
+         * unreachable Meilisearch, though, means every search returns nothing
+         * while every page still renders, which is the kind of outage nobody
+         * notices for a week.
+         */
+        if ($engine->driver()->needsAService() && ! $engine->isReachable()) {
+            $this->recordFail(
+                'Search engine reachable',
+                $engine->driver()->label().' is configured and not answering. Search returns nothing.',
+                'SPEC 8.16.1',
+            );
+        }
+
+        /* 🛑 §8.16.1's "doctor warning at the threshold". */
+        $threshold = config('docup.search.meilisearch_recommended_above_sections');
+        $threshold = is_numeric($threshold) ? (int) $threshold : 200_000;
+        $sections = $engine->sectionCount();
+
+        if ($engine->driver() === SearchDriver::MysqlFulltext && $sections > $threshold) {
+            $this->recordWarn(
+                'Search index size',
+                sprintf(
+                    'about %s sections, above the %s at which Meilisearch is recommended. '
+                    .'The filtered query was measured at p95 80 ms against 10 ms unfiltered at that size, '
+                    .'and the cost scales with match-set size rather than result limit — so a smaller '
+                    .'result limit does not make a broad query cheap. Set DOCUP_SEARCH_DRIVER=meilisearch.',
+                    number_format($sections),
+                    number_format($threshold),
+                ),
+                'SPEC 8.16.1',
+            );
+        } else {
+            $this->recordPass(
+                'Search index size',
+                sprintf('about %s sections, below the %s threshold', number_format($sections), number_format($threshold)),
+                'SPEC 8.16.1',
+            );
+        }
+
+        /*
+         * 🛑 §8.12.21's gate, per project, as a WARNING.
+         *
+         * "A project's search MUST be disabled while its search generation lags
+         * its policy generation" — a condition that persists until a reindex
+         * runs and looks like an empty corpus from every other angle. A warning
+         * rather than a failure: the installation is working as specified and
+         * failing closed, which is correct behaviour and not a fault. What is
+         * wrong is nobody knowing, which is what this line is for.
+         */
+        $stale = DB::table('projects')
+            ->whereColumn('search_policy_generation', '<', 'policy_generation')
+            ->where('search_generation', '>', 0)
+            ->count();
+
+        if ($stale > 0) {
+            $this->recordWarn(
+                'Search generation gate',
+                sprintf(
+                    '%d project%s ha%s search DISABLED because its index predates the current policy. '
+                    .'Disabled rather than stale, because stale results would be documents the new policy '
+                    .'refuses. Run `docup:search-index` to re-enable.',
+                    $stale,
+                    $stale === 1 ? '' : 's',
+                    $stale === 1 ? 's' : 've',
+                ),
+                'SPEC 8.12.21',
+            );
+        } else {
+            $this->recordPass('Search generation gate', 'no project has search disabled', 'SPEC 8.12.21');
+        }
+
+        /*
+         * §8.16.11's measured 28%: "50 republish cycles grew the index by 28%
+         * and it plateaued there rather than reclaiming, with only
+         * `OPTIMIZE TABLE` recovering the space." Reported because it does not
+         * get better on its own and §10.9 puts the rebuild in a maintenance
+         * window an application cannot choose.
+         */
+        $footprint = app(SearchRetention::class)->tableFootprint();
+
+        if ($footprint['free_ratio'] >= 0.20) {
+            $this->recordWarn(
+                'Search index reclaimable space',
+                sprintf(
+                    '%.0f%% of search_documents is reclaimable. §8.16.11 measured this plateauing near 28%% '
+                    .'rather than recovering; only OPTIMIZE TABLE returns it, and it locks the table. '
+                    .'Run `docup:search-retention --optimize` in a maintenance window.',
+                    $footprint['free_ratio'] * 100,
+                ),
+                'SPEC 8.16.11',
+            );
+        }
+    }
+
     private function notePending(): void
     {
         $this->recordPending('DNS wildcard for the docs zone', 'arrives with custom domains', 'Phase 18');
@@ -790,7 +917,14 @@ final class DoctorCommand extends Command
          * authorisation kernel" next to a check from the authorisation kernel is
          * how an operator concludes the real one is something else.
          */
-        $this->recordPending('Search index size threshold', 'arrives with the search index', 'Phase 29');
+        /*
+         * 🛑 §8.16.1's threshold is no longer pending: Phase 29 ships the
+         * index and `checkSearch()` above reports the measured section count
+         * against it. Removed from this list rather than left beside the real
+         * check, for the reason the §8.12.22 note gives one entry up — a
+         * "pending" line next to a working check is how an operator concludes
+         * the working one is about something else.
+         */
     }
 
     private function render(): void

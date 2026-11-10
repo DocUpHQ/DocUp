@@ -1013,16 +1013,43 @@ jobs:
           # behavioural rules that had no test.
           # tests/Unit/Artifacts/ChromeInjectorTest.php closes them; the class
           # now measures 82.9% on its own, and all three together 82.9%.
+          #
+          # 🛑 Phase 29 adds three, and they are the three places where a
+          # surviving mutation is a DISCLOSURE rather than a wrong answer:
+          #
+          #   App\Search\QueryParser      — SPEC 8.16.12 forbids a client filter
+          #                                 expression "in any form", and this is the
+          #                                 only place a reader's string is read. A
+          #                                 surviving mutation in the slug narrowing
+          #                                 or the scope-prefix handling is a scope a
+          #                                 reader supplied reaching a driver.
+          #   App\Search\SearchRanking     — SPEC 8.16.3's ranking AND SPEC 8.16.3's
+          #                                 `search.ignore`. A surviving mutation in
+          #                                 the ignore matching indexes a page an
+          #                                 author excluded, which is the one half of
+          #                                 this class that is not merely relevance.
+          #   App\Search\SearchGenerations — SPEC 8.12.21's gate, which is two
+          #                                 integers and a `<`. A surviving mutation
+          #                                 that made a stale index look current
+          #                                 serves documents the new policy refuses,
+          #                                 and SPEC 10.8 gives the epoch "fail
+          #                                 closed" precisely because the other
+          #                                 direction is a disclosure.
+          #
+          # All three are pure: no I/O for a surviving mutation to hide behind.
           ./vendor/bin/pest \
             --mutate \
             --covered-only \
             --min="$min" \
-            --class='App\Auth\CidrRange,App\Branding\ContrastGate,App\Artifacts\ChromeInjector' \
+            --class='App\Auth\CidrRange,App\Branding\ContrastGate,App\Artifacts\ChromeInjector,App\Search\QueryParser,App\Search\SearchRanking,App\Search\SearchGenerations' \
             tests/Feature/InvitationAndTokenTest.php \
             tests/Feature/Providers/ProviderCorpusTest.php \
             tests/Unit/Branding \
             tests/Unit/Artifacts/ChromeInjectorTest.php \
             tests/Feature/Addons/AddonsCorpusTest.php \
+            tests/Unit/Search \
+            tests/Feature/Search/SearchCorpusTest.php \
+            tests/Feature/Search/ExitCriteriaTest.php \
             --colors=never 2>&1 | tee /tmp/mutation.log
 
       - name: The score, on failure
@@ -1323,6 +1350,131 @@ jobs:
   #
   # DOCUP_E2E=1 (set in compose.tls.yaml) turns every skip in tests/Feature/Tls
   # into a failure, so this job cannot go green having exercised nothing.
+  # ---------------------------------------------------------------------------
+  # 🛑 SPEC 17's Phase 29 exit criterion 4, against a REAL engine.
+  #
+  # > "Switching to Meilisearch passes the identical suite."
+  #
+  # `tests/Feature/Search/EngineContractTest.php` IS that suite: it resolves
+  # `App\Search\SearchEngine` from the container and never names a driver, so
+  # running it against the other engine is one environment variable. Everything
+  # else in `tests/Feature/Search` runs against the shipped default in the
+  # baseline gate.
+  #
+  # 🛑 **Why a real engine and not a fake.** A fake agrees with whatever DocUp
+  # believes, and the first run against a real Meilisearch found four defects in
+  # a row that a fake would have confirmed — the POST/PUT replace-versus-update
+  # split, an un-awaited index creation task, an unconditional create that fails
+  # on every run after the first, and a default `matchingStrategy` that is not
+  # SPEC 8.16.12's implicit AND. `compose.meilisearch.yaml` records all four.
+  # Every one was silent: the index reported the right document count and the
+  # right settings, and searches returned nothing or too much.
+  #
+  # 🛑 **And without this job the integration would SKIP.**
+  # `EngineContractTest` gates on `DOCUP_SEARCH_E2E`, so on a runner with no
+  # engine it skips — and Phase 06's recorded lesson is that "a skip is not a
+  # pass". The LDAP and OIDC jobs exist for the same reason.
+  #
+  # Its own job rather than a step in `baseline gate`, like those: it needs a
+  # service the shipped compose file does not start, and a failure here should
+  # name the integration rather than the suite.
+  meilisearch:
+    name: Meilisearch runs the identical suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compose an environment
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          printf 'APP_KEY=base64:%s\n' "$(openssl rand -base64 32)" >> .env
+          printf 'APP_ENV=local\n' >> .env
+          printf 'DOCUP_AUDIT_KEY=%s\n' "$(openssl rand -hex 32)" >> .env
+          printf 'DOCUP_APP_HOST=docup.localhost\n' >> .env
+          printf 'DOCUP_DOCS_APEX=docup-docs.localhost\n' >> .env
+          printf 'DOCUP_PREVIEW_APEX=docup-previews.localhost\n' >> .env
+          printf 'DOCUP_ASSET_HOST=assets.docup-docs.localhost\n' >> .env
+
+      - name: Build the image
+        run: docker compose -f compose.yaml -f compose.meilisearch.yaml build app
+
+      - name: Install dependencies
+        run: |
+          docker compose -f compose.yaml -f compose.meilisearch.yaml run --rm --no-deps app \
+            composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Start the stack and the engine
+        run: docker compose -f compose.yaml -f compose.meilisearch.yaml up -d db cache meilisearch app
+
+      # The same reasoning the LDAP and OIDC jobs give: the suite and the
+      # running application share one database, and the image grants the `docup`
+      # user only `docup`.
+      - name: Create the shared test database
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if docker compose -f compose.yaml -f compose.meilisearch.yaml exec -T -e MYSQL_PWD=docup-root db \
+                 mysql -u root -e "CREATE DATABASE IF NOT EXISTS \`docup_test\`
+                                     DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+                                   GRANT ALL PRIVILEGES ON \`docup_test\`.* TO 'docup'@'%';
+                                   FLUSH PRIVILEGES;"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::could not create docup_test"
+          exit 1
+
+      - name: Migrate
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if docker compose -f compose.yaml -f compose.meilisearch.yaml exec -T -e DB_DATABASE=docup_test app \
+                 php artisan migrate --force --no-interaction; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::migrations never succeeded"
+          exit 1
+
+      # 🛑 Waits for Meilisearch's own health endpoint, not for an open port.
+      # The process binds before it has opened its index, so a port probe goes
+      # green while a search would still 503 — the same trap compose.ldap.yaml
+      # records about slapd.
+      - name: Wait for the engine
+        run: |
+          set -euo pipefail
+          id="$(docker compose -f compose.yaml -f compose.meilisearch.yaml ps -q meilisearch)"
+          for _ in $(seq 1 40); do
+            state="$(docker inspect --format '{{.State.Health.Status}}' "$id" 2>/dev/null || echo starting)"
+            if [ "$state" = healthy ]; then
+              echo 'the engine is up'
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::the engine never became healthy"
+          docker compose -f compose.yaml -f compose.meilisearch.yaml logs meilisearch --tail 60
+          exit 1
+
+      # 🛑 DOCUP_SEARCH_E2E=1 turns a skip into a failure, which is the whole
+      # reason this job exists. The driver itself comes from
+      # compose.meilisearch.yaml's `app` environment.
+      - name: SPEC 17's Phase 29 exit criterion 4, on the real engine
+        run: |
+          set -o pipefail
+          docker compose -f compose.yaml -f compose.meilisearch.yaml exec -T \
+            -e DB_DATABASE=docup_test -e DOCUP_SEARCH_E2E=1 -e NO_COLOR=1 app \
+            ./vendor/bin/pest tests/Feature/Search/EngineContractTest.php --colors=never
+
+      - name: Logs, on failure
+        if: failure()
+        run: docker compose -f compose.yaml -f compose.meilisearch.yaml logs --tail 200
+
   tls:
     name: TLS automation and certificate sources
     runs-on: ubuntu-latest

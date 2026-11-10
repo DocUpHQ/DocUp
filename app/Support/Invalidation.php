@@ -232,4 +232,50 @@ final class Invalidation
     {
         return DB::raw('`serving_epoch` + 1');
     }
+
+    /**
+     * 🛑 Advance a project's `search_generation` — §10.8's "reindex" bump, and
+     * §8.16.7's atomic swap.
+     *
+     * One `UPDATE`, which is the whole of §8.16.7's "Republishing MUST bump the
+     * generation with **no window in which both generations answer**". A query
+     * reads this column once and matches only the scope rows carrying its value,
+     * so it sees either the old generation or the new one, never a mixture —
+     * and the new one was complete before this statement ran. Two statements
+     * here, or a read-modify-write, would reintroduce the window the
+     * requirement names.
+     *
+     * 🛑 `$policyGeneration` is passed in, and it must be the value the indexer
+     * observed **before** it started reading. §8.12.21 disables search while the
+     * index lags the policy; the index reflects the policy as it was when the
+     * pass began, so a policy write during the pass must leave the gate closed.
+     * Reading `policy_generation` here — the obvious `DB::raw` — would adopt the
+     * newer value and claim the index honoured a policy it never saw, which is
+     * the disclosing direction of §10.8's "fail closed".
+     *
+     * Not audited. §8.22's trail is for things people and systems *decide*; a
+     * reindex decides nothing, and `search_indexed_at` plus
+     * `search_build_index` are the record an operator actually needs. The
+     * other bumps here are audited because each one is somebody changing a
+     * policy, a domain or a session.
+     *
+     * @param  string  $projectId  raw 16 bytes
+     * @param  int  $generation  the completed generation, which becomes live
+     * @param  int  $policyGeneration  observed before the pass began
+     * @param  int  $sections  §8.16.1's threshold input
+     */
+    public static function advanceSearchGeneration(
+        string $projectId,
+        int $generation,
+        int $policyGeneration,
+        int $sections,
+    ): void {
+        DB::table('projects')->where('id', $projectId)->update([
+            'search_generation' => $generation,
+            'search_policy_generation' => $policyGeneration,
+            'search_indexed_at' => now(),
+            'search_section_count' => $sections,
+            'updated_at' => now(),
+        ]);
+    }
 }
