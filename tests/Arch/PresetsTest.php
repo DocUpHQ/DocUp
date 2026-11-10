@@ -111,6 +111,21 @@ arch()->preset()->laravel()
         // would import the configuration namespace into a namespace
         // everything else depends on.
         'App\Config',
+        // Phase 29, and the argument has not changed once in twenty phases.
+        // phpstan-strict.neon raises app/Search to level 9 on §9.4's grounds:
+        // `AuthorisedScope` is the only thing between a reader and every
+        // section in the installation, so a type error there is a disclosure
+        // rather than a crash. Moving SearchDriver, SearchRejection,
+        // SearchState, ScopeKind, EngineCapability and ExtractedFrom to
+        // App\Enums would move them OUT of the namespace the higher bar
+        // covers, and SearchRejection's values are §8.1.11 public contract —
+        // `search.engine_unreachable` reaches an operator's alert rule.
+        //
+        // SearchRefused stays beside them for the reason the App\Egress note
+        // gives: it carries a SearchRejection, so a shared App\Exceptions
+        // would import the search namespace into a namespace everything else
+        // depends on.
+        'App\Search',
         // Phase 10, same argument once more. `RefKind`, `VersionComparator`
         // and `VersionRejection` are the version model's vocabulary and mean
         // nothing outside §8.6 — `RefKind::versionKind()` exists precisely to
@@ -336,6 +351,24 @@ arch()->preset()->strict()
          * in App\Tls may sleep.
          */
         'App\Tls\Acme\AcmeClient',
+        /*
+         * 🛑 Phase 29, same rule and a fourth genuine wait. Meilisearch
+         * indexes **asynchronously**: a document write returns a `taskUid`
+         * and the document is not searchable until that task succeeds, and
+         * the API offers no way to be told — its own model is "GET the task
+         * again until its status changes", which is a poll.
+         *
+         * An indexer that did not wait would report a generation live while
+         * the engine had not finished reading it, which is §8.16.7's "no
+         * window in which both generations answer" turned into a window in
+         * which NEITHER does. So the sleep exists to make a 🛑 requirement
+         * true, which is the same direction as the warden's above.
+         *
+         * Bounded (30 seconds, 50 ms apart) and on the INDEXING path only:
+         * a reader's search never waits on a task. One named class, not the
+         * namespace — nothing else in App\Search may sleep.
+         */
+        'App\Search\Engines\MeilisearchEngine',
         // The framework base controller is abstract and exists to be extended,
         // so the preset's final-class rule cannot apply to it.
         'App\Http\Controllers\Controller',

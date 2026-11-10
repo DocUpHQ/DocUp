@@ -1,0 +1,114 @@
+# SPDX-FileCopyrightText: 2026 The DocUp contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# ------------------------------------------------------------------------------
+# A real Meilisearch, for §17's Phase 29 exit criterion 4.
+# ------------------------------------------------------------------------------
+#
+# > "Switching to Meilisearch passes the identical suite."
+#
+# 🛑 **That criterion cannot be met without a real engine.**
+# `tests/Feature/Search/EngineContractTest.php` IS the identical suite — it
+# resolves `App\Search\SearchEngine` from the container and never names a driver
+# — so running it is a matter of one environment variable. What it cannot do
+# against a fake is prove that Meilisearch agrees, and the first run against a
+# real one found four defects in a row that every fake would have confirmed:
+#
+#  1. `POST /documents` is add-or-REPLACE and `PUT` is add-or-UPDATE, which is
+#     the opposite way round from most HTTP APIs. DocUp had them backwards, so
+#     the filter-attribute refresh replaced every document with four fields.
+#  2. Index creation is an async task; not awaiting it raced the settings write,
+#     which then failed and left `filterableAttributes` empty.
+#  3. Creating an index that exists is a task that FAILS, so unconditional
+#     creation is wrong on every run after the first.
+#  4. Meilisearch's default `matchingStrategy` is `last`, which drops words
+#     until it has results — so `zeta omega` returned documents holding only
+#     `zeta`, and §8.16.12's implicit AND was not implicit at all.
+#
+# All four were silent: the index reported the right document count and the
+# right settings, and every search returned nothing or too much.
+#
+# Usage:
+#   docker compose -f compose.yaml -f compose.meilisearch.yaml up -d db cache meilisearch app
+#   docker compose -f compose.yaml -f compose.meilisearch.yaml exec -T \
+#     -e DOCUP_SEARCH_DRIVER=meilisearch -e DOCUP_SEARCH_E2E=1 app \
+#     ./vendor/bin/pest tests/Feature/Search/EngineContractTest.php
+#
+# The same shape as `compose.oidc.yaml` and `compose.tls.yaml`, and for the
+# reason they give: an integration whose dependency is not in the shipped
+# compose file is an integration that cannot be run by accident.
+
+services:
+  meilisearch:
+    # 🛑 Pinned by digest. The version is 1.13, and the behaviours listed above
+    # are version-dependent facts about an API — `matchingStrategy`'s default
+    # and the POST/PUT split are both documented and both could change. A
+    # moving tag would mean the four defects above were fixed against a thing
+    # nobody can name.
+    #
+    # Resolved 2026-11-10; `docker inspect --format '{{index .RepoDigests 0}}'`
+    # after a pull is how to update it.
+    image: getmeili/meilisearch@sha256:bed3fb650e62da53145777204891159242f6ea4ce69e215b36223af4aa64a0ae
+
+    environment:
+      # 🛑 A fixture key, and it says so in its own value.
+      #
+      # §8.12.21 forbids a search-engine token reaching a browser, and DocUp
+      # mints none — §8.16.6 proxies every search server-side, so the only key
+      # in the system is this admin key and it never leaves the application
+      # process. A literal here is still a secret-shaped string in a committed
+      # file, which is why it is named for what it is: nothing in production
+      # reads this file, and `deploy/` has no counterpart to it.
+      MEILI_MASTER_KEY: meilisearch-fixture-key-not-a-secret
+
+      # In-memory analytics off and development mode on, because this is a
+      # fixture: no snapshots, no dumps, and a Meilisearch that phones home
+      # from CI would be §8.22.12's telemetry posture broken by a dependency.
+      MEILI_ENV: development
+      MEILI_NO_ANALYTICS: "true"
+
+    # 🛑 On the `data` network, beside the database, and NOT on `app`.
+    #
+    # §11.2 enforces the zones by network rather than by convention. A search
+    # engine holds a copy of documentation text — including private
+    # documentation — so it belongs in the zone that holds the other copy, and
+    # it has no business being reachable from the edge: §8.16.6 requires search
+    # to be proxied server-side, and a Meilisearch a reader could reach would
+    # make that requirement a convention.
+    #
+    # Note what that means for the key: it is never sent anywhere a browser can
+    # see, because the engine is not anywhere a browser can reach.
+    networks:
+      data:
+        aliases:
+          - meilisearch
+
+    # Not published. The host driver for this integration is the test suite
+    # inside the `app` container, unlike the OIDC one — so there is nothing
+    # outside the compose network that needs to reach it, and publishing a port
+    # would put an unauthenticated-by-default search engine on the host.
+
+    healthcheck:
+      # 🛑 Meilisearch's own health endpoint, not a port probe. The process
+      # binds before it has opened its index, so an open port goes green while
+      # a search would still 503 — the same trap `compose.ldap.yaml` records
+      # about slapd, where the port opens before the tree exists.
+      test: ["CMD-SHELL", "curl -sf http://localhost:7700/health || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  app:
+    environment:
+      # 🛑 Installation configuration, in the same class as `DB_HOST`.
+      #
+      # §8.3.9's address policy governs outbound requests "derived from
+      # user-supplied configuration"; this is an operator's own infrastructure
+      # address, which is why `App\Egress\MeilisearchTransport` takes a PATH and
+      # not a URL — nothing a tenant, a project or a reader supplies can
+      # influence where it connects.
+      DOCUP_SEARCH_DRIVER: meilisearch
+      DOCUP_MEILISEARCH_URL: http://meilisearch:7700
+      DOCUP_MEILISEARCH_KEY: meilisearch-fixture-key-not-a-secret
+      DOCUP_MEILISEARCH_INDEX: docup_search

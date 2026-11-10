@@ -172,6 +172,26 @@ final class SchemaConformanceTest extends TestCase
             'incoming_webhook_deliveries.delivery_id',
         ];
 
+        /*
+         * 🛑 §8.16.11's named exception, and the only one §9.1.3 allows.
+         *
+         * > "The FULLTEXT search table carries the **single allowlisted
+         * > `AUTO_INCREMENT`** in the schema: an ordinary surrogate `id`,
+         * > alongside a `uuid BINARY(16)` business key."
+         *
+         * So `search_documents.id` is a BIGINT by requirement, and the
+         * §9.1.1 business key is `uuid` beside it — which this test's own
+         * `%_id` pattern does not match, so the key that IS BINARY(16) is
+         * invisible here and the one that is not is the one it sees.
+         *
+         * Exempted by exact `table.column` like the list above, never by
+         * pattern, so adding one stays a visible act. ADR 0004 is why the
+         * exception exists at all: InnoDB wants a monotonically increasing
+         * integer for a FULLTEXT index and declaring `FTS_DOC_ID` breaks
+         * bulk inserts, so the surrogate is the one thing DocUp may declare.
+         */
+        $fulltextSurrogate = ['search_documents.id'];
+
         $wrong = [];
 
         foreach ($rows as $row) {
@@ -180,6 +200,10 @@ final class SchemaConformanceTest extends TestCase
             }
 
             if (in_array($row->TABLE_NAME.'.'.$row->COLUMN_NAME, $foreignIdentifierColumns, true)) {
+                continue;
+            }
+
+            if (in_array($row->TABLE_NAME.'.'.$row->COLUMN_NAME, $fulltextSurrogate, true)) {
                 continue;
             }
 

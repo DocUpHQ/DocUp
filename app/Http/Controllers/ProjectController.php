@@ -72,6 +72,20 @@ final class ProjectController
         abort_unless($request->user()?->can(Capability::ProjectView->value, $project) === true, 404);
 
         return Inertia::render('Projects/Show', [
+            /*
+             * 🛑 The organisation slug, so the page can LINK to the
+             * project's own sub-pages.
+             *
+             * It had none, and neither did the page — so §8.12.25's policy
+             * simulator and §8.16.2's search limits were both pages at URLs
+             * nothing navigated to. Both requirements say "in the UI", and a
+             * page an operator can only reach by typing a path is a page they
+             * do not reach. The URLs are built in the template because that is
+             * where the other links in this dashboard are built; the slug is
+             * the one thing it cannot know.
+             */
+            'organisation' => ['slug' => $organisationSlug],
+
             'project' => [
                 'uuid' => $project->uuid,
                 'slug' => $project->slug,

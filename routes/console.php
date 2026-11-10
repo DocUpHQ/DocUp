@@ -239,3 +239,51 @@ Schedule::command('docup:policy:lint')
     ->timezone('UTC')
     ->withoutOverlapping()
     ->onOneServer();
+
+/*
+| §8.16's indexing pass.
+|
+| 🛑 Hourly, and scheduled rather than hooked onto publish. `SearchIndexCommand`
+| gives the three reasons at length; the short one is §8.16.5: a build is shared
+| by every project that mounts it, so indexing is per **project** and a publish
+| into one project changes what two others should serve. A hook on publish would
+| run the wrong pass.
+|
+| 🛑 What makes an hourly pass safe rather than merely convenient is §8.12.21:
+| "a project's search MUST be **disabled** while its search generation lags its
+| policy generation". So an index that has not caught up with a policy change is
+| an outage of search, never a disclosure — which is the whole reason indexing
+| is allowed to be asynchronous. A content change without a policy change is
+| served from the previous generation until the next pass, which is staleness of
+| the kind §10.8 permits: no reader sees anything they may not read, they see
+| yesterday's wording.
+|
+| `withoutOverlapping` because a pass writes a generation and swaps it, and two
+| passes over one project would interleave their generations. `onOneServer`
+| because a multi-node installation would otherwise run the whole corpus twice.
+*/
+Schedule::command('docup:search-index')
+    ->hourly()
+    ->withoutOverlapping()
+    ->onOneServer();
+
+/*
+| §8.16.11's retention sweep.
+|
+| 🛑 Daily, at 03:40 UTC — after the audit anchors, the purge and the policy
+| linter, and staggered off the hour for the same reason they are: the audit
+| chain takes one writer per organisation and a sweep contending for it buys
+| nothing.
+|
+| 🛑 The sweep only. `OPTIMIZE TABLE` is NOT scheduled, because §10.9 says it
+| "rebuilds and therefore locks, so it belongs in the maintenance window" — and
+| an application cannot know when that is. The command reports the reclaimable
+| space every night so an operator sees it growing toward §8.16.11's measured
+| 28% plateau, and runs `docup:search-retention --optimize` when they have a
+| window. A scheduled rebuild would be a nightly stall on a §10.9 hot table.
+*/
+Schedule::command('docup:search-retention')
+    ->dailyAt('03:40')
+    ->timezone('UTC')
+    ->withoutOverlapping()
+    ->onOneServer();

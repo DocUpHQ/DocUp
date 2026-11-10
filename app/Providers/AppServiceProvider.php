@@ -10,12 +10,19 @@ namespace App\Providers;
 use App\Auth\OrganisationContext;
 use App\Branding\Assets\AssetStore;
 use App\Branding\StylesheetStore;
+use App\Egress\MeilisearchTransport;
 use App\Http\Middleware\AuthenticateApiToken;
 use App\Listeners\StampAuthenticatedSession;
 use App\Models\ApiToken;
+use App\Search\Engines\MeilisearchEngine;
+use App\Search\Engines\MysqlFulltextEngine;
+use App\Search\SearchDriver;
+use App\Search\SearchEngine;
+use App\Search\SearchTransport;
 use App\Support\Origins;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
@@ -59,6 +66,31 @@ final class AppServiceProvider extends ServiceProvider
          */
         $this->app->bind(AssetStore::class, static fn (): AssetStore => AssetStore::make());
         $this->app->bind(StylesheetStore::class, static fn (): StylesheetStore => StylesheetStore::make());
+
+        /*
+         * 🛑 §8.16.1's seam, bound to the configured driver.
+         *
+         * > "Search MUST sit behind one `SearchEngine` seam with MySQL InnoDB
+         * > FULLTEXT as the shipped default … and **Meilisearch** selectable by
+         * > one environment variable."
+         *
+         * This binding IS that environment variable. One place resolves the
+         * contract, so "switching to Meilisearch passes the identical suite"
+         * is a one-line change in a test rather than a reconstruction of the
+         * call graph — and nothing in the application may construct a driver
+         * directly, which `SearchArchitectureTest` asserts.
+         *
+         * 🛑 `SearchDriver::configured()` resolves an unrecognised value to the
+         * **default** rather than throwing, and says why: a typo in
+         * `DOCUP_SEARCH_DRIVER` must not 500 every documentation page that
+         * carries a search box.
+         */
+        $this->app->bind(SearchTransport::class, MeilisearchTransport::class);
+
+        $this->app->bind(SearchEngine::class, static fn (Application $app): SearchEngine => match (SearchDriver::configured()) {
+            SearchDriver::Meilisearch => $app->make(MeilisearchEngine::class),
+            SearchDriver::MysqlFulltext => $app->make(MysqlFulltextEngine::class),
+        });
     }
 
     public function boot(): void

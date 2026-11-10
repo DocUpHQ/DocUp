@@ -311,9 +311,16 @@ final class InvalidationEpochTest extends TestCase
         ));
 
         $this->assertSame(
-            [Epoch::Routing, Epoch::Authz, Epoch::Identity, Epoch::Serving, Epoch::PolicyGeneration],
+            [
+                Epoch::Routing,
+                Epoch::Authz,
+                Epoch::Identity,
+                Epoch::Serving,
+                Epoch::SearchGeneration,
+                Epoch::PolicyGeneration,
+            ],
             $implemented,
-            'P22 makes identity_epoch live on a session revoke; permission and search are still owed',
+            'P29 makes search_generation live on a reindex; only permission_epoch is still owed',
         );
 
         /*
@@ -330,7 +337,16 @@ final class InvalidationEpochTest extends TestCase
          * into `identity_epoch` instead: the registry's value is that each
          * epoch's trigger list is true.
          */
-        foreach ([Epoch::Permission, Epoch::SearchGeneration] as $owed) {
+        /*
+         * 🛑 `search_generation` left this list in Phase 29.
+         * `Invalidation::advanceSearchGeneration()` is its one writer, called
+         * by `App\Search\Indexer` at the end of a pass — and §8.16.7's "no
+         * window in which both generations answer" is that single UPDATE.
+         * `permission_epoch` is the one that remains: §10.8 gives it
+         * role-assignment changes and `Invalidation::bumpIdentity()` records
+         * why those are deliberately not folded in.
+         */
+        foreach ([Epoch::Permission] as $owed) {
             $this->assertFalse($owed->isImplemented(), $owed->value.' is not yet bumped by anything');
             $this->assertNotSame('', $owed->ownedByPhase(), 'and it must name the phase that owes it');
         }
