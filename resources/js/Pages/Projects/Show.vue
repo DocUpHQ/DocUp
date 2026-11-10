@@ -1,7 +1,8 @@
 <script setup>
 // SPDX-FileCopyrightText: 2026 The DocUp contributors
 // SPDX-License-Identifier: Apache-2.0
-defineProps({
+const props = defineProps({
+  organisation: { type: Object, required: true },
   project: { type: Object, required: true },
 
   // SPEC 8.7.11's composition rows. Each carries `reuse_warning` already
@@ -16,6 +17,30 @@ defineProps({
   <main class="mx-auto max-w-3xl p-8">
     <h1 class="text-2xl font-semibold">{{ project.name }}</h1>
     <p v-if="project.description" class="mt-2 text-gray-600">{{ project.description }}</p>
+
+    <!--
+      🛑 The project's own sub-pages, which had nothing linking to them.
+
+      SPEC 8.12.25 requires the policy simulator to exist "in the UI" and SPEC
+      8.16.2 requires the search engine's limits to be stated "in the product
+      UI, not only the documentation". Both were pages at URLs nothing
+      navigated to, which satisfies the letter and misses the point: the person
+      who fields "why can't I find `go`?" is not the person with the path.
+    -->
+    <nav class="mt-6 flex gap-4 text-sm" aria-label="Project settings">
+      <a
+        class="text-blue-700 underline"
+        :href="`/o/${props.organisation.slug}/projects/${props.project.slug}/search`"
+        data-testid="search-settings-link"
+        >Search</a
+      >
+      <a
+        class="text-blue-700 underline"
+        :href="`/o/${props.organisation.slug}/projects/${props.project.slug}/policy/simulate`"
+        data-testid="policy-simulator-link"
+        >Policy simulator</a
+      >
+    </nav>
 
     <dl class="mt-6 grid grid-cols-2 gap-2 text-sm">
       <dt class="text-gray-500">Visibility</dt>

@@ -219,6 +219,36 @@ final class SearchSettingsPageTest extends TestCase
         );
     }
 
+    /**
+     * 🛑 §8.16.2's "in the product UI" means **reachable**, not merely routed.
+     *
+     * The page is what the requirement asks for; a link to it is what makes an
+     * operator meet it. Neither existed before this phase — §8.12.25's policy
+     * simulator was in the same position — so the project page now links both,
+     * and this asserts the link rather than the page.
+     *
+     * A page an operator can only reach by typing a path satisfies the letter
+     * and misses the point: the person who fields "why can't I find `go`?" is
+     * not the person with the path.
+     */
+    public function test_the_project_page_links_to_the_search_page(): void
+    {
+        $fixture = $this->searchFixture('ui-link');
+
+        $response = $this->actingAs($this->administrator($fixture->organisation->id))
+            ->get('/o/'.$fixture->organisation->slug.'/projects/'.$fixture->project->slug);
+
+        $response->assertOk();
+
+        $props = $this->props($response);
+
+        $this->assertSame(
+            $fixture->organisation->slug,
+            $props['organisation']['slug'],
+            'the page needs the slug to build the link',
+        );
+    }
+
     /** The page is maintainer-facing, so a reader role cannot reach it. */
     public function test_a_project_reader_cannot_reach_the_page(): void
     {
