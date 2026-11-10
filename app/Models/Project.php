@@ -60,6 +60,12 @@ use Illuminate\Support\Facades\DB;
  * @property string|null $resolved_latest_version_id
  * @property bool $has_ever_been_guarded
  * @property string $merge_policy §8.7.12's composition mode; see §8.7.13's matrix
+ * @property bool $notify_old_version §8.15.6 per-project banner toggle
+ * @property bool $notify_development_version §8.15.6 per-project banner toggle
+ * @property bool $notify_pull_request §8.15.6 per-project banner toggle
+ * @property bool $addons_search_takeover §8.15.12 takeover toggle
+ * @property string|null $addons_search_selector §8.15.12 selector override
+ * @property string|null $resolved_frame_ancestors 🛑 §8.14.16, resolved for the §8.9.1 snapshot
  */
 #[Tenancy(TenancyPosture::OrganisationScoped)]
 #[Fillable(['slug', 'name', 'description', 'visibility'])]
@@ -129,6 +135,16 @@ final class Project extends Model
             'pin_channels_to_top' => 'boolean',
             'has_ever_been_guarded' => 'boolean',
             'anonymous_build_logs' => 'boolean',
+
+            /*
+             * §8.15.6's three per-project banner toggles and §8.15.12's
+             * takeover. Cast so the payload emits JSON booleans: the runtime
+             * reads them as booleans, and MySQL returns a tinyint.
+             */
+            'notify_old_version' => 'boolean',
+            'notify_development_version' => 'boolean',
+            'notify_pull_request' => 'boolean',
+            'addons_search_takeover' => 'boolean',
             'consecutive_build_failures' => 'integer',
 
             /*

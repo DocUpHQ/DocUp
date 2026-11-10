@@ -9,6 +9,7 @@ namespace App\Versions;
 
 use App\Models\ProjectVersion;
 use App\Serving\ManifestReader;
+use App\Serving\Resolver;
 
 /**
  * §8.6.11: does this page exist in that version?
@@ -34,6 +35,35 @@ use App\Serving\ManifestReader;
 final readonly class PageExistence
 {
     public function __construct(private ManifestReader $manifests) {}
+
+    /**
+     * 🛑 The manifest path §8.9.7 maps a request path inside a version to.
+     *
+     * > §8.9.7: "a directory path MUST resolve `index.html` and 302 to the slash
+     * > form."
+     *
+     * So `guide/` and `''` are directories and resolve `index.html`, while
+     * `guide.html` is a file and resolves itself. {@see Resolver::resolveFile()}
+     * is where that rule is applied on the serving path and is 🛑 **frozen at
+     * Phase 04** (§17.4), so this is a second site for the same two-line rule —
+     * taken deliberately rather than by touching the freeze, and
+     * `PageExistenceTest` asserts the two agree for both forms.
+     *
+     * Added in Phase 28, because §8.6.11's answer is only as good as the key it
+     * looks up: asking the manifest for `html/guide/` finds nothing in a tree
+     * that holds `html/guide/index.html`, so every directory URL reported the
+     * page as absent in every other version and the flyout sent readers to the
+     * version root. Found by `Tests\Feature\Addons\ExitCriteriaTest`.
+     *
+     * @param  string  $within  the path inside the version, as the resolver
+     *                          leaves it: `''` for the version root
+     */
+    public static function manifestPathFor(string $within): string
+    {
+        return $within === '' || str_ends_with($within, '/')
+            ? 'html/'.$within.'index.html'
+            : 'html/'.$within;
+    }
 
     /**
      * Which of these versions hold this page.

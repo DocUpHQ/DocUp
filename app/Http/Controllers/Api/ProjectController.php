@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api;
 
+use App\Addons\ChromeHealth;
 use App\Auth\Capability;
 use App\Http\Middleware\ResolveOrganisation;
 use App\Models\Project;
@@ -69,6 +70,21 @@ final class ProjectController
             'name' => $project->name,
             'description' => $project->description,
             'visibility' => $project->visibility->value,
+
+            /*
+             * 🛑 §8.15.4's per-project warning, which the requirement asks to
+             * be "surfaced" and which nothing surfaced until Phase 28:
+             * "An artifact that cannot be injected MUST fall back to
+             * `chrome_mode: api_only` for that build, surfaced as a
+             * **per-project warning naming the affected files**."
+             *
+             * Here rather than on a page of its own, because the question an
+             * operator is asking — "why has my documentation no version
+             * switcher" — is a question about the project. §8.15.3's
+             * per-build warning is on the build endpoint, where a build's
+             * own facts live.
+             */
+            'chrome' => app(ChromeHealth::class)->forProject($project),
         ];
     }
 }

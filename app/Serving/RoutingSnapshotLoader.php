@@ -8,6 +8,7 @@ declare(strict_types=1);
 namespace App\Serving;
 
 use App\Auth\OrganisationContext;
+use App\Branding\ResolvedFrameAncestors;
 use App\Support\Uuid;
 use Illuminate\Support\Facades\DB;
 
@@ -231,7 +232,8 @@ final class RoutingSnapshotLoader
          *     deny_status: string,
          *     organisation_id: string,
          *     chrome_mode: string,
-         *     default_version_id: string|null
+         *     default_version_id: string|null,
+         *     resolved_frame_ancestors: string|null
          * }> $projects
          */
         $projects = DB::table('projects')
@@ -261,6 +263,15 @@ final class RoutingSnapshotLoader
                 'deny_status',
                 'chrome_mode',
                 'default_version_id',
+
+                /*
+                 * 🛑 §8.14.16's `frame-ancestors`, already resolved. §8.14.15's
+                 * documentation CSP carries it on every document response, and
+                 * a theme resolution per request is unavailable under §9.2 —
+                 * see App\Branding\ResolvedFrameAncestors. One more column on
+                 * a query that already runs costs nothing.
+                 */
+                'resolved_frame_ancestors',
             ])
             ->whereIn('id', $projectIds)
             ->whereNull('deleted_at')
@@ -392,6 +403,9 @@ final class RoutingSnapshotLoader
                     defaultVersionId: $project->default_version_id === null
                         ? null
                         : (string) $project->default_version_id,
+                    frameAncestors: $project->resolved_frame_ancestors === null
+                        ? ResolvedFrameAncestors::DEFAULT
+                        : (string) $project->resolved_frame_ancestors,
                     versions: $versions[$projectId] ?? [],
                     formerSlugs: $formerSlugs[$projectId] ?? [],
                 ),

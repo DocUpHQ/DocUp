@@ -104,10 +104,23 @@ final readonly class VersionOrder
      */
     private function pinChannels(Project $project, array $versions): array
     {
-        $pinnedIds = array_values(array_filter([
+        /*
+         * 🛑 **Deduplicated, and finding out why is Phase 28's.** `latest` and
+         * `stable` very often resolve to the **same** version — a project with
+         * one release stream, which is most of them on their first day — and
+         * without `array_unique` that version was appended once per pointer.
+         * The flyout then listed it twice, with the same slug and the same URL.
+         *
+         * Nothing caught it for eighteen phases because nothing rendered a
+         * flyout: §8.6.5's order had a unit test over distinct versions and the
+         * first consumer was §8.15.2's addons payload. Found by
+         * `Tests\Feature\Addons\ExitCriteriaTest`, which asserts the version
+         * count.
+         */
+        $pinnedIds = array_values(array_unique(array_filter([
             $project->resolved_latest_version_id,
             $project->resolved_stable_version_id,
-        ], static fn (?string $id): bool => is_string($id) && $id !== ''));
+        ], static fn (?string $id): bool => is_string($id) && $id !== '')));
 
         if ($pinnedIds === []) {
             return $versions;

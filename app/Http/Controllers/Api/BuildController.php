@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api;
 
+use App\Addons\ChromeHealth;
 use App\Builds\BuildAccess;
 use App\Builds\BuildProgress;
 use App\Http\Controllers\Controller;
@@ -55,6 +56,15 @@ final class BuildController extends Controller
                 'bytes' => (int) $model->log_bytes,
                 'capped' => (bool) $model->log_capped,
             ],
+            /*
+             * 🛑 §8.15.3's build warning: "Per-build injection coverage MUST be
+             * recorded and reported as a build warning with samples." Phase 03
+             * recorded it; this reports it. Stubs are excluded from the warning
+             * and present in the record — ADR 0002's finding, applied where the
+             * record is read as well as where it is written.
+             */
+            'chrome' => app(ChromeHealth::class)->forBuild($model),
+
             ...BuildProgress::of($model)->jsonSerialize(),
         ], 200, ['Cache-Control' => 'no-store']);
     }

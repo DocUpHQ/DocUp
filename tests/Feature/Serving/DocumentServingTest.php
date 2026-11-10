@@ -465,12 +465,27 @@ final class DocumentServingTest extends TestCase
         $this->getExactly("http://{$this->host}/en/v99/")->assertNotFound();
     }
 
-    /** §7.3: `/_/` is reserved and unmountable. */
+    /**
+     * §7.3: `/_/` is reserved and unmountable.
+     *
+     * 🛑 The path is one with **no route**, and Phase 28 is why it had to
+     * change. This test asked for `/_/addons`, which was reserved and unrouted
+     * when Phase 04 wrote it and is §8.15.2's addons payload now — so the
+     * assertion would have started failing for the right reason and reading
+     * like the wrong one.
+     *
+     * The subject is the **resolver**, not any particular path: §7.3 makes the
+     * first segment reserved so that no project can mount a path which shadows
+     * an endpoint, and what proves it is that a reserved path the router does
+     * not claim is refused by the resolver rather than treated as a version
+     * slug. A path nothing will ever route says that more durably than one a
+     * later phase is going to claim.
+     */
     public function test_the_reserved_namespace_does_not_resolve_as_documentation(): void
     {
         $this->publish();
 
-        $this->getExactly("http://{$this->host}/_/addons")
+        $this->getExactly("http://{$this->host}/_/nothing-routes-here")
             ->assertNotFound()
             ->assertHeader(
                 RejectNonCanonicalPath::RESOLVER_HEADER,

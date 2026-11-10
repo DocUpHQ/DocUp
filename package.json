@@ -5,7 +5,8 @@
     "scripts": {
         "build": "vite build",
         "dev": "vite",
-        "axe": "node tests/Accessibility/axe.mjs"
+        "axe": "node tests/Accessibility/axe.mjs",
+        "test:js": "node --test \"tests/Js/*.test.mjs\""
     },
     "devDependencies": {
         "@tailwindcss/vite": "^4.0.0",

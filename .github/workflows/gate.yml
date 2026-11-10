@@ -181,6 +181,27 @@ jobs:
       - name: Accessibility (axe, WCAG 2.2 AA)
         run: npm run axe
 
+      # 🛑 Phase 28. SPEC 8.15.5's closed shadow root and SPEC 8.15.8's keyboard
+      # behaviour are properties of a DOM, and PHP has neither — so the two
+      # Phase 28 exit criteria about them live here:
+      #
+      #   "A documentation page's CSS with `!important` cannot restyle or hide
+      #    the version switcher."
+      #   "Escape closes the search modal and returns focus; result counts are
+      #    announced."
+      #
+      # `tests/Js/chrome-isolation.test.mjs` is also SPEC 18.11's stated test —
+      # "an adversarial fixture page attempting all four" — and the file is
+      # explicit about which half is proven against a real DOM and which half is
+      # argued from the stylesheet's text, because jsdom has no cascade.
+      #
+      # 🛑 A CI STEP rather than a Pest test, for the reason the axe step gives:
+      # it is a Node tool, and a test that skipped when Node was absent would be
+      # a skipped test. `node --test` is Node 24's own runner, so this adds no
+      # dependency.
+      - name: Chrome runtime (closed shadow root, keyboard, RTL)
+        run: npm run test:js
+
       - name: Prepare the application
         env:
           DB_HOST: 127.0.0.1
@@ -977,14 +998,31 @@ jobs:
           # surviving mutation in it is a theme shipped below the floor with a
           # passing report. Measured at 81.4% on its own and 82.9% with
           # CidrRange.
+          #
+          # 🛑 Phase 28's is `App\Artifacts\ChromeInjector`. SPEC 8.15.3's
+          # insertion point is the control that phase turns on, and a surviving
+          # mutation in it is a CORRUPTED DOCUMENT WITH A PASSING COVERAGE
+          # RECORD — which is not hypothetical: the abuse corpus found exactly
+          # that defect by hand, twice, in the search the requirement specifies.
+          #
+          # Measuring it first reported 63.25% and found three real gaps rather
+          # than confirming coverage: nothing asserted the ORDER of SPEC 8.15.1's
+          # two tags or that there are exactly two, nothing asserted the
+          # navigational-stub exemption's two bounds, and nothing asserted which
+          # characters may follow `<script` or `</head`. All three are
+          # behavioural rules that had no test.
+          # tests/Unit/Artifacts/ChromeInjectorTest.php closes them; the class
+          # now measures 82.9% on its own, and all three together 82.9%.
           ./vendor/bin/pest \
             --mutate \
             --covered-only \
             --min="$min" \
-            --class='App\Auth\CidrRange,App\Branding\ContrastGate' \
+            --class='App\Auth\CidrRange,App\Branding\ContrastGate,App\Artifacts\ChromeInjector' \
             tests/Feature/InvitationAndTokenTest.php \
             tests/Feature/Providers/ProviderCorpusTest.php \
             tests/Unit/Branding \
+            tests/Unit/Artifacts/ChromeInjectorTest.php \
+            tests/Feature/Addons/AddonsCorpusTest.php \
             --colors=never 2>&1 | tee /tmp/mutation.log
 
       - name: The score, on failure

@@ -53,8 +53,21 @@ final class ChromeInjector
      * way to find the artifacts that still carry the old ones — and historical
      * artifacts are immutable, so the only remedy is a deliberate re-ingest of
      * a known set.
+     *
+     * 🛑 **2 since Phase 28**, and the bump is what this constant was for. The
+     * tags did not change; the **insertion point** did. Version 1 inserted
+     * before the first `</head>` wherever it appeared, including inside a
+     * comment or inside a `<script>` string — see {@see self::headCloseAt()}
+     * for the two documents that corrupts and why. An artifact stamped `1` may
+     * carry either defect and only a re-ingest can fix it, which is
+     * `docup:reingest-chrome`.
+     *
+     * 🛑 The stamp cannot say WHICH artifacts were affected, only which predate
+     * the fix — so a re-ingest after this upgrade republishes builds that were
+     * always fine. Over-reporting is the honest direction here: the alternative
+     * is an operator deciding from a number that under-reports.
      */
-    public const VERSION = 1;
+    public const VERSION = 2;
 
     /**
      * The loader path: stable, under the reserved namespace, never hashed.
@@ -112,22 +125,184 @@ final class ChromeInjector
             return Injection::refused(InjectionOutcome::RefusedNonUtf8, $html);
         }
 
-        /*
-         * The first `</head>`, case-insensitively, tolerating whitespace before
-         * the `>`. §8.15.3's exact rule, and `preg_quote`-free on purpose: this
-         * is the one pattern the requirement spells out.
-         */
-        if (preg_match('#</head\s*>#i', $html, $matches, PREG_OFFSET_CAPTURE) !== 1) {
+        $at = self::headCloseAt($html);
+
+        if ($at === null) {
             return $this->isNavigationalStub($html)
                 ? Injection::refused(InjectionOutcome::SkippedStub, $html)
                 : Injection::refused(InjectionOutcome::RefusedNoHead, $html);
         }
 
-        $at = $matches[0][1];
-
         return Injection::injected(
             substr($html, 0, $at).$this->tags($buildIdText).substr($html, $at),
         );
+    }
+
+    /**
+     * 🛑 The offset of the first `</head>` it is **safe** to insert before.
+     *
+     * §8.15.3 requires "a byte-level, **case-insensitive** search tolerating
+     * whitespace before the delimiter (`</head\s*>`), because `</HEAD>` and
+     * `</head >` are both legal and both occur, and a naive fixed-string search
+     * produces false failures on valid documents."
+     *
+     * This is that search, with one refinement Phase 28 added after the abuse
+     * corpus found two real documents the plain pattern **corrupts**:
+     *
+     * 🛑 **1. A `</head>` inside a `<script>` string.** A page documenting HTML
+     * templating writes `<script>var s = "</head>";</script>` in its head. The
+     * plain pattern inserts the tags inside that string literal — and the
+     * `</script>` in the inserted loader tag terminates the script element, so
+     * everything after it becomes markup and `";` leaks into the page as text.
+     * The document is visibly broken and nothing reports it: the coverage
+     * record says `injected`.
+     *
+     * 🛑 **2. A `</head>` inside an HTML comment.** The tags land inside the
+     * comment, so the loader never runs. Chrome is **silently absent** and the
+     * record still says `injected` — a lie in the audit trail, which is worse
+     * than the visible breakage above because nobody goes looking for it.
+     *
+     * So the scan skips comments, CDATA sections and the two raw-text elements,
+     * and returns the first `</head>` outside all of them. 🛑 That is still a
+     * byte-level search and still not a parse: it builds no tree, normalises
+     * nothing and re-serialises nothing — it produces one integer. §8.15.3
+     * forbids parsing and re-serialising because "a parser normalises a
+     * document, and normalising attacker-supplied markup changes what a browser
+     * renders in ways nobody reviewed". Nothing here normalises anything.
+     *
+     * 🛑 **A document whose only `</head>` sits inside such a region returns
+     * null** and therefore gets §8.15.4's `refused_no_head` plus a warning.
+     * That is the right answer: there is no safe insertion point, and §8.15.4's
+     * posture is that an uninjectable artifact is published without chrome
+     * rather than published broken.
+     *
+     * **Proposed amendment to §8.15.3.** Its parenthetical offers `</head\s*>`
+     * as the illustration of the tolerance required; it should say "the first
+     * `</head>` **outside** any comment, CDATA section, `<script>` or
+     * `<style>`", because the pattern alone is what produced both defects above
+     * and the requirement reads as though it were sufficient.
+     */
+    private static function headCloseAt(string $html): ?int
+    {
+        $length = strlen($html);
+        $at = 0;
+
+        while ($at < $length) {
+            if ($html[$at] !== '<') {
+                $at++;
+
+                continue;
+            }
+
+            // A comment runs to `-->`, or to the end of the document.
+            if (substr_compare($html, '<!--', $at, 4) === 0) {
+                $at = self::skipPast($html, '-->', $at + 4);
+
+                continue;
+            }
+
+            // A CDATA section, which XHTML output carries.
+            if (substr_compare($html, '<![CDATA[', $at, 9, true) === 0) {
+                $at = self::skipPast($html, ']]>', $at + 9);
+
+                continue;
+            }
+
+            /*
+             * The one being looked for, checked BEFORE the raw-text elements
+             * below so that a `</head>` immediately following `</script>` is
+             * found rather than skipped past.
+             */
+            if (self::closesHeadAt($html, $at)) {
+                return $at;
+            }
+
+            /*
+             * 🛑 Raw-text elements. Inside `<script>` and `<style>` nothing is
+             * markup until the matching end tag — which is exactly why their
+             * contents can hold a `</head>` a browser never sees as one.
+             */
+            foreach (['script', 'style'] as $element) {
+                if (self::opensElementAt($html, $at, $element)) {
+                    $at = self::skipTo($html, '</'.$element, $at + 1 + strlen($element));
+
+                    continue 2;
+                }
+            }
+
+            $at++;
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether a `</head>` with optional trailing whitespace begins here.
+     *
+     * Matched by hand rather than with a pattern anchored at an offset: a
+     * `preg_match` per `<` would scan the remainder of the document each time
+     * and turn a linear scan into a quadratic one. A documentation build has
+     * tens of thousands of documents and §9.2 budgets ingest.
+     */
+    private static function closesHeadAt(string $html, int $at): bool
+    {
+        if (substr_compare($html, '</head', $at, 6, true) !== 0) {
+            return false;
+        }
+
+        $cursor = $at + 6;
+        $length = strlen($html);
+
+        while ($cursor < $length && strspn($html[$cursor], " \t\n\r\f") === 1) {
+            $cursor++;
+        }
+
+        return $cursor < $length && $html[$cursor] === '>';
+    }
+
+    /**
+     * Whether a `<script` or `<style` **start tag** begins at this offset.
+     *
+     * 🛑 The character after the name has to be one that may follow a tag name,
+     * or `<scripture-notes>` would be read as a script and the rest of the
+     * document skipped. That is not a hypothetical class of mistake — it is the
+     * reason a fixed-string search for `<script` is wrong, and a documentation
+     * site about scripture is a real thing.
+     */
+    private static function opensElementAt(string $html, int $at, string $element): bool
+    {
+        $name = strlen($element);
+
+        if (substr_compare($html, '<'.$element, $at, $name + 1, true) !== 0) {
+            return false;
+        }
+
+        $next = $html[$at + $name + 1] ?? '>';
+
+        return $next === '>' || $next === '/' || strspn($next, " \t\n\r\f") === 1;
+    }
+
+    /**
+     * The offset of `$needle`, or the end of the document.
+     *
+     * 🛑 Returning the end rather than null when a terminator is missing is
+     * what makes an unterminated comment or script safe: the scan runs out, no
+     * `</head>` is found outside it, and §8.15.4's refusal applies. A document
+     * with an unclosed `<script>` has no head a browser sees either.
+     */
+    private static function skipTo(string $html, string $needle, int $from): int
+    {
+        $found = stripos($html, $needle, $from);
+
+        return $found === false ? strlen($html) : $found;
+    }
+
+    /** {@see self::skipTo()}, continuing after the terminator rather than at it. */
+    private static function skipPast(string $html, string $needle, int $from): int
+    {
+        $found = stripos($html, $needle, $from);
+
+        return $found === false ? strlen($html) : $found + strlen($needle);
     }
 
     /**

@@ -44,6 +44,15 @@ final class SnapshotProject
      *                           anonymous-never half of that requirement is not
      *                           here and cannot be: it depends on the request,
      *                           and it lives in `EffectiveAccess`
+     * @param  string  $frameAncestors  🛑 §8.14.16's per-project token, already
+     *                                  **resolved** through §8.14.1's cascade
+     *                                  and stored on the project — see
+     *                                  App\Branding\ResolvedFrameAncestors
+     *                                  for why it is a column rather than a
+     *                                  resolution on this path. Carried here
+     *                                  because §8.14.15's documentation CSP
+     *                                  goes on every document response and
+     *                                  §8.9.1 forbids a query to build one
      */
     public function __construct(
         public readonly string $id,
@@ -61,6 +70,7 @@ final class SnapshotProject
         public readonly int $policyGeneration = 0,
         public readonly int $identityEpoch = 0,
         public readonly int $denyStatus = 404,
+        public readonly string $frameAncestors = "'self'",
     ) {}
 
     /**

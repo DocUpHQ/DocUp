@@ -303,6 +303,34 @@ return [
     |---------------------------------------------------------------------------
     | 🛑 Off by default, opt-in, aggregate only, and it will never gate a feature.
     */
+    /*
+    |---------------------------------------------------------------------------
+    | Documentation Content-Security-Policy (SPEC 8.14.15, SPEC 8.14.10)
+    |---------------------------------------------------------------------------
+    | 🛑 PERMISSIVE by default, and SPEC 8.14.15 states the reason rather than
+    | leaving it to taste: "A strict CSP breaks Sphinx inline scripts, MathJax
+    | and Mermaid; shipping it by default produces a flood of bug reports and
+    | operators who disable CSP entirely."
+    |
+    | The default policy is three directives — `frame-ancestors` (SPEC 8.14.16's
+    | per-project token), `base-uri` and `object-src` — and nothing else. Strict
+    | mode adds SPEC 8.14.10's `img-src`/`font-src`/`connect-src` set, which
+    | exists to kill CSS exfiltration.
+    |
+    | 🛑 That vector arrives with SPEC 8.14.9's per-project custom CSS, which
+    | SPEC 18.22's pre-decided consequence says not to build and which Phase 27
+    | did not build. So an installation that has not enabled custom CSS — every
+    | installation today — gains nothing from strict mode and may lose a
+    | generator's inlined font. Off is the honest default.
+    |
+    | 🛑 CSP `sandbox` is NEVER emitted on documentation, at any setting:
+    | SPEC 8.14.15 forbids it because an opaque origin cannot read the `__Host-`
+    | cookie SPEC 8.12.10's reader session depends on. There is no flag for it.
+    */
+    'csp' => [
+        'documentation_strict' => env('DOCUP_CSP_DOCUMENTATION_STRICT', false),
+    ],
+
     'telemetry' => [
         'enabled' => env('DOCUP_TELEMETRY', false),
         'advisory_check' => env('DOCUP_ADVISORY_CHECK', false),

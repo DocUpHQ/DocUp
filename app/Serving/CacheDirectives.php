@@ -69,6 +69,42 @@ final class CacheDirectives
     }
 
     /**
+     * Private, and still storable in the reader's **own** browser.
+     *
+     * 🛑 The distinction from {@see self::private()} is `no-store`, and it is the
+     * whole difference between the two: `private, no-store` forbids every cache
+     * including the reader's, which is right for an authorised document and
+     * wrong for a shared script that happens to live under a namespace §7.3
+     * keeps out of shared caches. This is `private, max-age=<n>` — one browser,
+     * never a proxy, never a CDN.
+     *
+     * 🛑 Constructible only from {@see CachePolicy}, like
+     * {@see self::publiclyCacheable()}, and for the same reason: §9.3.2's
+     * invariant is that one place decides cacheability. `public` is false, so
+     * the architecture test's subject is untouched — but a second place
+     * inventing cache directives is the crack that invariant exists to close,
+     * whichever axis it is on.
+     *
+     * `Vary: Cookie` is carried even though the bytes do not depend on one. The
+     * response is served from the documentation origin, where a `__Host-` reader
+     * cookie may be present, and a cache that stored one reader's copy under a
+     * key that ignored it would be relying on the bytes being identical — which
+     * is true today and is not a property anything enforces.
+     *
+     * @internal only {@see CachePolicy} may call this
+     */
+    public static function privatelyCacheable(int $maxAge): self
+    {
+        return new self(
+            public: false,
+            cacheControl: 'private, max-age='.$maxAge,
+            cdnCacheControl: 'private, no-store',
+            vary: ['Cookie', 'Accept-Encoding'],
+            cacheTags: [],
+        );
+    }
+
+    /**
      * Public, with §9.3.3's tags.
      *
      * 🛑 Constructible only from {@see CachePolicy}, which is where the
