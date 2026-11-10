@@ -173,8 +173,26 @@ final readonly class SearchScopes
             }
         }
 
+        /*
+         * 🛑 `self:me` needs no handling here, and that is a fact about the
+         * scope rather than an omission.
+         *
+         * §8.16.12 defines it as "the reader's own accessible set". Within one
+         * resolved project the authorised set **is** the reader's accessible
+         * set — every row below is kept only if `EffectiveAccess` allows this
+         * reader to read that version — so the filter is satisfied by
+         * construction and asking for it narrows nothing.
+         *
+         * The first version computed a flag for it and branched on it to
+         * return an empty scope when the set was already empty, which is the
+         * same answer by a longer route. A branch that cannot change an
+         * outcome is worse than no branch: the next reader has to work out
+         * that it does nothing.
+         *
+         * Where `self:me` starts to mean something is §8.16.10's federation
+         * across projects, which is Phase 30's.
+         */
         $projectRequests = $this->projectRequests($requests);
-        $accessibleOnly = $this->wantsAccessibleSet($requests);
 
         if ($projectRequests !== [] && ! $this->requestsThisProject($projectRequests, $mount)) {
             /*
@@ -262,16 +280,6 @@ final readonly class SearchScopes
                 minAccess: $row['min_access'],
                 channel: $row['channel'],
             );
-        }
-
-        if ($accessibleOnly && $facts === []) {
-            /*
-             * `self:me` over a reader with nothing accessible. The same empty
-             * answer, reached by the same route — recorded here only because
-             * the flag is otherwise unused and a reader of this code will look
-             * for where it goes.
-             */
-            return AuthorisedScope::nothing();
         }
 
         return new AuthorisedScope($facts);
@@ -378,18 +386,6 @@ final readonly class SearchScopes
             $requests,
             static fn (ScopeRequest $request): bool => $request->kind === ScopeKind::Project,
         ));
-    }
-
-    /** @param  list<ScopeRequest>  $requests */
-    private function wantsAccessibleSet(array $requests): bool
-    {
-        foreach ($requests as $request) {
-            if ($request->kind === ScopeKind::Accessible) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /**
